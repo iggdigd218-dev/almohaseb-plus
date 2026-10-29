@@ -219,10 +219,10 @@ void main() {
       expect(badSha.error, contains('sha256'));
     });
 
-    test('R2: مسار البيان الافتراضي يشير إلى العقدة السيادية /system/version_manifest', () {
+    test('R2: مسار البيان الافتراضي يشير إلى العقدة السيادية المستقلة /system/plus/version_manifest', () {
       expect(
         UpdateService.kDefaultManifestUrl,
-        endsWith('/system/version_manifest.json'),
+        endsWith('/system/plus/version_manifest.json'),
       );
       expect(
         UpdateService.kDefaultManifestUrl,

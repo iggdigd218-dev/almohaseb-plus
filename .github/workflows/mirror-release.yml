@@ -297,6 +297,7 @@ jobs:
               echo "::warning::فشل نشر بيان المرآة إلى ${2##*/}"
             fi
           }
-          publish PUT   "https://nexora-broker-default-rtdb.europe-west1.firebasedatabase.app/system/version_manifest.json"
-          publish PATCH "https://nexora-broker-default-rtdb.europe-west1.firebasedatabase.app/system/force_update.json"
+          # (2026-10-29) مسار بلاس المستقل — فصل بيان التحديث عن تطبيق v2.
+          publish PUT   "https://nexora-broker-default-rtdb.europe-west1.firebasedatabase.app/system/plus/version_manifest.json"
+          publish PATCH "https://nexora-broker-default-rtdb.europe-west1.firebasedatabase.app/system/plus/force_update.json"
           echo "✔ نُشر بيان المرآة — روابط $MIRROR_PROVIDER فعّالة الآن."
