@@ -54,6 +54,7 @@ jobs:
             gh release download latest --repo "$GITHUB_REPOSITORY" --pattern "$f" --clobber || true
           done
           echo "الأصول المتاحة:"; ls -lh . || true
+          if [ ! -s version.json ]; then cp ../version.json ./version.json 2>/dev/null || true; fi
           if [ ! -s version.json ]; then
             echo "::warning::لا يوجد version.json على إصدار latest بعد — لا شيء للمرآة."
             exit 0
