@@ -322,6 +322,7 @@ jobs:
               echo "::warning::فشل نشر بيان التحديث إلى ${2##*/} — راجع سر ADMIN_RTDB_REFRESH_TOKEN وقواعد القاعدة (يبقى بيان GitHub المصدر الاحتياطي للعملاء)"
             fi
           }
-          publish_manifest PUT "https://nexora-broker-default-rtdb.europe-west1.firebasedatabase.app/system/version_manifest.json"
-          publish_manifest PATCH "https://nexora-broker-default-rtdb.europe-west1.firebasedatabase.app/system/force_update.json"
+          # (2026-10-29) مسار بلاس المستقل — فصل بيان التحديث عن تطبيق v2.
+          publish_manifest PUT "https://nexora-broker-default-rtdb.europe-west1.firebasedatabase.app/system/plus/version_manifest.json"
+          publish_manifest PATCH "https://nexora-broker-default-rtdb.europe-west1.firebasedatabase.app/system/plus/force_update.json"
           echo "✔ تم نشر بيان التحديث إلى RTDB بعد اكتمال رفع الحزم وجهوزية مرآة Fastly."

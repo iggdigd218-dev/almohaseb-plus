@@ -199,10 +199,12 @@ List<String> releaseNoteLines(String notes, {int maxLines = 3}) =>
         .toList();
 
 class UpdateService {
-  /// الرابط الافتراضي لبيان الإصدار (يُقرأ من العقدة السيادية المحصنة `/system/version_manifest`
+  /// الرابط الافتراضي لبيان الإصدار (يُقرأ من العقدة السيادية المحصنة `/system/plus/version_manifest`
   /// في قاعدة Firebase RTDB والتي تقتصر كتابتها على حساب المشرف فقط).
+  /// (2026-10-29) مسار مستقل لتطبيق «المحاسب بلاس»: تطبيق v2 يقرأ `/system/version_manifest`
+  /// — الفصل يمنع أن يعرض كل تطبيق تحديثات الآخر ويُركّبها فوق مستخدميه.
   static const String kDefaultManifestUrl =
-      'https://nexora-broker-default-rtdb.europe-west1.firebasedatabase.app/system/version_manifest.json';
+      'https://nexora-broker-default-rtdb.europe-west1.firebasedatabase.app/system/plus/version_manifest.json';
 
   /// رابط احتياطي على GitHub Releases للمستودع العام.
   static const String kFallbackManifestUrl =
