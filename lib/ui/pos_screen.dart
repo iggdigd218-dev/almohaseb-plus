@@ -667,7 +667,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
     if (_tabController.index == 1) {
       return Scaffold(
         appBar: AppBar(
-          backgroundColor: const Color(0xFF0F3E78),
+          backgroundColor: const Color(0xFF2563EB),
           foregroundColor: Colors.white,
           leading: IconButton(
             icon: const Icon(Icons.arrow_back_rounded, color: Colors.white),
@@ -1525,10 +1525,11 @@ class _PosScreenState extends ConsumerState<PosScreen>
             padding: const EdgeInsets.fromLTRB(12, 6, 12, 2),
             child: Row(
               children: [
+                // (PR-8) رأس حيوي صافٍ — بلا أي كحلي قاتم.
                 const Icon(
                   Icons.inventory_2_outlined,
                   size: 19,
-                  color: Color(0xFF0F3E78),
+                  color: Color(0xFF2563EB),
                 ),
                 const SizedBox(width: 6),
                 Text(
@@ -1558,14 +1559,14 @@ class _PosScreenState extends ConsumerState<PosScreen>
                           style: TextStyle(
                             fontSize: 12,
                             fontWeight: FontWeight.w800,
-                            color: Color(0xFF1565C0),
+                            color: Color(0xFF2563EB),
                           ),
                         ),
                         SizedBox(width: 3),
                         Icon(
                           Icons.arrow_forward_rounded,
                           size: 14,
-                          color: Color(0xFF1565C0),
+                          color: Color(0xFF2563EB),
                         ),
                       ],
                     ),
@@ -1747,10 +1748,10 @@ class _PosScreenState extends ConsumerState<PosScreen>
     final hasCartItems = _cart.isNotEmpty;
     return Container(
       decoration: BoxDecoration(
-        color: const Color(0xFF0F3E78),
+        color: const Color(0xFF2563EB),
         boxShadow: [
           BoxShadow(
-            color: const Color(0xFF0F3E78).withValues(alpha: .18),
+            color: const Color(0xFF2563EB).withValues(alpha: .18),
             blurRadius: 8,
             offset: const Offset(0, 2),
           ),
@@ -2255,7 +2256,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
           enabledBorder: _searchBorder(
             dark ? const Color(0xFF334155) : const Color(0xFFE2E8F0),
           ),
-          focusedBorder: _searchBorder(const Color(0xFF1565C0)),
+          focusedBorder: _searchBorder(const Color(0xFF2563EB)),
           suffixIcon: Row(
             mainAxisSize: MainAxisSize.min,
             children: [
@@ -2467,7 +2468,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
                   const Icon(
                     Icons.receipt_long_outlined,
                     size: 20,
-                    color: Color(0xFF1565C0),
+                    color: Color(0xFF2563EB),
                   ),
                   const SizedBox(width: 8),
                   Column(
@@ -4026,7 +4027,7 @@ class _PosHistoryTabState extends ConsumerState<_PosHistoryTab> {
                 children: [
                   Icon(
                     Icons.assignment_return_rounded,
-                    color: Color(0xFF0F3E78),
+                    color: Color(0xFF2563EB),
                     size: 20,
                   ),
                   SizedBox(width: 6),
@@ -4833,7 +4834,7 @@ class _SalesReturnSheetState extends ConsumerState<_SalesReturnSheet> {
                   ),
                   FilledButton.icon(
                     style: FilledButton.styleFrom(
-                      backgroundColor: const Color(0xFF0F3E78),
+                      backgroundColor: const Color(0xFF2563EB),
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(
                         horizontal: 18,

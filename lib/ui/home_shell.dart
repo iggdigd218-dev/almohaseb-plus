@@ -1741,6 +1741,9 @@ class _HomeShellState extends ConsumerState<HomeShell>
                         width: 28,
                         height: 28,
                         fit: BoxFit.cover,
+                        // (PR-8) حدة Retina للشعار المصغر.
+                        cacheWidth: crispCacheWidth(context, 28),
+                        filterQuality: FilterQuality.medium,
                         errorBuilder: (_, __, ___) => const Icon(
                           Icons.business_rounded,
                           size: 16,
@@ -2712,12 +2715,16 @@ class _Drawer extends ConsumerWidget {
                             color: Colors.white,
                             size: 30,
                           );
+                          // (PR-8) حدة Retina للصورة الشخصية بالدرج.
+                          final faceCacheWidth = crispCacheWidth(ctx, 54);
                           final Widget face = photo.startsWith('http')
                               ? Image.network(
                                   photo,
                                   width: 54,
                                   height: 54,
                                   fit: BoxFit.cover,
+                                  cacheWidth: faceCacheWidth,
+                                  filterQuality: FilterQuality.medium,
                                   errorBuilder: (_, __, ___) => fallback,
                                 )
                               : (photo.isNotEmpty
@@ -2726,6 +2733,8 @@ class _Drawer extends ConsumerWidget {
                                       width: 54,
                                       height: 54,
                                       fit: BoxFit.cover,
+                                      cacheWidth: faceCacheWidth,
+                                      filterQuality: FilterQuality.medium,
                                       errorBuilder: (_, __, ___) => fallback,
                                     )
                                   : fallback);
