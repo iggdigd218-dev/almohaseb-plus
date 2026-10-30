@@ -238,6 +238,75 @@ void main() {
       expect((moves.first['quantity'] as num).toDouble(), equals(15.0));
       expect(moves.first['notes'], contains('تسوية تلقائية لدمج رصيد صنف مكرر'));
     });
+
+    test('دمج مكرر ذي حركات موثقة لا يكرر التوثيق — التسوية للرصيد غير المغطى فقط', () async {
+      // صنف محلي: رصيد افتتاحي 5 + شراء موثق بحركة 10 → الكمية الحالية 15
+      // (الشراء 10 موثق في stock_moves، والافتتاحي 5 غير موثق بحركة).
+      final t0 = DateTime.now().toIso8601String();
+      await db.insert('items', {
+        'id': 1001,
+        'name': 'عصير تفاح',
+        'quantity': 15.0,
+        'workspace_id': 'default',
+        'created_at': t0,
+        'updated_at': t0,
+      });
+      await db.insert('stock_moves', {
+        'item_id': 1001,
+        'kind': 'purchase',
+        'quantity': 10.0,
+        'unit_price': 0,
+        'workspace_id': 'default',
+        'notes': 'شراء موثق',
+        'date': '2026-10-30',
+        'created_at': t0,
+      });
+
+      // وصول صنف سحابي بنفس الاسم بمعرف 2002 ورصيد 25
+      final op = SyncOperation(
+        id: 'op_item_2002b',
+        deviceId: 'DEV-CLOUD',
+        workspaceId: 'default',
+        userId: null,
+        entityType: EntityKind.item,
+        entityId: '2002',
+        opType: OpKind.create,
+        version: 1,
+        parentOpId: '',
+        payload: {
+          'id': 2002,
+          'name': 'عصير تفاح',
+          'quantity': 25.0,
+          'workspace_id': 'default',
+        },
+        deviceTime: t0,
+        timestamp: '${DateTime.now().millisecondsSinceEpoch}',
+      );
+
+      await db.transaction((txn) async {
+        final applied = await repo.applyRemoteOperation(txn, op, ConflictResolver());
+        expect(applied, isTrue);
+      });
+
+      // المكرر حُذف والكمية رُحِّلت كاملة (25 + 15 = 40)
+      expect((await db.query('items', where: 'id = 1001')).isEmpty, isTrue);
+      final canonical = await db.query('items', where: 'id = 2002');
+      expect(canonical.isNotEmpty, isTrue);
+      expect((canonical.first['quantity'] as num).toDouble(), equals(40.0));
+
+      // التوثيق بلا ازدواج: الشراء المعاد توجيهه (10) + تسوية الافتتاحي
+      // غير الموثق (5) = 15 فقط — وليس 15+10 كما كان قبل التصحيح.
+      final moves = await db.query('stock_moves', where: 'item_id = 2002');
+      expect(moves.length, equals(2));
+      final synth = moves.firstWhere(
+        (m) => '${m['notes']}'.contains('تسوية تلقائية'),
+      );
+      expect((synth['quantity'] as num).toDouble(), equals(5.0));
+      final docSum = moves.fold<double>(
+          0.0, (a, m) => a + (m['quantity'] as num).toDouble());
+      expect(docSum, equals(15.0));
+      // واتساق صيغة المطابقة (PR-2): initialCreate(25) + طيّ الحركات(15) = 40 = الكمية.
+    });
   });
 
   group('3. شفاء الأصناف العالقة بدون قسم تلقائياً (Auto-Heal Orphan Items)', () {
