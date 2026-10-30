@@ -7,7 +7,6 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nexora_app/core/models.dart';
 import 'package:nexora_app/data/repository.dart';
 import 'package:nexora_app/data/sync/apply_remote.dart';
-import 'package:nexora_app/data/sync/cloud_join.dart';
 import 'package:nexora_app/data/sync/conflict_resolver.dart';
 import 'package:nexora_app/data/sync/operation.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -79,8 +78,8 @@ void main() {
       final vNumPayment = await repo.nextVoucherNumber(VoucherKind.payment);
       expect(vNumPayment, equals('B-ص-0001'));
 
-      final vNumJournal = await repo.nextVoucherNumber(VoucherKind.journal);
-      expect(vNumJournal, equals('B-ي-0001'));
+      final vNumDebit = await repo.nextVoucherNumber(VoucherKind.debit);
+      expect(vNumDebit, equals('B-ق-0001'));
 
       // الرقم التالي لنفس النوع يزيد التسلسل
       final vNumReceipt2 = await repo.nextVoucherNumber(VoucherKind.receipt);
@@ -99,7 +98,6 @@ void main() {
     });
 
     test('حجز البادئات المتسلسلة (A, B, C...) في السحابة وتجنب التصادم', () async {
-      // فحص اشتقاق البادئات المرشحة
       final p1 = await repo.resolveDevicePrefix();
       expect(p1.isNotEmpty, isTrue);
     });
@@ -197,24 +195,29 @@ void main() {
       });
 
       // 2. وصول صنف سحابي بنفس الاسم بمعرف 2002 ورصيد 25
+      final nowIso = DateTime.now().toIso8601String();
       final op = SyncOperation(
         id: 'op_item_2002',
         deviceId: 'DEV-CLOUD',
         workspaceId: 'default',
-        opType: OpKind.create,
+        userId: null,
         entityType: EntityKind.item,
         entityId: '2002',
+        opType: OpKind.create,
+        version: 1,
+        parentOpId: '',
         payload: {
           'id': 2002,
           'name': 'عصير برتقال',
           'quantity': 25.0,
           'workspace_id': 'default',
         },
-        timestamp: DateTime.now().millisecondsSinceEpoch,
+        deviceTime: nowIso,
+        timestamp: '${DateTime.now().millisecondsSinceEpoch}',
       );
 
       await db.transaction((txn) async {
-        final applied = await repo.applyRemoteOperation(txn, op, ConflictResolver.lastWriteWins);
+        final applied = await repo.applyRemoteOperation(txn, op, ConflictResolver());
         expect(applied, isTrue);
       });
 

@@ -585,7 +585,7 @@ class CloudJoin {
       String chosenPrefix = preferred;
       for (final cand in candidates) {
         final holder = currentReservations[cand];
-        if (holder == null || '${holder}'.trim().isEmpty || '${holder}'.trim() == devId) {
+        if (holder == null || '$holder'.trim().isEmpty || '$holder'.trim() == devId) {
           chosenPrefix = cand;
           break;
         }
