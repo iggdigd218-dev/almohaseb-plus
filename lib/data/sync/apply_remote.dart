@@ -5,6 +5,7 @@ import 'package:crypto/crypto.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 
+import '../../core/database.dart';
 import '../../core/media_paths.dart';
 import '../../core/models.dart';
 import '../repository.dart';
@@ -465,7 +466,7 @@ Future<void> _healItemNameConflict(
 
   final dups = await txn.query(
     'items',
-    columns: ['id', 'deleted_at', 'name', 'is_deleted'],
+    columns: ['id', 'deleted_at', 'name', 'is_deleted', 'quantity', 'workspace_id'],
     where: 'name = ? COLLATE NOCASE AND id != ?',
     whereArgs: [cleanName, newEntityId],
   );
@@ -536,6 +537,59 @@ Future<void> _healItemNameConflict(
       );
     } catch (_) {}
 
+    // (PR-3+) حماية رصيد الصنف الافتتاحي عند دمج التكرار غير المتصل
+    final dupQty = ((d['quantity'] as num?) ?? 0).toDouble();
+    if (dupQty > 0) {
+      double recordedInMoves = 0.0;
+      try {
+        final moveRows = await txn.rawQuery(
+          'SELECT kind, SUM(quantity) as total FROM stock_moves WHERE item_id = ? GROUP BY kind',
+          [dupId],
+        );
+        for (final r in moveRows) {
+          final k = r['kind']?.toString() ?? '';
+          final t = ((r['total'] as num?) ?? 0).toDouble();
+          if (k == 'purchase' || k == 'return' || k == 'returnIn') {
+            recordedInMoves += t;
+          } else if (k == 'sale') {
+            recordedInMoves -= t;
+          }
+        }
+      } catch (_) {}
+
+      final uncoveredQty = dupQty > recordedInMoves
+          ? (dupQty - (recordedInMoves > 0 ? recordedInMoves : 0))
+          : 0.0;
+      final moveQty = uncoveredQty > 0 ? uncoveredQty : dupQty;
+
+      final now = DateTime.now();
+      final nowIso = now.toIso8601String();
+      final dateStr = nowIso.split('T').first;
+      final wsId = (d['workspace_id']?.toString().isNotEmpty ?? false)
+          ? d['workspace_id']
+          : AppDatabase.activeWorkspaceId;
+
+      try {
+        await txn.insert('stock_moves', {
+          'workspace_id': wsId,
+          'item_id': newEntityId,
+          'kind': StockKind.purchase.code,
+          'quantity': moveQty,
+          'unit_price': 0,
+          'notes': 'تسوية تلقائية لدمج رصيد صنف مكرر ($cleanName)',
+          'date': dateStr,
+          'created_at': nowIso,
+        });
+      } catch (_) {}
+
+      try {
+        await txn.rawUpdate(
+          'UPDATE items SET quantity = quantity + ?, updated_at = ? WHERE id = ?',
+          [dupQty, nowIso, newEntityId],
+        );
+      } catch (_) {}
+    }
+
     try {
       await txn.delete('items', where: 'id = ?', whereArgs: [dupId]);
     } catch (_) {
@@ -549,6 +603,49 @@ Future<void> _healItemNameConflict(
     }
   }
 }
+
+/// (PR-3+) شفاء الأصناف العالقة بدون قسم تلقائياً:
+/// عند وصول قسم جديد أو فئة مرتبطة بقسم، يتم ربط أي أصناف ذات `section_id IS NULL`
+/// بالقسم المحدد في فئتها التابعة فوراً عبر استعلام محصّن بـ EXISTS.
+Future<int> _autoHealOrphanItems(
+  DatabaseExecutor db, {
+  int? sectionId,
+  int? categoryId,
+}) async {
+  try {
+    String sql = '''
+      UPDATE items 
+      SET section_id = (
+          SELECT ic.section_id 
+          FROM item_categories ic 
+          WHERE ic.id = items.category_id
+      ),
+      updated_at = ?
+      WHERE items.section_id IS NULL 
+        AND items.category_id IS NOT NULL
+        AND EXISTS (
+          SELECT 1 FROM item_categories ic 
+          WHERE ic.id = items.category_id 
+            AND ic.section_id IS NOT NULL 
+            AND ic.section_id > 0
+            AND (ic.deleted_at IS NULL OR ic.deleted_at = '')
+        )
+    ''';
+    final nowIso = DateTime.now().toIso8601String();
+    final params = <Object?>[nowIso];
+    if (categoryId != null) {
+      sql += ' AND items.category_id = ?';
+      params.add(categoryId);
+    } else if (sectionId != null) {
+      sql += ' AND items.category_id IN (SELECT id FROM item_categories WHERE section_id = ?)';
+      params.add(sectionId);
+    }
+    return await db.rawUpdate(sql, params);
+  } catch (_) {
+    return 0;
+  }
+}
+
 
 extension ApplyRemoteOp on Repo {
   /// Returns false for replay/ignored/conflicting operations. The caller owns
@@ -1142,6 +1239,13 @@ extension ApplyRemoteOp on Repo {
         }
         if (op.entityType == EntityKind.tx && lines != null) {
           await _replaceInvoiceLines(txn, op, lines);
+        }
+        if (op.entityType == EntityKind.section) {
+          final secId = int.tryParse(op.entityId);
+          await _autoHealOrphanItems(txn, sectionId: secId);
+        } else if (op.entityType == EntityKind.itemCategory) {
+          final catId = int.tryParse(op.entityId);
+          await _autoHealOrphanItems(txn, categoryId: catId);
         }
         break;
       case OpKind.delete_:
@@ -1911,5 +2015,11 @@ extension ApplyRemoteOp on Repo {
       }
     } catch (_) {}
     return fixed;
+  }
+
+  /// (PR-3+) تشغيل الشفاء الذاتي للأصناف العالقة بدون قسم برمجياً أو في الاختبارات
+  Future<int> autoHealOrphanItems({int? sectionId, int? categoryId}) async {
+    final db = await database;
+    return _autoHealOrphanItems(db, sectionId: sectionId, categoryId: categoryId);
   }
 }
