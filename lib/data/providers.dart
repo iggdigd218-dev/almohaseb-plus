@@ -244,7 +244,7 @@ final summaryProvider = FutureProvider<Summary>((ref) async {
     if (g == 'outflow') outflow += t.amount;
 
     final isRet = t.description.trim().startsWith('مرتجع ') ||
-        t.originalTxId != null ||
+        t.category == 'مرتجع مبيعات' ||
         t.notes.contains('[ORIG_TX:');
     final isSale = !isRet &&
         (t.type == OpType.revenue ||
@@ -495,7 +495,7 @@ final txPageProvider = FutureProvider<TxPage>((ref) async {
       outflow[t.currency] = (outflow[t.currency] ?? 0) + t.amount;
     }
     final isRet = t.description.trim().startsWith('مرتجع ') ||
-        t.originalTxId != null ||
+        t.category == 'مرتجع مبيعات' ||
         t.notes.contains('[ORIG_TX:');
     final isSale = !isRet &&
         (t.type == OpType.revenue ||

@@ -380,7 +380,7 @@ ReportTable buildReport(
       var tSales = 0.0;
       for (final t in d.txs) {
         final isRet = t.description.trim().startsWith('مرتجع ') ||
-            t.originalTxId != null ||
+            t.category == 'مرتجع مبيعات' ||
             t.notes.contains('[ORIG_TX:');
         final isSale = !isRet &&
             (t.type == OpType.revenue ||
@@ -540,7 +540,7 @@ ReportTable buildReport(
           totalSales = 0.0;
       for (final t in d.txs) {
         final isRet = t.description.trim().startsWith('مرتجع ') ||
-            t.originalTxId != null ||
+            t.category == 'مرتجع مبيعات' ||
             t.notes.contains('[ORIG_TX:');
         final isSale = !isRet &&
             (t.type == OpType.revenue ||

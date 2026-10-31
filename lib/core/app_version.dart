@@ -43,7 +43,7 @@ class AppSemVer implements Comparable<AppSemVer> {
 
   /// إصدار التطبيق الحالي.
   static const AppSemVer current =
-      AppSemVer(3, 98, 8, kAppBuild); // يطابق kAppVersion
+      AppSemVer(3, 98, 10, kAppBuild); // يطابق kAppVersion
 
   @override
   int compareTo(AppSemVer o) {

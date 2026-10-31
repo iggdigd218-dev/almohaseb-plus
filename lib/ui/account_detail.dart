@@ -95,7 +95,7 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
         for (final t in txs) {
           if (t.currency != activeCur) continue;
           final isRet = t.description.trim().startsWith('مرتجع ') ||
-              t.originalTxId != null ||
+              t.category == 'مرتجع مبيعات' ||
               t.notes.contains('[ORIG_TX:');
           if (!isRet && (t.type == OpType.revenue || t.type == OpType.debit)) {
             totalSales += t.amount;
