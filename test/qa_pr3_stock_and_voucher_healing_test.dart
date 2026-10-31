@@ -183,20 +183,26 @@ void main() {
         )
       ''');
 
+      // مطابق تمامًا للمخطط الفعلي (lib/core/database.dart) — كانت الأعمدة
+      // الناقصة (parent_op_id وdevice_time وserver_time) تفشل تسجيل
+      // عملية الاستقبال داخل applyRemoteOperation.
       await db.execute('''
         CREATE TABLE operations (
           id TEXT PRIMARY KEY,
           device_id TEXT NOT NULL,
           workspace_id TEXT NOT NULL,
           user_id INTEGER,
-          op_type TEXT NOT NULL,
           entity_type TEXT NOT NULL,
           entity_id TEXT NOT NULL,
-          payload TEXT NOT NULL,
-          timestamp INTEGER NOT NULL,
+          op_type TEXT NOT NULL,
           version INTEGER NOT NULL DEFAULT 1,
-          is_synced INTEGER NOT NULL DEFAULT 0,
-          synced INTEGER NOT NULL DEFAULT 0
+          parent_op_id TEXT DEFAULT '',
+          payload TEXT NOT NULL,
+          device_time TEXT NOT NULL,
+          server_time TEXT DEFAULT '',
+          timestamp TEXT NOT NULL,
+          synced INTEGER NOT NULL DEFAULT 0,
+          is_synced INTEGER NOT NULL DEFAULT 0
         )
       ''');
     });
