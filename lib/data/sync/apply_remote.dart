@@ -906,6 +906,11 @@ extension ApplyRemoteOp on Repo {
         await ensureForeignParents(txn, table, row, op);
         // (2026-09-24) قسم يتيح: يُفرغ section_id غير الموجود محلياً.
         await nullDanglingSection(txn, table, row);
+        // (PR-3+) شفاء تعارض اسم الصنف يؤجَّل إلى ما بعد كتابة الصنف الوارد
+        // (تحديثًا أو إدراجًا): قبلها لا وجود للصف فتضيع ترحيلات الكمية
+        // (تحديث يضرب 0 صفوف)، وتُرفض حركة التسوية بقيد FK في الإنتاج،
+        // كما أن الكتابة اللاحقة كانت تستبدل الكمية المُرحَّلة.
+        String? pendingItemNameHeal;
         if (existing.isNotEmpty) {
           if (row.isNotEmpty) {
             final opMs = op.serverTimeMs > 0
@@ -1037,7 +1042,7 @@ extension ApplyRemoteOp on Repo {
               if (row.containsKey('name')) {
                 final itmName = row['name']?.toString().trim() ?? '';
                 if (itmName.isNotEmpty) {
-                  await _healItemNameConflict(txn, itmName, op.entityId);
+                  pendingItemNameHeal = itmName;
                 }
               }
               if (row.containsKey('sku')) {
@@ -1061,6 +1066,11 @@ extension ApplyRemoteOp on Repo {
                     sqlQuery: sql, sqlArgs: sqlArgs),
               );
               rethrow;
+            }
+            if (pendingItemNameHeal != null) {
+              // (PR-3+) الآن الصنف الوارد موجود — الترحيل والتسوية يعملان فعلًا.
+              await _healItemNameConflict(
+                  txn, pendingItemNameHeal!, op.entityId);
             }
           }
         } else {
@@ -1112,7 +1122,7 @@ extension ApplyRemoteOp on Repo {
             if (insertRow.containsKey('name')) {
               final itmName = insertRow['name']?.toString().trim() ?? '';
               if (itmName.isNotEmpty) {
-                await _healItemNameConflict(txn, itmName, op.entityId);
+                pendingItemNameHeal = itmName;
               }
             }
             if (insertRow.containsKey('sku')) {
@@ -1154,6 +1164,13 @@ extension ApplyRemoteOp on Repo {
                   sqlQuery: sql, sqlArgs: sqlArgs),
             );
             rethrow;
+          }
+          if (pendingItemNameHeal != null) {
+            // (PR-3+) بعد الإدراج: الصنف موجود فتُرحَّل الكمية وتُسجَّل
+            // التسوية بقيد FK سليم — وقبل ذلك كان التحديث يضرب 0 صفوف
+            // فُيبتلع بصمت (فقدان رصيد صامت في الإنتاج).
+            await _healItemNameConflict(
+                txn, pendingItemNameHeal!, op.entityId);
           }
           // تطبيق فرق الكمية (Delta) عند إدراج حركة مخزون جديدة واردة من جهاز آخر
           if (op.entityType == EntityKind.stockMove) {
