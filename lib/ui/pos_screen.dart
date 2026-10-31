@@ -4108,16 +4108,90 @@ class _PosHistoryTabState extends ConsumerState<_PosHistoryTab> {
                 );
               }
 
-              return ListView.separated(
-                padding: const EdgeInsets.all(12),
-                itemCount: posTxs.length,
-                separatorBuilder: (_, __) => const SizedBox(height: 8),
-                itemBuilder: (context, i) {
-                  final tx = posTxs[i];
-                  final account =
-                      tx.accountId != null ? accountById[tx.accountId!] : null;
-                  final isCash = tx.type == OpType.revenue;
-                  final isPartial =
+              var totalSales = 0.0;
+              var cashSales = 0.0;
+              var creditSales = 0.0;
+              final primaryCur = posTxs.first.currency;
+              for (final t in posTxs) {
+                totalSales += t.amount;
+                if (t.type == OpType.revenue) {
+                  cashSales += t.amount;
+                } else {
+                  creditSales += t.amount;
+                }
+              }
+
+              return Column(
+                children: [
+                  Container(
+                    margin: const EdgeInsets.fromLTRB(12, 10, 12, 0),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 14,
+                      vertical: 10,
+                    ),
+                    decoration: BoxDecoration(
+                      color: AppColors.primarySoftOf(context),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: AppColors.primaryOf(context)
+                            .withValues(alpha: 0.25),
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        Icon(
+                          Icons.trending_up_rounded,
+                          color: AppColors.primaryOf(context),
+                          size: 22,
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                'إجمالي المبيعات (${posTxs.length} فاتورة)',
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  fontWeight: FontWeight.w800,
+                                  color: AppColors.text2Of(context),
+                                ),
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                'نقداً: ${Fmt.money(cashSales)} • آجل: ${Fmt.money(creditSales)}',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                  color: AppColors.text3Of(context),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        Text(
+                          '${Fmt.money(totalSales)} $primaryCur',
+                          style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.w900,
+                            color: AppColors.primaryOf(context),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  Expanded(
+                    child: ListView.separated(
+                      padding: const EdgeInsets.all(12),
+                      itemCount: posTxs.length,
+                      separatorBuilder: (_, __) => const SizedBox(height: 8),
+                      itemBuilder: (context, i) {
+                        final tx = posTxs[i];
+                        final account = tx.accountId != null
+                            ? accountById[tx.accountId!]
+                            : null;
+                        final isCash = tx.type == OpType.revenue;
+                        final isPartial =
                       !isCash && tx.notes.contains('طريقة الدفع: جزئي');
                   final hasReturnNote = tx.notes.contains('تم إرجاع (');
                   final customerName = account?.name.trim().isNotEmpty == true
@@ -4336,7 +4410,10 @@ class _PosHistoryTabState extends ConsumerState<_PosHistoryTab> {
                     ),
                   );
                 },
-              );
+              ),
+                ),
+              ],
+            );
             },
           ),
         ),
