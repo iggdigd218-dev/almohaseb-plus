@@ -1115,14 +1115,56 @@ final syncOpsProvider = FutureProvider<List<SyncOpRow>>((ref) async {
   }).toList();
 });
 
-/// شارة تسليم المعاملات: لكل معاملة (entity_id) عدد الأجهزة التي استلمت
-/// أحدث عملية تخصها + إجمالي الأقران. تُعرض كرقم صغير في قائمة العمليات
-/// وتتحول ✅ عند وصولها لكل الأجهزة.
+/// تفاصيل استلام جهاز واحد في الروستر لعملية مالية معينة (تُعرض للمدير فقط).
+class TxPeerDelivery {
+  final String deviceId;
+  final String deviceName;
+  final bool isOwner;
+  final bool isSelf;
+  final bool isCreator;
+  final bool delivered;
+  final String receivedAt;
+
+  const TxPeerDelivery({
+    required this.deviceId,
+    required this.deviceName,
+    required this.isOwner,
+    required this.isSelf,
+    required this.isCreator,
+    required this.delivered,
+    this.receivedAt = '',
+  });
+}
+
+/// شارة تسليم وانتشار المعاملات (لجهاز المدير فقط): لكل معاملة (entity_id)
+/// عدد الأجهزة المسجلة في الروستر التي استلمت أحدث عملية تخصها + إجمالي أجهزة
+/// الروستر النشطة + قائمة تفاصيل كل جهاز للعرض في النافذة السفلية (BottomSheet).
 class TxDeliveryBadge {
   final int delivered;
   final int total;
-  const TxDeliveryBadge(this.delivered, this.total);
+  final List<TxPeerDelivery> peers;
+
+  const TxDeliveryBadge(
+    this.delivered,
+    this.total, {
+    this.peers = const [],
+  });
+
   bool get all => total > 0 && delivered >= total;
+}
+
+int _parseSyncTimeMs(Object? v) {
+  if (v is int && v > 0) return v;
+  if (v is num && v > 0) return v.toInt();
+  if (v is String) {
+    final s = v.trim();
+    if (s.isEmpty) return 0;
+    final asInt = int.tryParse(s);
+    if (asInt != null && asInt > 0) return asInt;
+    final dt = DateTime.tryParse(s);
+    if (dt != null) return dt.millisecondsSinceEpoch;
+  }
+  return 0;
 }
 
 final txDeliveryBadgesProvider = FutureProvider<Map<String, TxDeliveryBadge>>((
@@ -1130,37 +1172,139 @@ final txDeliveryBadgesProvider = FutureProvider<Map<String, TxDeliveryBadge>>((
 ) async {
   ref.watch(refreshProvider);
   final repo = ref.read(repoProvider);
+  // العزل التام للأعضاء: مراقب الانتشار والعدادات مخصصة حصراً لجهاز المدير.
+  final isOwner = await repo.isWorkspaceOwner();
+  if (!isOwner) return const {};
+
   final db = await repo.database;
   final ourId = (await repo.settings())['sync.deviceId'] ?? '';
-  final peersR = await db.rawQuery(
-    "SELECT COUNT(*) c FROM devices WHERE is_paired = 1 "
-    "AND COALESCE(revoked_at,'') = '' AND COALESCE(expelled_at,'') = '' "
-    "AND id <> ?",
-    [ourId],
-  );
-  final total = (peersR.first['c'] as int?) ?? 0;
-  if (total <= 0) return const {};
-  // أحدث عملية محلية لكل معاملة + عدد الأجهزة التي استلمتها.
-  // (دفعة 58) شارة التسليم سحابية: synced=1 = وصلت السحابة = وصلت الجميع.
-  final rows = await db.rawQuery(
+
+  // جلب كافة أجهزة المنشأة النشطة المسجلة في الروستر (المدير + الأعضاء المقترنين).
+  final deviceRows = await db.rawQuery(
     '''
-    SELECT o.entity_id AS eid,
-           CASE WHEN o.synced = 1 THEN $total ELSE 0 END AS delivered
-    FROM operations o
-    WHERE o.entity_type = 'tx' AND o.device_id = ?
-      AND o.version = (
-        SELECT MAX(v.version) FROM operations v
-        WHERE v.entity_type = 'tx' AND v.entity_id = o.entity_id
-          AND v.device_id = o.device_id
-      )
-  ''',
-    [ourId],
+    SELECT d.id, d.name, d.is_owner, d.is_paired, d.last_sync_at, d.last_seen_at,
+           d.updated_at, u.name AS user_name
+    FROM devices d
+    LEFT JOIN users u ON u.id = d.user_id
+    WHERE (d.is_paired = 1 OR d.is_owner = 1)
+      AND COALESCE(d.revoked_at, '') = ''
+      AND COALESCE(d.expelled_at, '') = ''
+    ORDER BY d.is_owner DESC, d.created_at ASC
+    ''',
   );
+
+  // إذا لم يكن هناك أعضاء مقترنون (جهاز المدير فقط)، لا نعرض عدادات الانتشار.
+  final hasMemberPeers = deviceRows.any((d) => '${d['id'] ?? ''}' != ourId);
+  if (!hasMemberPeers || deviceRows.length <= 1) return const {};
+
+  final total = deviceRows.length;
+
+  final txRows = await db.rawQuery(
+    '''
+    SELECT t.id AS tx_id,
+           t.sync_state AS tx_sync_state,
+           t.updated_at AS tx_updated_at,
+           t.created_at AS tx_created_at,
+           o.device_id AS op_device_id,
+           o.synced AS op_synced,
+           o.is_synced AS op_is_synced,
+           o.server_time AS op_server_time,
+           o.timestamp AS op_timestamp,
+           o.device_time AS op_device_time
+    FROM transactions t
+    LEFT JOIN operations o
+      ON o.entity_type = 'tx'
+     AND o.entity_id = CAST(t.id AS TEXT)
+     AND o.rowid = (
+       SELECT o2.rowid FROM operations o2
+       WHERE o2.entity_type = 'tx' AND o2.entity_id = CAST(t.id AS TEXT)
+       ORDER BY o2.version DESC, o2.timestamp DESC, o2.rowid DESC
+       LIMIT 1
+     )
+    WHERE COALESCE(t.deleted_at, '') = ''
+    ''',
+  );
+
   final out = <String, TxDeliveryBadge>{};
-  for (final r in rows) {
-    out[(r['eid'] as String?) ?? ''] = TxDeliveryBadge(
-      (r['delivered'] as int?) ?? 0,
+  for (final r in txRows) {
+    final eid = '${r['tx_id'] ?? ''}'.trim();
+    if (eid.isEmpty) continue;
+    final txSyncState = '${r['tx_sync_state'] ?? 'synced'}'.trim();
+    final hasOpRow = r['op_device_id'] != null;
+    final senderDeviceId = '${r['op_device_id'] ?? ourId}'.trim();
+    final opSynced = hasOpRow
+        ? ((((r['op_synced'] as int?) ?? 0) == 1 ||
+                ((r['op_is_synced'] as int?) ?? 0) == 1) &&
+            txSyncState == 'synced')
+        : (txSyncState == 'synced');
+
+    final opServerMs = _parseSyncTimeMs(r['op_server_time']);
+    final opFallbackMs = [
+      _parseSyncTimeMs(r['op_timestamp']),
+      _parseSyncTimeMs(r['op_device_time']),
+      _parseSyncTimeMs(r['tx_updated_at']),
+      _parseSyncTimeMs(r['tx_created_at']),
+    ].reduce((a, b) => a > b ? a : b);
+    final opTimeMs = opServerMs > 0 ? opServerMs : opFallbackMs;
+    final opTimeIso = opTimeMs > 0
+        ? DateTime.fromMillisecondsSinceEpoch(opTimeMs).toIso8601String()
+        : '${r['tx_updated_at'] ?? r['tx_created_at'] ?? ''}';
+
+    int deliveredCount = 0;
+    final peersList = <TxPeerDelivery>[];
+
+    for (final d in deviceRows) {
+      final devId = '${d['id'] ?? ''}'.trim();
+      if (devId.isEmpty) continue;
+      final isSelf = devId == ourId;
+      final isDevOwner = ((d['is_owner'] as int?) ?? 0) == 1;
+      final isCreator = devId == senderDeviceId;
+      final rawName = '${d['name'] ?? ''}'.trim();
+      final userName = '${d['user_name'] ?? ''}'.trim();
+      final displayName = rawName.isNotEmpty
+          ? rawName
+          : (userName.isNotEmpty
+              ? userName
+              : (isDevOwner ? 'جهاز المدير' : 'جهاز عضو'));
+
+      final devSyncMs = _parseSyncTimeMs(d['last_sync_at']);
+      final devSyncIso = devSyncMs > 0
+          ? DateTime.fromMillisecondsSinceEpoch(devSyncMs).toIso8601String()
+          : '${d['last_sync_at'] ?? ''}'.trim();
+
+      bool isDelivered = false;
+      String receivedTimeStr = '';
+
+      if (isSelf || isCreator) {
+        // منشئ العملية وجهاز المدير (الحالي) يملكان العملية محلياً بالفعل.
+        isDelivered = true;
+        receivedTimeStr = devSyncIso.isNotEmpty ? devSyncIso : opTimeIso;
+      } else if (opSynced && opTimeMs > 0 && devSyncMs >= opTimeMs) {
+        isDelivered = true;
+        receivedTimeStr = devSyncIso;
+      }
+
+      if (isDelivered) {
+        deliveredCount++;
+      }
+
+      peersList.add(
+        TxPeerDelivery(
+          deviceId: devId,
+          deviceName: displayName,
+          isOwner: isDevOwner,
+          isSelf: isSelf,
+          isCreator: isCreator,
+          delivered: isDelivered,
+          receivedAt: receivedTimeStr,
+        ),
+      );
+    }
+
+    out[eid] = TxDeliveryBadge(
+      deliveredCount,
       total,
+      peers: peersList,
     );
   }
   return out;
