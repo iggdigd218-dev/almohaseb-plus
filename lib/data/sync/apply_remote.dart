@@ -114,7 +114,7 @@ Future<void> insertStubRow(
         'type': 'sale',
         'amount': 1, // CHECK (amount > 0)
         'status': 'done',
-        'sync_state': 'pending',
+        'sync_state': 'synced',
       },
   };
   for (final col in info) {
@@ -844,6 +844,9 @@ extension ApplyRemoteOp on Repo {
           entry.key: entry.value,
       if (columns.contains('workspace_id')) 'workspace_id': op.workspaceId,
       if (columns.contains('updated_at')) 'updated_at': now,
+      if (columns.contains('sync_state')) 'sync_state': 'synced',
+      if (columns.contains('sync_status')) 'sync_status': 'synced',
+      if (columns.contains('is_synced')) 'is_synced': 1,
     };
     // رسالة دردشة تشير لمحادثة غير موجودة محلياً: أنشئ المحادثة أولاً
     // (قيد المفتاح الأجنبي conversation_id) — عنوانها يأتي في الحمولة.
@@ -1362,6 +1365,7 @@ extension ApplyRemoteOp on Repo {
                 'deleted_at': '',
                 if (columns.contains('restore_op_id')) 'restore_op_id': op.id,
                 if (columns.contains('updated_at')) 'updated_at': now,
+                if (columns.contains('sync_state')) 'sync_state': 'synced',
               },
               where: '$primaryKey = ?',
               whereArgs: [op.entityId]);

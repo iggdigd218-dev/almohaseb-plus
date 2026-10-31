@@ -889,6 +889,21 @@ class CloudJoin {
     return m;
   }
 
+  /// يستخرج الطابع الزمني بالملي ثانية من أي حقل سحابي أو محلي (int أو num أو نص رقمي أو ISO-8601).
+  static int parseSyncMs(Object? v) {
+    if (v is int && v > 0) return v;
+    if (v is num && v > 0) return v.toInt();
+    if (v is String) {
+      final s = v.trim();
+      if (s.isEmpty) return 0;
+      final asInt = int.tryParse(s);
+      if (asInt != null && asInt > 0) return asInt;
+      final dt = DateTime.tryParse(s);
+      if (dt != null) return dt.millisecondsSinceEpoch;
+    }
+    return 0;
+  }
+
   /// تنقية وتجهيز صف جهاز وارد من السحابة قبل إدراجه/تحديثه في جدول `devices` المحلي:
   /// 1) يقتصر على الأعمدة الفعلية لجدول `devices` فقط (يستبعد حقول السحابة كـ fingerprint وemail وlast_seen).
   /// 2) يضمن وجود سجل المنشأة الأب في جدول `workspaces` أولاً لمنع خطأ قيد المفتاح الأجنبي (Code 787).
@@ -904,6 +919,24 @@ class CloudJoin {
         m[k] = v;
       }
     });
+    final syncMs = [
+      parseSyncMs(raw['last_synced_time']),
+      parseSyncMs(raw['last_sync_at']),
+    ].reduce((a, b) => a > b ? a : b);
+    if (syncMs > 0) {
+      m['last_sync_at'] =
+          DateTime.fromMillisecondsSinceEpoch(syncMs).toIso8601String();
+    }
+    final seenMs = [
+      parseSyncMs(raw['last_seen_at']),
+      parseSyncMs(raw['last_seen']),
+      parseSyncMs(raw['lastSeenAt']),
+      syncMs,
+    ].reduce((a, b) => a > b ? a : b);
+    if (seenMs > 0) {
+      m['last_seen_at'] =
+          DateTime.fromMillisecondsSinceEpoch(seenMs).toIso8601String();
+    }
     m['auth_secret'] = '';
     m['pair_token'] = '';
     m['pair_token_exp'] = '';
@@ -1755,6 +1788,13 @@ class CloudJoin {
     if (own.isNotEmpty) {
       try {
         final nowMs = DateTime.now().millisecondsSinceEpoch;
+        final nowIso = DateTime.fromMillisecondsSinceEpoch(nowMs).toIso8601String();
+        await db.update(
+          'devices',
+          {'last_sync_at': nowIso, 'last_seen_at': nowIso},
+          where: 'id = ?',
+          whereArgs: [ourId],
+        );
         await _putJson(
             '$root/roster/${Uri.encodeComponent(ourId)}.json',
             {
@@ -1763,6 +1803,9 @@ class CloudJoin {
               'hw_fingerprint': myFp,
               'last_seen': nowMs,
               'lastSeenAt': nowMs,
+              'last_synced_time': nowMs,
+              'last_sync_at': nowIso,
+              'last_seen_at': nowIso,
               'is_paired': 1,
               'is_owner': 0,
               'revoked_at': '',
@@ -1952,6 +1995,16 @@ class CloudJoin {
         final id = '${r['id'] ?? entry.key}';
         if (id.isEmpty) continue;
         final remoteUpd = '${r['updated_at'] ?? ''}';
+        final remoteSyncMs = [
+          parseSyncMs(r['last_synced_time']),
+          parseSyncMs(r['last_sync_at']),
+        ].reduce((a, b) => a > b ? a : b);
+        final remoteSeenMs = [
+          parseSyncMs(r['last_seen_at']),
+          parseSyncMs(r['last_seen']),
+          parseSyncMs(r['lastSeenAt']),
+          remoteSyncMs,
+        ].reduce((a, b) => a > b ? a : b);
         final local = localById[id];
         if (id == ourId) {
           // سجلنا: المدير هو المرجع في التعيين/التسمية/الحظر/الطرد فقط.
@@ -1971,7 +2024,7 @@ class CloudJoin {
               fallbackUpd: remoteUpd,
             );
           }
-          if (! (!isOwner && remoteRevokedOrExpelled) &&
+          if (!(!isOwner && remoteRevokedOrExpelled) &&
               remoteUpd.compareTo(localUpd) <= 0) {
             continue;
           }
@@ -2026,6 +2079,12 @@ class CloudJoin {
           // لا نعيد إدراج جهاز مطرود/محظور في جدول devices المحلي ولا ننشئ له مستخدم ظل
           continue;
         }
+        if (local == null &&
+            r['is_paired'] == null &&
+            '${r['name'] ?? ''}'.trim().isEmpty) {
+          // تجاهل أي عقدة جزئية يتيمة لا تمثل سجل جهاز مكتمل
+          continue;
+        }
         if (!remoteExpelled) {
           await syncUserFromRoster(
             r,
@@ -2056,6 +2115,8 @@ class CloudJoin {
           } catch (_) {}
         } else {
           final localUpd = '${local['updated_at'] ?? ''}';
+          final localSyncMs = parseSyncMs(local['last_sync_at']);
+          final localSeenMs = parseSyncMs(local['last_seen_at']);
           final localActive = (local['is_paired'] as int? ?? 0) == 1 &&
               '${local['revoked_at'] ?? ''}'.isEmpty &&
               '${local['expelled_at'] ?? ''}'.isEmpty;
@@ -2066,12 +2127,50 @@ class CloudJoin {
           if (isOwner && localActive && remoteExpelled && !isolatedBySelf) {
             continue;
           }
-          if (remoteUpd.compareTo(localUpd) <= 0) continue;
+          if (remoteUpd.compareTo(localUpd) <= 0) {
+            // حتى لو لم يتغير updated_at، نلتقط تقدم مؤشر المزامنة (last_synced_time)
+            // وآخر ظهور للعضو من عقدة /roster محلياً دون أي طلبات إضافية.
+            if (remoteSyncMs > localSyncMs || remoteSeenMs > localSeenMs) {
+              final cursorPatch = <String, Object?>{};
+              if (remoteSyncMs > localSyncMs) {
+                cursorPatch['last_sync_at'] =
+                    DateTime.fromMillisecondsSinceEpoch(remoteSyncMs)
+                        .toIso8601String();
+              }
+              if (remoteSeenMs > localSeenMs) {
+                cursorPatch['last_seen_at'] =
+                    DateTime.fromMillisecondsSinceEpoch(remoteSeenMs)
+                        .toIso8601String();
+              }
+              if (cursorPatch.isNotEmpty) {
+                try {
+                  await db.update('devices', cursorPatch,
+                      where: 'id = ?', whereArgs: [id]);
+                  changed = true;
+                } catch (_) {}
+              }
+            }
+            continue;
+          }
           final row = await _sanitizeDeviceRowForDb(
             db,
             r,
             fallbackWorkspaceId: localWs,
           );
+          final bestSyncMs =
+              remoteSyncMs > localSyncMs ? remoteSyncMs : localSyncMs;
+          if (bestSyncMs > 0) {
+            row['last_sync_at'] =
+                DateTime.fromMillisecondsSinceEpoch(bestSyncMs)
+                    .toIso8601String();
+          }
+          final bestSeenMs =
+              remoteSeenMs > localSeenMs ? remoteSeenMs : localSeenMs;
+          if (bestSeenMs > 0) {
+            row['last_seen_at'] =
+                DateTime.fromMillisecondsSinceEpoch(bestSeenMs)
+                    .toIso8601String();
+          }
           row.remove('id');
           row.remove('created_at');
           // لا نلمس سرّ المصادقة المحلي (قد يكون تعلّمه عبر اقتران سابق).
@@ -2183,6 +2282,15 @@ class CloudJoin {
             continue;
           }
         }
+        final localDeviceSyncMs = parseSyncMs(d['last_sync_at']);
+        final remoteDeviceSyncMs = remoteEntry is Map
+            ? [
+                parseSyncMs(remoteEntry['last_synced_time']),
+                parseSyncMs(remoteEntry['last_sync_at']),
+              ].reduce((a, b) => a > b ? a : b)
+            : 0;
+        final syncCursorAdvanced =
+            devIdStr == ourId && localDeviceSyncMs > remoteDeviceSyncMs;
         final missingOrRevokedInCloud = remote == null ||
             remoteEntry is! Map ||
             '${remoteEntry['revoked_at'] ?? ''}'.isNotEmpty ||
@@ -2190,9 +2298,19 @@ class CloudJoin {
             (remoteEntry['is_paired'] as int? ?? 0) != 1 ||
             '${remoteEntry['user_role'] ?? ''}' != '${d['user_role'] ?? ''}' ||
             '${remoteEntry['user_permissions'] ?? ''}' != '${d['user_permissions'] ?? ''}' ||
-            '${remoteEntry['user_id'] ?? ''}' != '${d['user_id'] ?? ''}';
+            '${remoteEntry['user_id'] ?? ''}' != '${d['user_id'] ?? ''}' ||
+            syncCursorAdvanced;
         if (!missingOrRevokedInCloud && upd.compareTo(lastPush) <= 0) continue;
         final map = _safeDeviceRow(Map<String, Object?>.from(d));
+        final bestDeviceSyncMs = localDeviceSyncMs > remoteDeviceSyncMs
+            ? localDeviceSyncMs
+            : remoteDeviceSyncMs;
+        if (bestDeviceSyncMs > 0) {
+          map['last_synced_time'] = bestDeviceSyncMs;
+          map['last_sync_at'] =
+              DateTime.fromMillisecondsSinceEpoch(bestDeviceSyncMs)
+                  .toIso8601String();
+        }
         if (!isOwner) {
           map['is_owner'] = 0;
         }
@@ -3825,17 +3943,29 @@ class CloudJoin {
       if (isOwner || id == ourId) continue; // لا نفصل المدير ولا أنفسنا
       final entry = roster[id];
       if (entry is Map && active(entry)) {
+        final remoteSyncMs = [
+          parseSyncMs(entry['last_synced_time']),
+          parseSyncMs(entry['last_sync_at']),
+        ].reduce((a, b) => a > b ? a : b);
+        final localSyncMs = parseSyncMs(r['last_sync_at']);
+        final patch = <String, Object?>{};
         if ((r['is_paired'] as int? ?? 0) != 1 ||
             '${r['revoked_at'] ?? ''}'.isNotEmpty ||
             '${r['expelled_at'] ?? ''}'.isNotEmpty) {
+          patch['is_paired'] = 1;
+          patch['revoked_at'] = '';
+          patch['expelled_at'] = '';
+          patch['updated_at'] = now;
+        }
+        if (remoteSyncMs > localSyncMs) {
+          patch['last_sync_at'] =
+              DateTime.fromMillisecondsSinceEpoch(remoteSyncMs)
+                  .toIso8601String();
+        }
+        if (patch.isNotEmpty) {
           await db.update(
             'devices',
-            {
-              'is_paired': 1,
-              'revoked_at': '',
-              'expelled_at': '',
-              'updated_at': now,
-            },
+            patch,
             where: 'id = ?',
             whereArgs: [id],
           );
