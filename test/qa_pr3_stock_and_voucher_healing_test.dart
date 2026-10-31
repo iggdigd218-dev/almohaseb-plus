@@ -101,6 +101,26 @@ void main() {
       final p1 = await repo.resolveDevicePrefix();
       expect(p1.isNotEmpty, isTrue);
     });
+
+    test('تسلسل الفواتير nextTxNumber لا يعلّق المعاملة (إصلاح طريق مسدود 321)', () async {
+      // قبل الإصلاح كان _nextSequence (مسار الفواتير) يستدعي settings()
+      // على الاتصال الخام داخل معاملة nextSeq فتعلّقها إلى الأبد —
+      // أي فاتورة جديدة تتجمد (وما زال العدّاد يعمل داخل المعاملة نفسها).
+      final ref1 = await repo.nextTxNumber();
+      expect(ref1, equals('1'));
+
+      // بادئة صريحة: رقم مسبوق دون تعليق
+      await repo.setSetting('devicePrefix', 'B');
+      final ref2 = await repo.nextTxNumber();
+      expect(ref2, equals('B-00002'));
+
+      // داخل مجموعة وبلا بادئة: اشتقاق K8 من DEV-K89F2A عبر المنفّذ نفسه
+      await repo.setSetting('devicePrefix', '');
+      await repo.setSetting('sync.deviceId', 'DEV-K89F2A');
+      await db.insert('sync_meta', {'key': 'workspaceMode', 'value': 'member'});
+      final ref3 = await repo.nextTxNumber();
+      expect(ref3, equals('K8-00003'));
+    });
   });
 
   group('2. حماية رصيد الصنف الافتتاحي عند دمج التكرار غير المتصل (Stock Protection)', () {

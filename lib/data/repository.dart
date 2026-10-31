@@ -2988,13 +2988,47 @@ class Repo {
             limit: 1);
         final mode = WorkspaceMode.parse(
             wm.isEmpty ? null : wm.first['value'] as String?);
-        final st = await settings();
-        final hasExplicitPrefix = (st['devicePrefix'] ?? '').trim().isNotEmpty;
-        if (mode.inGroup || hasExplicitPrefix) {
-          final prefix = await resolveDevicePrefix();
-          if (prefix.isNotEmpty) {
-            return '$prefix-${'$nextNum'.padLeft(5, '0')}';
+        // (إصلاح طريق مسدود) هذا المسار يعمل داخل معاملة (nextSeq الخاصة
+        // بالتسلسل أو معاملة saveTransaction) — يُمنع هنا استدعاء
+        // settings()/resolveDevicePrefix() لأنها تفتح الاتصال الخام أثناء
+        // معاملة قيد التنفيذ فتعلّقها إلى الأبد في sqflite، وهو ما جمّد
+        // حفظ الفواتير في 3.98.7+321 وعلّق أجزاء اختبار PR #11 كلها.
+        // كل القراءات والكتابة عبر المنفّذ الممرر (db = txn) حصراً.
+        final cfgRows = await db.query('settings',
+            columns: ['value'],
+            where: 'key = ?',
+            whereArgs: ['devicePrefix'],
+            limit: 1);
+        var prefix = (cfgRows.isEmpty ? '' : '${cfgRows.first['value'] ?? ''}')
+            .trim()
+            .toUpperCase();
+        if (prefix.isEmpty && mode.inGroup) {
+          var devId = '';
+          final idRows = await db.query('settings',
+              columns: ['value'],
+              where: 'key = ?',
+              whereArgs: ['sync.deviceId'],
+              limit: 1);
+          if (idRows.isNotEmpty) {
+            devId = '${idRows.first['value'] ?? ''}'.trim();
           }
+          devId = devId.isNotEmpty ? devId : (_deviceId ?? '');
+          var clean = devId.toUpperCase().replaceFirst(RegExp(r'^DEV-?'), '');
+          clean = clean.replaceAll(RegExp(r'[^A-Z0-9]'), '');
+          if (clean.length >= 2) {
+            prefix = clean.substring(0, 2);
+          } else if (clean.isNotEmpty) {
+            prefix = clean;
+          }
+          if (prefix.isNotEmpty) {
+            await db.insert('settings',
+                {'key': 'devicePrefix', 'value': prefix},
+                conflictAlgorithm: ConflictAlgorithm.replace);
+          }
+        }
+        if (mode.inGroup || prefix.isNotEmpty) {
+          if (prefix.isEmpty) prefix = 'A';
+          return '$prefix-${'$nextNum'.padLeft(5, '0')}';
         }
       } catch (_) {
         // بيئة اختبار بلا sync_meta — رقم بحت.
