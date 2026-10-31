@@ -59,6 +59,7 @@ void main() {
           id INTEGER PRIMARY KEY,
           workspace_id TEXT NOT NULL DEFAULT 'default',
           number TEXT NOT NULL DEFAULT '',
+          reference TEXT NOT NULL DEFAULT '',
           date TEXT NOT NULL,
           created_at TEXT NOT NULL
         )
@@ -141,6 +142,7 @@ void main() {
           quantity REAL NOT NULL DEFAULT 0,
           sell_price REAL NOT NULL DEFAULT 0,
           buy_price REAL NOT NULL DEFAULT 0,
+          archived INTEGER NOT NULL DEFAULT 0,
           is_deleted INTEGER NOT NULL DEFAULT 0,
           is_active INTEGER NOT NULL DEFAULT 1,
           deleted_at TEXT DEFAULT '',
