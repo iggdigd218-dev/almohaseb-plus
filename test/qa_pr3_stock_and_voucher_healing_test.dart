@@ -59,6 +59,7 @@ void main() {
           id INTEGER PRIMARY KEY,
           workspace_id TEXT NOT NULL DEFAULT 'default',
           number TEXT NOT NULL DEFAULT '',
+          reference TEXT NOT NULL DEFAULT '',
           date TEXT NOT NULL,
           created_at TEXT NOT NULL
         )
@@ -101,6 +102,26 @@ void main() {
       final p1 = await repo.resolveDevicePrefix();
       expect(p1.isNotEmpty, isTrue);
     });
+
+    test('تسلسل الفواتير nextTxNumber لا يعلّق المعاملة (إصلاح طريق مسدود 321)', () async {
+      // قبل الإصلاح كان _nextSequence (مسار الفواتير) يستدعي settings()
+      // على الاتصال الخام داخل معاملة nextSeq فتعلّقها إلى الأبد —
+      // أي فاتورة جديدة تتجمد (وما زال العدّاد يعمل داخل المعاملة نفسها).
+      final ref1 = await repo.nextTxNumber();
+      expect(ref1, equals('1'));
+
+      // بادئة صريحة: رقم مسبوق دون تعليق
+      await repo.setSetting('devicePrefix', 'B');
+      final ref2 = await repo.nextTxNumber();
+      expect(ref2, equals('B-00002'));
+
+      // داخل مجموعة وبلا بادئة: اشتقاق K8 من DEV-K89F2A عبر المنفّذ نفسه
+      await repo.setSetting('devicePrefix', '');
+      await repo.setSetting('sync.deviceId', 'DEV-K89F2A');
+      await db.insert('sync_meta', {'key': 'workspaceMode', 'value': 'member'});
+      final ref3 = await repo.nextTxNumber();
+      expect(ref3, equals('K8-00003'));
+    });
   });
 
   group('2. حماية رصيد الصنف الافتتاحي عند دمج التكرار غير المتصل (Stock Protection)', () {
@@ -121,6 +142,7 @@ void main() {
           quantity REAL NOT NULL DEFAULT 0,
           sell_price REAL NOT NULL DEFAULT 0,
           buy_price REAL NOT NULL DEFAULT 0,
+          archived INTEGER NOT NULL DEFAULT 0,
           is_deleted INTEGER NOT NULL DEFAULT 0,
           is_active INTEGER NOT NULL DEFAULT 1,
           deleted_at TEXT DEFAULT '',
@@ -161,20 +183,26 @@ void main() {
         )
       ''');
 
+      // مطابق تمامًا للمخطط الفعلي (lib/core/database.dart) — كانت الأعمدة
+      // الناقصة (parent_op_id وdevice_time وserver_time) تفشل تسجيل
+      // عملية الاستقبال داخل applyRemoteOperation.
       await db.execute('''
         CREATE TABLE operations (
           id TEXT PRIMARY KEY,
           device_id TEXT NOT NULL,
           workspace_id TEXT NOT NULL,
           user_id INTEGER,
-          op_type TEXT NOT NULL,
           entity_type TEXT NOT NULL,
           entity_id TEXT NOT NULL,
-          payload TEXT NOT NULL,
-          timestamp INTEGER NOT NULL,
+          op_type TEXT NOT NULL,
           version INTEGER NOT NULL DEFAULT 1,
-          is_synced INTEGER NOT NULL DEFAULT 0,
-          synced INTEGER NOT NULL DEFAULT 0
+          parent_op_id TEXT DEFAULT '',
+          payload TEXT NOT NULL,
+          device_time TEXT NOT NULL,
+          server_time TEXT DEFAULT '',
+          timestamp TEXT NOT NULL,
+          synced INTEGER NOT NULL DEFAULT 0,
+          is_synced INTEGER NOT NULL DEFAULT 0
         )
       ''');
     });
@@ -237,6 +265,75 @@ void main() {
       expect(moves.first['kind'], equals('purchase'));
       expect((moves.first['quantity'] as num).toDouble(), equals(15.0));
       expect(moves.first['notes'], contains('تسوية تلقائية لدمج رصيد صنف مكرر'));
+    });
+
+    test('دمج مكرر ذي حركات موثقة لا يكرر التوثيق — التسوية للرصيد غير المغطى فقط', () async {
+      // صنف محلي: رصيد افتتاحي 5 + شراء موثق بحركة 10 → الكمية الحالية 15
+      // (الشراء 10 موثق في stock_moves، والافتتاحي 5 غير موثق بحركة).
+      final t0 = DateTime.now().toIso8601String();
+      await db.insert('items', {
+        'id': 1001,
+        'name': 'عصير تفاح',
+        'quantity': 15.0,
+        'workspace_id': 'default',
+        'created_at': t0,
+        'updated_at': t0,
+      });
+      await db.insert('stock_moves', {
+        'item_id': 1001,
+        'kind': 'purchase',
+        'quantity': 10.0,
+        'unit_price': 0,
+        'workspace_id': 'default',
+        'notes': 'شراء موثق',
+        'date': '2026-10-30',
+        'created_at': t0,
+      });
+
+      // وصول صنف سحابي بنفس الاسم بمعرف 2002 ورصيد 25
+      final op = SyncOperation(
+        id: 'op_item_2002b',
+        deviceId: 'DEV-CLOUD',
+        workspaceId: 'default',
+        userId: null,
+        entityType: EntityKind.item,
+        entityId: '2002',
+        opType: OpKind.create,
+        version: 1,
+        parentOpId: '',
+        payload: {
+          'id': 2002,
+          'name': 'عصير تفاح',
+          'quantity': 25.0,
+          'workspace_id': 'default',
+        },
+        deviceTime: t0,
+        timestamp: '${DateTime.now().millisecondsSinceEpoch}',
+      );
+
+      await db.transaction((txn) async {
+        final applied = await repo.applyRemoteOperation(txn, op, ConflictResolver());
+        expect(applied, isTrue);
+      });
+
+      // المكرر حُذف والكمية رُحِّلت كاملة (25 + 15 = 40)
+      expect((await db.query('items', where: 'id = 1001')).isEmpty, isTrue);
+      final canonical = await db.query('items', where: 'id = 2002');
+      expect(canonical.isNotEmpty, isTrue);
+      expect((canonical.first['quantity'] as num).toDouble(), equals(40.0));
+
+      // التوثيق بلا ازدواج: الشراء المعاد توجيهه (10) + تسوية الافتتاحي
+      // غير الموثق (5) = 15 فقط — وليس 15+10 كما كان قبل التصحيح.
+      final moves = await db.query('stock_moves', where: 'item_id = 2002');
+      expect(moves.length, equals(2));
+      final synth = moves.firstWhere(
+        (m) => '${m['notes']}'.contains('تسوية تلقائية'),
+      );
+      expect((synth['quantity'] as num).toDouble(), equals(5.0));
+      final docSum = moves.fold<double>(
+          0.0, (a, m) => a + (m['quantity'] as num).toDouble());
+      expect(docSum, equals(15.0));
+      // واتساق صيغة المطابقة (PR-2): initialCreate(25) + طيّ الحركات(15) = 40 = الكمية.
     });
   });
 
