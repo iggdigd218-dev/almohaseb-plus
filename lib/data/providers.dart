@@ -799,7 +799,13 @@ final canManageGroupProvider = FutureProvider<bool>((ref) async {
 final googleLinkedProvider = FutureProvider<bool>((ref) async {
   ref.watch(refreshProvider);
   try {
-    final db = await ref.read(repoProvider).database;
+    final repo = ref.read(repoProvider);
+    final email = ((await repo.getSetting('account.email')) ??
+            (await repo.getSetting('email')) ??
+            '')
+        .trim();
+    if (email.isNotEmpty && email.contains('@')) return true;
+    final db = await repo.database;
     final r = await db.query('google_auth', where: 'id = 1', limit: 1);
     return r.isNotEmpty && '${r.first['google_id'] ?? ''}'.trim().isNotEmpty;
   } catch (_) {
