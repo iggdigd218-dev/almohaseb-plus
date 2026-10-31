@@ -899,8 +899,10 @@ class _TxCard extends ConsumerWidget {
                     separatorBuilder: (_, __) => const Divider(height: 1),
                     itemBuilder: (ctx, i) {
                       final p = badge.peers[i];
-                      final timeText = p.receivedAt.trim().isNotEmpty
-                          ? Fmt.clock(p.receivedAt)
+                      final parsedReceived =
+                          DateTime.tryParse(p.receivedAt.trim());
+                      final timeText = parsedReceived != null
+                          ? Fmt.clock(parsedReceived)
                           : '';
                       final statusLabel = p.delivered
                           ? '✅ تم الاستلام${timeText.isNotEmpty ? ' $timeText' : ''}'
