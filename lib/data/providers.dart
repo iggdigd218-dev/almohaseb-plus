@@ -183,6 +183,10 @@ class Summary {
   /// مستحق علينا (أرصدة سالبة) لكل عملة.
   final Map<String, double> owedByUs;
   final Map<String, double> net;
+
+  /// إجمالي المبيعات (نقدية + آجلة صافية من المرتجعات) لكل عملة.
+  final Map<String, double> salesByCurrency;
+  final double totalSales;
   final double inflow;
   final double outflow;
   final int accountsCount;
@@ -192,6 +196,8 @@ class Summary {
     required this.owedToUs,
     required this.owedByUs,
     required this.net,
+    this.salesByCurrency = const {},
+    this.totalSales = 0.0,
     required this.inflow,
     required this.outflow,
     required this.accountsCount,
@@ -217,6 +223,7 @@ final summaryProvider = FutureProvider<Summary>((ref) async {
   final toUs = <String, double>{};
   final byUs = <String, double>{};
   final net = <String, double>{};
+  final salesByCur = <String, double>{};
 
   for (final a in accounts) {
     final b = balances[a.id] ?? 0;
@@ -230,16 +237,34 @@ final summaryProvider = FutureProvider<Summary>((ref) async {
 
   var inflow = 0.0;
   var outflow = 0.0;
+  var totalSales = 0.0;
   for (final t in txs) {
     final g = opGroup(t.type);
     if (g == 'inflow') inflow += t.amount;
     if (g == 'outflow') outflow += t.amount;
+
+    final isRet = t.description.trim().startsWith('مرتجع ') ||
+        t.originalTxId != null ||
+        t.notes.contains('[ORIG_TX:');
+    final isSale = !isRet &&
+        (t.type == OpType.revenue ||
+            (t.type == OpType.debit && t.accountKind != AccountKind.supplier));
+    if (isSale) {
+      salesByCur[t.currency] = (salesByCur[t.currency] ?? 0) + t.amount;
+      totalSales += t.amount;
+    } else if (isRet) {
+      salesByCur[t.currency] = ((salesByCur[t.currency] ?? 0) - t.amount)
+          .clamp(0.0, double.infinity);
+      totalSales = (totalSales - t.amount).clamp(0.0, double.infinity);
+    }
   }
 
   return Summary(
     owedToUs: toUs,
     owedByUs: byUs,
     net: net,
+    salesByCurrency: salesByCur,
+    totalSales: totalSales,
     inflow: inflow,
     outflow: outflow,
     accountsCount: accounts.length,
@@ -405,12 +430,14 @@ class TxPage {
   final Map<int, Account> accounts;
   final Map<String, double> inflowByCurrency;
   final Map<String, double> outflowByCurrency;
+  final Map<String, double> salesByCurrency;
 
   const TxPage({
     required this.items,
     required this.accounts,
     required this.inflowByCurrency,
     required this.outflowByCurrency,
+    this.salesByCurrency = const {},
   });
 }
 
@@ -456,15 +483,28 @@ final txPageProvider = FutureProvider<TxPage>((ref) async {
       list.sort((a, b) => b.date.compareTo(a.date));
   }
 
-  // إجماليات الداخل والخارج لكل عملة على المجموعة المعروضة.
+  // إجماليات الداخل والخارج وإجمالي المبيعات لكل عملة على المجموعة المعروضة.
   final inflow = <String, double>{};
   final outflow = <String, double>{};
+  final sales = <String, double>{};
   for (final t in list) {
     final g = opGroup(t.type);
     if (g == 'inflow') {
       inflow[t.currency] = (inflow[t.currency] ?? 0) + t.amount;
     } else if (g == 'outflow') {
       outflow[t.currency] = (outflow[t.currency] ?? 0) + t.amount;
+    }
+    final isRet = t.description.trim().startsWith('مرتجع ') ||
+        t.originalTxId != null ||
+        t.notes.contains('[ORIG_TX:');
+    final isSale = !isRet &&
+        (t.type == OpType.revenue ||
+            (t.type == OpType.debit && t.accountKind != AccountKind.supplier));
+    if (isSale) {
+      sales[t.currency] = (sales[t.currency] ?? 0) + t.amount;
+    } else if (isRet) {
+      sales[t.currency] =
+          ((sales[t.currency] ?? 0) - t.amount).clamp(0.0, double.infinity);
     }
   }
 
@@ -473,6 +513,7 @@ final txPageProvider = FutureProvider<TxPage>((ref) async {
     accounts: byId,
     inflowByCurrency: inflow,
     outflowByCurrency: outflow,
+    salesByCurrency: sales,
   );
 });
 

@@ -521,6 +521,7 @@ class _Totals extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final codes = {
+      ...page.salesByCurrency.keys,
       ...page.inflowByCurrency.keys,
       ...page.outflowByCurrency.keys,
     }.toList();
@@ -530,7 +531,18 @@ class _Totals extends StatelessWidget {
       padding: const EdgeInsets.only(top: 10, bottom: 2),
       child: Column(
         children: [
-          for (final code in codes)
+          for (final code in codes) ...[
+            Padding(
+              padding: const EdgeInsets.only(bottom: 8),
+              child: StatCard(
+                title: 'إجمالي المبيعات ($code)',
+                value: hidden
+                    ? '••••'
+                    : Fmt.money(page.salesByCurrency[code] ?? 0),
+                icon: Icons.trending_up_rounded,
+                color: AppColors.primaryOf(context),
+              ),
+            ),
             Padding(
               padding: const EdgeInsets.only(bottom: 8),
               child: Row(
@@ -559,6 +571,7 @@ class _Totals extends StatelessWidget {
                 ],
               ),
             ),
+          ],
           Row(
             children: [
               Text(
