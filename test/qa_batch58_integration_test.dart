@@ -427,4 +427,16 @@ void main() {
     expect(badgesA['$txId']?.total, 3);
     expect(badgesA['$txId']?.all, isTrue);
   });
+
+  test('B58-E2E-05 pos checkout: account selection hidden in cash mode and clean customer labels', () {
+    final posSrc = File('lib/ui/pos_screen.dart').readAsStringSync();
+    expect(posSrc.contains('عميل نقدي (بدون حساب)'), isFalse,
+        reason: 'يجب إزالة عبارة عميل نقدي (بدون حساب) من نافذة الدفع');
+    expect(posSrc.contains("child: Text('بيع نقدي')"), isTrue,
+        reason: 'يجب اعتماد تسمية بيع نقدي في نافذة الدفع');
+    expect(posSrc.contains('بدون هاتف'), isFalse,
+        reason: 'يجب إزالة رقم الهاتف والأقواس من القائمة المنسدلة للعملاء');
+    expect(posSrc.contains('if (needsAccount) ...['), isTrue,
+        reason: 'يجب عدم إظهار خيارات اختيار حساب العميل إلا عند تحديد العملية آجل/جزئي');
+  });
 }

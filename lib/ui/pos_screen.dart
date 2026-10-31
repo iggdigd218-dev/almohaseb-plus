@@ -2877,44 +2877,47 @@ class _PosScreenState extends ConsumerState<PosScreen>
                           .toList(),
                       selected: {_payment},
                       onSelectionChanged: (set) {
-                        _cartCtl.setPayment(set.first.code);
+                        final selectedPay = set.first;
+                        _cartCtl.setPayment(selectedPay.code);
+                        if (selectedPay == _PosPayment.cash) {
+                          _cartCtl.setCustomer(null);
+                        }
                         setSheetState(() {});
                         setState(() {});
                       },
                     ),
 
-                    const SizedBox(height: 12),
-
-                    // اختيار العميل — يتوهج بالأحمر إذا كان الدفع آجلاً
-                    // بلا حساب محدد (تنبيه بصري لا نصي فقط).
-                    Container(
-                      decoration: accountMissing
-                          ? BoxDecoration(
-                              border: Border.all(
-                                  color: AppColors.dangerOf(context),
-                                  width: 2),
-                              borderRadius: BorderRadius.circular(10),
-                            )
-                          : null,
-                      padding:
-                          accountMissing ? const EdgeInsets.all(6) : null,
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          if (accountMissing)
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 6),
-                              child: Text(
-                                'يجب اختيار أو تسجيل حساب عميل لتسجيل المديونية/المتبقي الآجل',
-                                style: TextStyle(
-                                  color: AppColors.dangerOf(context),
-                                  fontWeight: FontWeight.w700,
-                                  fontSize: 12.5,
+                    // اختيار العميل — يظهر فقط عند تحديد العملية آجل أو جزئي،
+                    // ويتوهج بالأحمر إذا لم يُحدَّد حساب عميل.
+                    if (needsAccount) ...[
+                      const SizedBox(height: 12),
+                      Container(
+                        decoration: accountMissing
+                            ? BoxDecoration(
+                                border: Border.all(
+                                    color: AppColors.dangerOf(context),
+                                    width: 2),
+                                borderRadius: BorderRadius.circular(10),
+                              )
+                            : null,
+                        padding:
+                            accountMissing ? const EdgeInsets.all(6) : null,
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            if (accountMissing)
+                              Padding(
+                                padding: const EdgeInsets.only(bottom: 6),
+                                child: Text(
+                                  'يجب اختيار أو تسجيل حساب عميل لتسجيل المديونية/المتبقي الآجل',
+                                  style: TextStyle(
+                                    color: AppColors.dangerOf(context),
+                                    fontWeight: FontWeight.w700,
+                                    fontSize: 12.5,
+                                  ),
                                 ),
                               ),
-                            ),
-                          // آخر 3 مدينين — اختيار بنقرة واحدة في وضع الآجل.
-                          if (needsAccount)
+                            // آخر 3 مدينين — اختيار بنقرة واحدة في وضع الآجل.
                             FutureBuilder<List<Account>>(
                               future: _recentDebtors(customers),
                               builder: (c, snap) {
@@ -2952,36 +2955,37 @@ class _PosScreenState extends ConsumerState<PosScreen>
                                 );
                               },
                             ),
-                          DropdownButtonFormField<int?>(
-                            initialValue: _selectedCustomerId,
-                            decoration: const InputDecoration(
-                              isDense: true,
-                              labelText: 'العميل',
-                              prefixIcon: Icon(Icons.person_outline),
-                            ),
-                            items: [
-                              const DropdownMenuItem<int?>(
-                                value: null,
-                                child: Text('عميل نقدي (بدون حساب)'),
+                            DropdownButtonFormField<int?>(
+                              initialValue: _selectedCustomerId,
+                              decoration: const InputDecoration(
+                                isDense: true,
+                                labelText: 'العميل',
+                                prefixIcon: Icon(Icons.person_outline),
                               ),
-                              for (final c in customers)
-                                DropdownMenuItem<int?>(
-                                  value: c.id,
-                                  child: Text(
-                                    '${c.name} (${c.phone.isNotEmpty ? c.phone : 'بدون هاتف'})',
-                                    overflow: TextOverflow.ellipsis,
-                                  ),
+                              items: [
+                                const DropdownMenuItem<int?>(
+                                  value: null,
+                                  child: Text('بيع نقدي'),
                                 ),
-                            ],
-                            onChanged: (val) {
-                              _cartCtl.setCustomer(val);
-                              setSheetState(() {});
-                              setState(() {});
-                            },
-                          ),
-                        ],
+                                for (final c in customers)
+                                  DropdownMenuItem<int?>(
+                                    value: c.id,
+                                    child: Text(
+                                      c.name,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ),
+                              ],
+                              onChanged: (val) {
+                                _cartCtl.setCustomer(val);
+                                setSheetState(() {});
+                                setState(() {});
+                              },
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
+                    ],
 
                     // تحذير تجاوز حد الائتمان — قبل السماح بالتأكيد.
                     if (needsAccount && _selectedCustomerId != null)
