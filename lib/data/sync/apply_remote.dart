@@ -1070,7 +1070,7 @@ extension ApplyRemoteOp on Repo {
             if (pendingItemNameHeal != null) {
               // (PR-3+) الآن الصنف الوارد موجود — الترحيل والتسوية يعملان فعلًا.
               await _healItemNameConflict(
-                  txn, pendingItemNameHeal!, op.entityId);
+                  txn, pendingItemNameHeal, op.entityId);
             }
           }
         } else {
@@ -1170,7 +1170,7 @@ extension ApplyRemoteOp on Repo {
             // التسوية بقيد FK سليم — وقبل ذلك كان التحديث يضرب 0 صفوف
             // فُيبتلع بصمت (فقدان رصيد صامت في الإنتاج).
             await _healItemNameConflict(
-                txn, pendingItemNameHeal!, op.entityId);
+                txn, pendingItemNameHeal, op.entityId);
           }
           // تطبيق فرق الكمية (Delta) عند إدراج حركة مخزون جديدة واردة من جهاز آخر
           if (op.entityType == EntityKind.stockMove) {
