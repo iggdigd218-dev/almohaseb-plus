@@ -252,9 +252,15 @@ class _HomeShellState extends ConsumerState<HomeShell>
     });
     // يقظة المجموعة + أذونات النظام الحقيقية (إشعارات/بطارية).
     _ensureGroupKeepAlive();
-    // 🌐 مركز التحكم السحابي والتنبيهات المباشرة والإدارة عن بعد
-    CloudControlService.instance
-        .startPeriodicHeartbeat(ref.read(repoProvider));
+    // 🌐 مركز التحكم السحابي ومراقب الانضمام — يعملان فقط عند الجاهزية السحابية الفعلية
+    unawaited(() async {
+      final repo = ref.read(repoProvider);
+      if (await SubscriptionGuard.isWorkspaceCloudReady(repo)) {
+        if (!mounted) return;
+        CloudControlService.instance.startPeriodicHeartbeat(repo);
+        await _startGlobalJoinWatcher();
+      }
+    }());
     // (PR-6) استماع لحظي: إعادة تسمية جهازنا من المدير (أو تطبيق الإدارة)
     // تُطبَّق فوراً على الواجهة الحية — مزوّدات الهوية/الإعدادات — دون
     // إعادة تشغيل التطبيق.
@@ -830,7 +836,8 @@ class _HomeShellState extends ConsumerState<HomeShell>
   Future<void> _startGlobalJoinWatcher() async {
     try {
       final repo = ref.read(repoProvider);
-      if (!await repo.canManageGroup()) {
+      if (!await SubscriptionGuard.isWorkspaceCloudReady(repo) ||
+          !await repo.canManageGroup()) {
         _globalJoinWatcher?.stop();
         _globalJoinWatcher = null;
         _joinPollTimer?.cancel();
