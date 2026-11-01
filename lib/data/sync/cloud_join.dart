@@ -3474,9 +3474,9 @@ class CloudJoin {
         whereArgs: ['deviceExpelled:$deviceId', 'deviceRevoked:$deviceId'],
       );
       await db.delete(
-        'operations',
+        'sync_queue',
         where:
-            "entity_id IN (?, ?) OR (entity_type = 'user' AND op_type = 'delete' AND payload_json LIKE ?)",
+            "operation_id IN (SELECT id FROM operations WHERE entity_id IN (?, ?) OR (entity_type = 'user' AND op_type = 'delete' AND payload LIKE ?))",
         whereArgs: [
           'deviceExpelled:$deviceId',
           'deviceRevoked:$deviceId',
@@ -3484,9 +3484,9 @@ class CloudJoin {
         ],
       );
       await db.delete(
-        'sync_queue',
+        'operations',
         where:
-            "entity_id IN (?, ?) OR (entity_type = 'user' AND op_type = 'delete' AND payload_json LIKE ?)",
+            "entity_id IN (?, ?) OR (entity_type = 'user' AND op_type = 'delete' AND payload LIKE ?)",
         whereArgs: [
           'deviceExpelled:$deviceId',
           'deviceRevoked:$deviceId',
