@@ -21,6 +21,7 @@ import '../../core/database.dart';
 import '../../core/desktop_net.dart';
 import '../repository.dart';
 import 'apply_remote.dart';
+import 'cloud_join.dart';
 import 'conflict_resolver.dart';
 import 'device_id.dart';
 import 'firebase_auth_service.dart';

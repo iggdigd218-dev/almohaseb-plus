@@ -1326,8 +1326,8 @@ extension ApplyRemoteOp on Repo {
                 ? (int.tryParse('${joinedRows.first['value'] ?? ''}'.trim()) ?? 0)
                 : 0;
             if (joinedMs > 0) {
-              final isSelfUser = existing != null &&
-                  ((existing['is_me'] as num?)?.toInt() ?? 0) == 1;
+              final isSelfUser = existing.isNotEmpty &&
+                  ((existing.first['is_me'] as num?)?.toInt() ?? 0) == 1;
               String ourDevId = '';
               try {
                 ourDevId = requireDeviceId;

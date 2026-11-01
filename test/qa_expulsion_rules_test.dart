@@ -645,7 +645,12 @@ void main() {
     });
 
     // تنفيذ سحب العمليات وفحص الطرد ومزامنة الروستر كما يفعل SyncEngine فور الدخول
-    final transport = CloudFirebaseTransport(repo);
+    final transport = CloudFirebaseTransport(
+      repo: repo,
+      dbProvider: () async => db,
+      backendUrl: _url,
+      workspaceId: _ws,
+    );
     await http.runWithClient(() async {
       await transport.pull();
       await CloudJoin.syncRoster(repo, db, backendUrl: _url, workspaceId: _ws);

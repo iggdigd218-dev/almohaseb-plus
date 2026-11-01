@@ -18,6 +18,7 @@ import '../../core/app_version.dart';
 import '../../core/cloud_config.dart';
 import '../../core/license_model.dart';
 import '../repository.dart';
+import 'cloud_join.dart';
 import 'device_id.dart';
 import 'firebase_auth_service.dart';
 import 'subscription_guard.dart';
