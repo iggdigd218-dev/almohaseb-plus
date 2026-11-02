@@ -15,6 +15,7 @@ import 'package:sqflite/sqflite.dart' show ConflictAlgorithm;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/accounting.dart';
+import '../core/app_error_mapper.dart';
 import '../core/cloud_config.dart';
 import '../core/factory_reset.dart';
 import '../core/security.dart';
@@ -28,6 +29,7 @@ import '../data/sync/cloud_join.dart';
 import '../data/sync/device_id.dart';
 import '../data/sync/firebase_auth_service.dart';
 import '../data/sync/google_auth_service.dart';
+import '../data/sync/subscription_guard.dart';
 import 'account_section.dart' show provisionCloudAfterSignIn;
 import 'create_workspace_screen.dart';
 import 'group_management_screen.dart';
@@ -410,6 +412,11 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     final st = await repo.settings();
     final url = effectiveBackendUrl(st['cloudBackendUrl']);
 
+    final devId = await ensureDeviceId(repo);
+    final rawFp =
+        await SubscriptionGuard.hardwareFingerprintRaw() ?? 'fallback:$devId';
+    final hwFp = SubscriptionGuard.fingerprintHash(rawFp);
+
     final localMatches = await AccountWorkspace.findLocalWorkspacesOnDevice(
       filterEmail: account.email,
     );
@@ -421,8 +428,10 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
           backendUrl: url,
           email: account.email,
           uid: account.uid,
+          deviceId: devId,
+          deviceFingerprint: hwFp,
         ).timeout(
-          const Duration(seconds: 8),
+          const Duration(seconds: 12),
           onTimeout: () => const CloudWorkspaceResolution.timeout(),
         );
       } catch (_) {
@@ -549,6 +558,15 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
         if (account.email.trim().isNotEmpty) {
           await repo.setSetting('account.email', account.email.trim());
           await repo.setSetting('email', account.email.trim());
+          try {
+            final targetDb = await repo.database;
+            await GoogleAuthService(targetDb).persistAccount(
+              googleId: account.uid,
+              email: account.email,
+              displayName: account.displayName,
+              idToken: account.idToken,
+            );
+          } catch (_) {}
         }
         if (url.isNotEmpty) {
           await repo.setSetting('cloudWorkspaceProvisioned', '1');
@@ -660,7 +678,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       Sfx.error();
     } catch (e) {
       if (!mounted) return;
-      setState(() => _authError = 'حدث خطأ أثناء الاتصال: $e');
+      setState(() => _authError = AppErrorMapper.toUserFriendlyMessage(e));
       Sfx.error();
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -727,7 +745,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       );
     } catch (e) {
       if (mounted) {
-        setState(() => _authError = 'حدث خطأ أثناء الاتصال: $e');
+        setState(() => _authError = AppErrorMapper.toUserFriendlyMessage(e));
       }
     } finally {
       if (mounted) setState(() => _busy = false);
@@ -1008,7 +1026,76 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                   const SizedBox(height: 18),
                 ],
 
-                // ---------- بطاقة تسجيل الدخول وإنشاء الحساب ----------
+                // ---------- 1. بطاقة البدء في الاستخدام المحلي المستقل (بارزة ومباشرة) ----------
+                Container(
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFD97706).withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(
+                      color: const Color(0xFFD97706).withValues(alpha: 0.32),
+                    ),
+                  ),
+                  child: Material(
+                    color: Colors.transparent,
+                    child: InkWell(
+                      borderRadius: BorderRadius.circular(16),
+                      onTap: _busy ? null : _openLocalStandaloneDialog,
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 16, vertical: 12),
+                        child: Row(
+                          children: [
+                            Container(
+                              width: 44,
+                              height: 44,
+                              decoration: BoxDecoration(
+                                color: const Color(0xFFD97706)
+                                    .withValues(alpha: 0.16),
+                                borderRadius: BorderRadius.circular(12),
+                              ),
+                              child: const Icon(
+                                Icons.flash_on_rounded,
+                                color: Color(0xFFD97706),
+                                size: 24,
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            const Expanded(
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'الاستخدام المحلي المستقل',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w800,
+                                      fontSize: 14.5,
+                                    ),
+                                  ),
+                                  SizedBox(height: 2),
+                                  Text(
+                                    'بدء العمل فوراً على هذا الهاتف بدون إنترنت أو حساب',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.grey,
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                            const Icon(
+                              Icons.arrow_forward_ios_rounded,
+                              size: 15,
+                              color: Color(0xFFD97706),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 16),
+
+                // ---------- 2. بطاقة تسجيل الدخول السحابي ----------
                 Container(
                   padding: const EdgeInsets.all(20),
                   decoration: BoxDecoration(
@@ -1097,84 +1184,97 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                                 ),
                         ),
                       ),
-                      const SizedBox(height: 10),
-                      SizedBox(
-                        height: 46,
-                        child: OutlinedButton(
-                          onPressed: _busy
-                              ? null
-                              : () => _handleGoogleAuthFlow(isLoginFlow: true),
-                          child: const Text(
-                            'المتابعة عبر حساب Google',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w700,
+                      const SizedBox(height: 12),
+                      // سطر متوازن: تسجيل حساب جديد (يمين) | أيقونة Google (يسار)
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          TextButton(
+                            onPressed: _busy
+                                ? null
+                                : () =>
+                                    _handleEmailLogin(isRegisterButton: true),
+                            style: TextButton.styleFrom(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 8, vertical: 6),
+                            ),
+                            child: const Text(
+                              'تسجيل حساب جديد',
+                              style: TextStyle(
+                                fontSize: 13.5,
+                                fontWeight: FontWeight.w700,
+                              ),
                             ),
                           ),
-                        ),
-                      ),
-                      const Padding(
-                        padding: EdgeInsets.symmetric(vertical: 14),
-                        child: Divider(height: 1),
-                      ),
-                      SizedBox(
-                        height: 46,
-                        child: FilledButton.tonal(
-                          onPressed: _busy
-                              ? null
-                              : () =>
-                                  _handleEmailLogin(isRegisterButton: true),
-                          child: const Text(
-                            'إنشاء حساب جديد وتأسيس منشأة',
-                            style: TextStyle(
-                              fontSize: 14,
-                              fontWeight: FontWeight.w800,
+                          InkWell(
+                            borderRadius: BorderRadius.circular(10),
+                            onTap: _busy
+                                ? null
+                                : () =>
+                                    _handleGoogleAuthFlow(isLoginFlow: true),
+                            child: Container(
+                              padding: const EdgeInsets.symmetric(
+                                  horizontal: 12, vertical: 7),
+                              decoration: BoxDecoration(
+                                borderRadius: BorderRadius.circular(10),
+                                border: Border.all(color: divider),
+                                color: surface,
+                              ),
+                              child: Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  Container(
+                                    width: 22,
+                                    height: 22,
+                                    decoration: const BoxDecoration(
+                                      shape: BoxShape.circle,
+                                      color: Color(0xFF4285F4),
+                                    ),
+                                    alignment: Alignment.center,
+                                    child: const Text(
+                                      'G',
+                                      style: TextStyle(
+                                        fontFamily: 'Roboto',
+                                        color: Colors.white,
+                                        fontWeight: FontWeight.w900,
+                                        fontSize: 14,
+                                      ),
+                                    ),
+                                  ),
+                                  const SizedBox(width: 8),
+                                  const Text(
+                                    'حساب Google',
+                                    style: TextStyle(
+                                      fontSize: 12.5,
+                                      fontWeight: FontWeight.w700,
+                                    ),
+                                  ),
+                                ],
+                              ),
                             ),
                           ),
-                        ),
+                        ],
                       ),
                     ],
                   ),
                 ),
                 const SizedBox(height: 14),
 
-                // ---------- خيارات الربط كعضو أو العمل المحلي ----------
-                Row(
-                  children: [
-                    Expanded(
-                      child: SizedBox(
-                        height: 46,
-                        child: OutlinedButton(
-                          onPressed: _busy ? null : _openJoinMemberDialog,
-                          child: const Text(
-                            'انضمام كعضو (رمز / QR)',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: 12.5,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
+                // ---------- 3. خيار الانضمام كعضو / كاشير عبر QR ----------
+                SizedBox(
+                  width: double.infinity,
+                  height: 46,
+                  child: OutlinedButton.icon(
+                    onPressed: _busy ? null : _openJoinMemberDialog,
+                    icon: const Icon(Icons.qr_code_scanner_rounded, size: 20),
+                    label: const Text(
+                      'انضمام كعضو لمحل قائم (رمز / باركود QR)',
+                      style: TextStyle(
+                        fontSize: 13,
+                        fontWeight: FontWeight.w700,
                       ),
                     ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: SizedBox(
-                        height: 46,
-                        child: OutlinedButton(
-                          onPressed: _busy ? null : _openLocalStandaloneDialog,
-                          child: const Text(
-                            'استخدام محلي مستقل',
-                            textAlign: TextAlign.center,
-                            style: TextStyle(
-                              fontSize: 12.5,
-                              fontWeight: FontWeight.w700,
-                            ),
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
+                  ),
                 ),
 
                 const SizedBox(height: 18),

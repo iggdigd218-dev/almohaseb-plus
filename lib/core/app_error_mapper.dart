@@ -29,16 +29,26 @@ class AppErrorMapper {
       return fallback ?? genericErrorMessage;
     }
 
+    final raw = error.toString().trim();
+    if (raw.isEmpty) {
+      return fallback ?? genericErrorMessage;
+    }
+
+    final lower = raw.toLowerCase();
+
+    // 0. خطأ عدم تطابق ساعة الهاتف مع التوقيت العالمي (Clock Skew / Handshake)
+    if (lower.contains('certificate is not yet valid') ||
+        lower.contains('certificate has expired') ||
+        lower.contains('cert_date_invalid') ||
+        lower.contains('handshake.cc')) {
+      return 'تاريخ أو وقت الهاتف غير مضبوط بدقة: يرجى تفعيل «ضبط الوقت والتاريخ تلقائياً» من إعدادات الهاتف لتخطي خطأ التشفير والاتصال بأمان.';
+    }
+
     if (error is SocketException ||
         error is TimeoutException ||
         error is HandshakeException ||
         error is TlsException) {
       return networkErrorMessage;
-    }
-
-    final raw = error.toString().trim();
-    if (raw.isEmpty) {
-      return fallback ?? genericErrorMessage;
     }
 
     final upper = raw.toUpperCase();
@@ -92,6 +102,20 @@ class AppErrorMapper {
     }
     if (upper.contains('USER-DISABLED') || upper.contains('USER_DISABLED')) {
       return 'تم إيقاف هذا الحساب من قِبل الإدارة، يرجى التواصل مع الدعم الفني.';
+    }
+
+    // 2.5 أخطاء خدمة Google Drive والنسخ السحابي
+    if (lower.contains('googledriveexception') ||
+        lower.contains('drive') ||
+        raw.contains('Google Drive')) {
+      if (lower.contains('لم يتم منح') ||
+          upper.contains('PERMISSION_DENIED') ||
+          upper.contains('FORBIDDEN') ||
+          lower.contains('unauthorized') ||
+          lower.contains('scope') ||
+          RegExp(r'\b(401|403)\b').hasMatch(raw)) {
+        return 'لم يتم منح إذن الوصول إلى مساحة Google Drive: يرجى الموافقة على منح إذن Drive عند ظهوره، أو استخدام خيار "رفع إلى تطبيق Drive" في الأسفل.';
+      }
     }
 
     // 3. أخطاء الصلاحيات والوصول (HTTP 401 / 403 / PermissionDenied)
