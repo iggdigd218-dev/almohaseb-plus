@@ -52,7 +52,6 @@ class AppErrorMapper {
     }
 
     final upper = raw.toUpperCase();
-    final lower = raw.toLowerCase();
 
     // 1. أخطاء الشبكة والاتصال والمهلة
     if (lower.contains('socketexception') ||

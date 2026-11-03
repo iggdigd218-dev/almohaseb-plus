@@ -28,6 +28,7 @@ import '../data/sync/subscription_guard.dart';
 import 'home_shell.dart';
 import 'lock_gate.dart';
 import 'logout_flow.dart';
+import 'onboarding_screen.dart' show kOnboardingDoneKey;
 import 'widgets.dart';
 
 class CreateWorkspaceScreen extends ConsumerStatefulWidget {

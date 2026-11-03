@@ -38,20 +38,18 @@ Future<void> showCloudInviteDialog(BuildContext context, WidgetRef ref) async {
         if (silentUser != null && silentUser.id.isNotEmpty) {
           linked = true;
         } else {
-          final account = await FirebaseAuthRest.loadSession(repo);
           final st = await repo.settings();
           final acctEmail =
-              '${account?.email ?? st['account.email'] ?? st['email'] ?? ''}'
+              '${st['account.email'] ?? st['email'] ?? ''}'
                   .trim()
                   .toLowerCase();
-          final acctUid = '${account?.uid ?? st['account.uid'] ?? ''}'.trim();
+          final acctUid = '${st['account.uid'] ?? FirebaseAuthRest.anonymousUid}'.trim();
           if (acctEmail.isNotEmpty &&
               (acctEmail.endsWith('@gmail.com') || acctUid.isNotEmpty)) {
             await auth.persistAccount(
               googleId: acctUid.isNotEmpty ? acctUid : 'email:$acctEmail',
               email: acctEmail,
-              displayName: account?.displayName ?? st['managerName'] ?? '',
-              idToken: account?.idToken,
+              displayName: st['managerName'] ?? '',
             );
             linked = true;
           }

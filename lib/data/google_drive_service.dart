@@ -4,7 +4,8 @@ import 'dart:io' as io;
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:http/http.dart' as http;
 
-import 'sync/google_auth_service.dart' show createUnifiedGoogleSignIn;
+import 'sync/google_auth_service.dart'
+    show createUnifiedGoogleSignIn, kDriveGoogleScopes;
 
 /// معلومات تعريفية للحساب المرتبط فقط.
 class GoogleAccountInfo {
