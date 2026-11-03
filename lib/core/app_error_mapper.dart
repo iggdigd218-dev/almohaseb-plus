@@ -106,14 +106,19 @@ class AppErrorMapper {
     // 2.5 أخطاء خدمة Google Drive والنسخ السحابي
     if (lower.contains('googledriveexception') ||
         lower.contains('drive') ||
-        raw.contains('Google Drive')) {
+        raw.contains('Google Drive') ||
+        raw.contains('النسخة') ||
+        raw.contains('النسخ') ||
+        lower.contains('backup') ||
+        lower.contains('insufficientpermissions')) {
       if (lower.contains('لم يتم منح') ||
           upper.contains('PERMISSION_DENIED') ||
           upper.contains('FORBIDDEN') ||
           lower.contains('unauthorized') ||
           lower.contains('scope') ||
+          lower.contains('insufficient') ||
           RegExp(r'\b(401|403)\b').hasMatch(raw)) {
-        return 'لم يتم منح إذن الوصول إلى مساحة Google Drive: يرجى الموافقة على منح إذن Drive عند ظهوره، أو استخدام خيار "رفع إلى تطبيق Drive" في الأسفل.';
+        return 'لم يتم منح إذن الوصول إلى مساحة Google Drive: يرجى الموافقة على منح إذن Drive عند ظهوره، أو استخدام خيار «رفع / حفظ في تطبيق Google Drive» في الأسفل.';
       }
     }
 

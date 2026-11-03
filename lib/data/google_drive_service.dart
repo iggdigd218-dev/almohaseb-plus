@@ -629,7 +629,7 @@ class GoogleDriveService {
     var detail = response.body.trim();
     if (detail.length > 300) detail = '${detail.substring(0, 300)}…';
     throw GoogleDriveException(
-      '$operation فشل (HTTP ${response.statusCode})${detail.isEmpty ? '' : ': $detail'}',
+      'Google Drive: $operation فشل (HTTP ${response.statusCode})${detail.isEmpty ? '' : ': $detail'}',
     );
   }
 

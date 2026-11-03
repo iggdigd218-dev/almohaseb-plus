@@ -1781,13 +1781,9 @@ class _HomeShellState extends ConsumerState<HomeShell>
                     rref.watch(settingsProvider).valueOrNull ?? const {};
                 final hasGoogleAuth =
                     rref.watch(googleLinkedProvider).valueOrNull ?? false;
-                final wsId = (st['sync.workspaceId'] ?? '').trim();
-                final cloudProv = (st['cloudWorkspaceProvisioned'] ?? '0').trim();
-                final isLocalStandalone = wsMode == 'standalone' ||
-                    cloudProv != '1' ||
-                    wsId == 'default' ||
-                    (st['account.type'] ?? '') == 'individual' ||
-                    ((st['account.email'] ?? '').trim().isEmpty && !hasGoogleAuth);
+                final isLocalStandalone =
+                    (wsMode == 'standalone' && !hasGoogleAuth) ||
+                        (st['account.type'] ?? '') == 'individual';
                 if (isLocalStandalone) {
                   final isDark = Theme.of(ctx).brightness == Brightness.dark;
                   return _appBarSquircleAction(
@@ -2730,13 +2726,9 @@ class _Drawer extends ConsumerWidget {
     // (3.70.0) «إدارة المجموعة» متاحة للمالك المرتبط بـ Google أو للوكيل في مجموعة نشطة.
     final stDrawer = ref.watch(settingsProvider).valueOrNull ?? const {};
     final googleLinked = ref.watch(googleLinkedProvider).valueOrNull ?? false;
-    final drawerWsId = (stDrawer['sync.workspaceId'] ?? '').trim();
-    final drawerCloudProv = (stDrawer['cloudWorkspaceProvisioned'] ?? '0').trim();
-    final isLocalStandalone = wsMode == 'standalone' ||
-        drawerCloudProv != '1' ||
-        drawerWsId == 'default' ||
-        (stDrawer['account.type'] ?? '') == 'individual' ||
-        ((stDrawer['account.email'] ?? '').trim().isEmpty && !googleLinked);
+    final isLocalStandalone =
+        (wsMode == 'standalone' && !googleLinked) ||
+            (stDrawer['account.type'] ?? '') == 'individual';
     final allowGroupInDrawer = !isLocalStandalone &&
         (googleLinked ||
             effectiveRole == UserRole.agent ||
