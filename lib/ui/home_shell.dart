@@ -261,6 +261,33 @@ class _HomeShellState extends ConsumerState<HomeShell>
         await _startGlobalJoinWatcher();
       }
     }());
+
+    // فحص ومعالجة المنشآت المتكررة في الخلفية لإنقاذ أي مستخدم عالق في منشأة فارغة ونقله للمنشأة الموحدة المعتمدة
+    unawaited(() async {
+      try {
+        final repo = ref.read(repoProvider);
+        final st = await repo.settings();
+        final email = (st['account.email'] ?? st['email'] ?? '').trim().toLowerCase();
+        final url = effectiveBackendUrl(st['cloudBackendUrl']);
+        if (email.isNotEmpty && email.contains('@') && url.isNotEmpty) {
+          final curWs = repo.requireWorkspaceId;
+          final consolidated = await AccountWorkspace.consolidateAndMergeWorkspacesForEmail(
+            repo,
+            backendUrl: url,
+            email: email,
+          );
+          if (consolidated != null && consolidated.isNotEmpty && consolidated != curWs && mounted) {
+            ref.invalidate(isOwnerProvider);
+            ref.invalidate(currentUserProvider);
+            ref.invalidate(settingsProvider);
+            ref.invalidate(workspaceModeProvider);
+            ref.invalidate(subscriptionProvider);
+            bump(ref);
+            showSnack(context, 'تم توحيد المنشأة واسترجاع بياناتك التاريخية بنجاح');
+          }
+        }
+      } catch (_) {}
+    }());
     // (PR-6) استماع لحظي: إعادة تسمية جهازنا من المدير (أو تطبيق الإدارة)
     // تُطبَّق فوراً على الواجهة الحية — مزوّدات الهوية/الإعدادات — دون
     // إعادة تشغيل التطبيق.

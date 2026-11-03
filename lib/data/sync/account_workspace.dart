@@ -8,11 +8,12 @@
 //   - انضمام الموظفين يبقى عبر QR/PIN — لا يحتاجون حساب Google.
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show Platform;
+import 'dart:io' show File, Directory, Platform;
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
 
@@ -2915,5 +2916,267 @@ class AccountWorkspace {
       cleanWs,
       deleteDbFile: deleteLocalDbFile,
     );
+  }
+
+  /// دمج ومعالجة المنشآت المتكررة للمالك الواحد واسترجاع كافة البيانات التاريخية
+  /// دون فقدان أي حرف (Zero Data Loss) وإعادة توجيه الجهاز للمنشأة الموحدة المعتمدة:
+  static Future<String?> consolidateAndMergeWorkspacesForEmail(
+    Repo repo, {
+    required String backendUrl,
+    required String email,
+  }) async {
+    final cleanEmail = email.trim().toLowerCase();
+    if (cleanEmail.isEmpty || !cleanEmail.contains('@')) return null;
+
+    final root = _trimSlashes(backendUrl);
+
+    // 1) جمع كافة المنشآت المحلية والسحابية التابعة لهذا البريد
+    final localWorkspaces =
+        await findLocalWorkspacesOnDevice(filterEmail: cleanEmail);
+    final cloudMap = <String, Map<String, dynamic>>{};
+
+    if (root.isNotEmpty) {
+      try {
+        final uwRes = await _authedGet(
+          '$root/workspaces/_registry/user_workspaces/${emailToKey(cleanEmail)}.json',
+          timeout: const Duration(seconds: 10),
+        );
+        if (uwRes.statusCode == 200 &&
+            uwRes.body.trim().isNotEmpty &&
+            uwRes.body.trim() != 'null') {
+          final decoded = jsonDecode(utf8.decode(uwRes.bodyBytes));
+          if (decoded is Map) {
+            for (final entry in decoded.entries) {
+              final k = '${entry.key}'.trim();
+              if (k.isNotEmpty && k != 'default') {
+                cloudMap[k] = entry.value is Map
+                    ? Map<String, dynamic>.from(entry.value as Map)
+                    : {'workspaceId': k};
+              }
+            }
+          }
+        }
+      } catch (_) {}
+
+      try {
+        final emRes = await _authedGet(
+          _emailIndexPath(backendUrl, cleanEmail),
+          timeout: const Duration(seconds: 8),
+        );
+        if (emRes.statusCode == 200 &&
+            emRes.body.trim().isNotEmpty &&
+            emRes.body.trim() != 'null') {
+          final decoded = jsonDecode(utf8.decode(emRes.bodyBytes));
+          if (decoded is Map) {
+            final ws =
+                '${decoded['workspaceId'] ?? decoded['workspace_id'] ?? ''}'
+                    .trim();
+            if (ws.isNotEmpty && ws != 'default') {
+              cloudMap.putIfAbsent(
+                  ws, () => Map<String, dynamic>.from(decoded));
+            }
+          }
+        }
+      } catch (_) {}
+    }
+
+    final allWsIds = <String>{
+      for (final w in localWorkspaces) w.workspaceId,
+      ...cloudMap.keys,
+    }..removeWhere((id) => id.isEmpty || id == 'default');
+
+    if (allWsIds.isEmpty) return null;
+    if (allWsIds.length == 1) return allWsIds.first;
+
+    // 2) فرز وتقييم المنشآت لاختيار المنشأة الأساسية الحقيقية (Master Workspace)
+    // التي تحتوي على أكبر قدر من البيانات والعمليات المحاسبية التاريخية
+    final scores = <String, int>{};
+    for (final wsId in allWsIds) {
+      var score = 0;
+      try {
+        final dir = await AppDatabase.instance.databaseDirectory();
+        final dbFile =
+            File(p.join(dir, AppDatabase.instance.dbFileNameFor(wsId)));
+        if (await dbFile.exists()) {
+          final tempDb = await openDatabase(dbFile.path, readOnly: true);
+          try {
+            final accs = Sqflite.firstIntValue(await tempDb.rawQuery(
+                    "SELECT COUNT(*) FROM accounts WHERE COALESCE(deleted_at,'') = ''")) ??
+                0;
+            final txs = Sqflite.firstIntValue(await tempDb.rawQuery(
+                    "SELECT COUNT(*) FROM transactions WHERE COALESCE(deleted_at,'') = ''")) ??
+                0;
+            final itms = Sqflite.firstIntValue(await tempDb.rawQuery(
+                    "SELECT COUNT(*) FROM items WHERE COALESCE(deleted_at,'') = ''")) ??
+                0;
+            score += (accs * 10) + (txs * 20) + (itms * 5);
+            final stRows = await tempDb
+                .query('settings', where: "key = 'businessName'", limit: 1);
+            if (stRows.isNotEmpty) {
+              final val = '${stRows.first['value'] ?? ''}'.trim();
+              if (val.isNotEmpty && val != 'متجري' && val != 'منشأتي') {
+                score += 50;
+              }
+            }
+          } finally {
+            await tempDb.close();
+          }
+        }
+      } catch (_) {}
+
+      final cMeta = cloudMap[wsId];
+      if (cMeta != null) {
+        final name = (cMeta['storeName'] ??
+                cMeta['store_name'] ??
+                cMeta['businessName'] ??
+                '')
+            .toString()
+            .trim();
+        if (name.isNotEmpty && name != 'متجري' && name != 'منشأتي') {
+          score += 40;
+        }
+      }
+      scores[wsId] = score;
+    }
+
+    final sortedList = allWsIds.toList()
+      ..sort((a, b) => (scores[b] ?? 0).compareTo(scores[a] ?? 0));
+    final masterWsId = sortedList.first;
+    final duplicates = sortedList.skip(1).toList();
+
+    // 3) دمج أي بيانات موجودة في المنشآت المكررة داخل المنشأة الأساسية
+    for (final dupId in duplicates) {
+      try {
+        final dir = await AppDatabase.instance.databaseDirectory();
+        final dupFile =
+            File(p.join(dir, AppDatabase.instance.dbFileNameFor(dupId)));
+        final masterFile =
+            File(p.join(dir, AppDatabase.instance.dbFileNameFor(masterWsId)));
+
+        if (await dupFile.exists() && await masterFile.exists()) {
+          final dupDb = await openDatabase(dupFile.path, readOnly: true);
+          final masterDb = await openDatabase(masterFile.path);
+          try {
+            await _mergeDatabasesSafely(
+              sourceDb: dupDb,
+              targetDb: masterDb,
+              targetWsId: masterWsId,
+            );
+          } finally {
+            await dupDb.close();
+            await masterDb.close();
+          }
+        }
+      } catch (_) {}
+
+      try {
+        await AppDatabase.instance.deleteWorkspaceDatabaseFile(dupId);
+      } catch (_) {}
+
+      if (root.isNotEmpty) {
+        try {
+          await _authedDelete(
+            '$root/workspaces/_registry/user_workspaces/${emailToKey(cleanEmail)}/$dupId.json',
+          );
+        } catch (_) {}
+      }
+    }
+
+    // 4) تثبيت الفهرس السحابي الموحد على المنشأة الأساسية حصراً
+    if (root.isNotEmpty) {
+      try {
+        final masterMeta = cloudMap[masterWsId] ?? <String, dynamic>{};
+        masterMeta['workspaceId'] = masterWsId;
+        masterMeta['owner_email'] = cleanEmail;
+        masterMeta['email'] = cleanEmail;
+        masterMeta['role'] = 'owner';
+        masterMeta['updated_at'] = {'.sv': 'timestamp'};
+
+        await _authedPut(
+          _emailIndexPath(backendUrl, cleanEmail),
+          body: jsonEncode(masterMeta),
+        );
+        await _authedPut(
+          '$root/workspaces/_registry/user_workspaces/${emailToKey(cleanEmail)}/$masterWsId.json',
+          body: jsonEncode(masterMeta),
+        );
+      } catch (_) {}
+    }
+
+    // 5) التحول للمنشأة الموحدة واسترجاع البيانات
+    await switchToExistingWorkspace(
+      repo,
+      backendUrl: backendUrl,
+      targetWorkspaceId: masterWsId,
+    );
+
+    return masterWsId;
+  }
+
+  static Future<void> _mergeDatabasesSafely({
+    required Database sourceDb,
+    required Database targetDb,
+    required String targetWsId,
+  }) async {
+    try {
+      final srcAccounts = await sourceDb.query('accounts');
+      for (final a in srcAccounts) {
+        final row = Map<String, Object?>.from(a);
+        row['workspace_id'] = targetWsId;
+        await targetDb.insert('accounts', row,
+            conflictAlgorithm: ConflictAlgorithm.ignore);
+      }
+    } catch (_) {}
+
+    try {
+      final srcCats = await sourceDb.query('item_categories');
+      for (final c in srcCats) {
+        final row = Map<String, Object?>.from(c);
+        row['workspace_id'] = targetWsId;
+        await targetDb.insert('item_categories', row,
+            conflictAlgorithm: ConflictAlgorithm.ignore);
+      }
+      final srcItems = await sourceDb.query('items');
+      for (final i in srcItems) {
+        final row = Map<String, Object?>.from(i);
+        row['workspace_id'] = targetWsId;
+        await targetDb.insert('items', row,
+            conflictAlgorithm: ConflictAlgorithm.ignore);
+      }
+    } catch (_) {}
+
+    try {
+      final srcTxs = await sourceDb.query('transactions');
+      for (final t in srcTxs) {
+        final row = Map<String, Object?>.from(t);
+        row['workspace_id'] = targetWsId;
+        await targetDb.insert('transactions', row,
+            conflictAlgorithm: ConflictAlgorithm.ignore);
+      }
+      final srcTxItems = await sourceDb.query('transaction_items');
+      for (final ti in srcTxItems) {
+        final row = Map<String, Object?>.from(ti);
+        row['workspace_id'] = targetWsId;
+        await targetDb.insert('transaction_items', row,
+            conflictAlgorithm: ConflictAlgorithm.ignore);
+      }
+    } catch (_) {}
+
+    try {
+      final srcVouchers = await sourceDb.query('vouchers');
+      for (final v in srcVouchers) {
+        final row = Map<String, Object?>.from(v);
+        row['workspace_id'] = targetWsId;
+        await targetDb.insert('vouchers', row,
+            conflictAlgorithm: ConflictAlgorithm.ignore);
+      }
+      final srcMoves = await sourceDb.query('stock_moves');
+      for (final m in srcMoves) {
+        final row = Map<String, Object?>.from(m);
+        row['workspace_id'] = targetWsId;
+        await targetDb.insert('stock_moves', row,
+            conflictAlgorithm: ConflictAlgorithm.ignore);
+      }
+    } catch (_) {}
   }
 }

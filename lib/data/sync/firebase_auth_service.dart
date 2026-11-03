@@ -389,17 +389,32 @@ class FirebaseAuthRest {
     final uri = Uri.parse(
       'https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=$key',
     );
-    final res = await http
-        .post(
-          uri,
-          headers: const {'Content-Type': 'application/json'},
-          body: jsonEncode({
-            'email': cleanEmail,
-            'password': password,
-            'returnSecureToken': true,
-          }),
-        )
-        .timeout(const Duration(seconds: 15));
+    http.Response res;
+    try {
+      res = await http
+          .post(
+            uri,
+            headers: const {'Content-Type': 'application/json'},
+            body: jsonEncode({
+              'email': cleanEmail,
+              'password': password,
+              'returnSecureToken': true,
+            }),
+          )
+          .timeout(const Duration(seconds: 30));
+    } on TimeoutException {
+      throw StateError('NETWORK_ERROR');
+    } catch (e) {
+      final s = e.toString().toLowerCase();
+      if (s.contains('socket') ||
+          s.contains('clientexception') ||
+          s.contains('handshake') ||
+          s.contains('network') ||
+          s.contains('failed host lookup')) {
+        throw StateError('NETWORK_ERROR');
+      }
+      rethrow;
+    }
 
     final decoded = jsonDecode(utf8.decode(res.bodyBytes));
     if (res.statusCode < 200 || res.statusCode >= 300) {
@@ -408,12 +423,19 @@ class FirebaseAuthRest {
           : res.body;
       if (errMsg.contains('EMAIL_NOT_FOUND') ||
           errMsg.contains('USER_NOT_FOUND')) {
-        throw StateError('USER_NOT_FOUND');
+        throw StateError('EMAIL_NOT_FOUND');
       }
-      if (errMsg.contains('INVALID_PASSWORD') ||
-          errMsg.contains('INVALID_LOGIN_CREDENTIALS')) {
-        // تحقق ما إذا كان الحساب مسجلاً بهوية Google الحتمية أو غير موجود أصلاً
-        throw StateError('INVALID_CREDENTIALS_OR_NOT_FOUND:$errMsg');
+      if (errMsg.contains('INVALID_PASSWORD')) {
+        throw StateError('INVALID_PASSWORD');
+      }
+      if (errMsg.contains('INVALID_LOGIN_CREDENTIALS')) {
+        throw StateError('INVALID_LOGIN_CREDENTIALS');
+      }
+      if (errMsg.contains('USER_DISABLED')) {
+        throw StateError('USER_DISABLED');
+      }
+      if (errMsg.contains('TOO_MANY_ATTEMPTS')) {
+        throw StateError('TOO_MANY_ATTEMPTS');
       }
       throw Exception('تعذّر تسجيل الدخول ($errMsg)');
     }

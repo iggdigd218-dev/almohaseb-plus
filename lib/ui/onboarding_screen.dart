@@ -436,7 +436,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
           deviceId: devId,
           deviceFingerprint: hwFp,
         ).timeout(
-          const Duration(seconds: 12),
+          const Duration(seconds: 20),
           onTimeout: () => const CloudWorkspaceResolution.timeout(),
         );
       } catch (_) {
@@ -444,95 +444,40 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       }
     }
 
-    final hasExistingWorkspace = cloudRes.found || localMatches.isNotEmpty;
+    // 1) في حال وجود منشأة سابقة أو تكرار: استدعاء محرك التوحيد والدمج الذكي
+    String? consolidatedWsId;
+    if (cloudRes.found || localMatches.isNotEmpty) {
+      try {
+        consolidatedWsId =
+            await AccountWorkspace.consolidateAndMergeWorkspacesForEmail(
+          repo,
+          backendUrl: url,
+          email: account.email,
+        );
+      } catch (_) {}
+    }
 
-    // في حال فشل الاتصال أو انتهاء المهلة وعدم وجود نسخة محلية مطابقة:
-    // يُمنع التوجيه لشاشة إنشاء المنشأة ويُمنع استدعاء linkAccountOnly(forceIsolateNewUser: true)
+    final targetWsId = (consolidatedWsId != null && consolidatedWsId.isNotEmpty)
+        ? consolidatedWsId
+        : (cloudRes.found
+            ? cloudRes.workspaceId
+            : (localMatches.isNotEmpty ? localMatches.first.workspaceId : ''));
+
+    final hasExistingWorkspace =
+        targetWsId.isNotEmpty && targetWsId != 'default';
+
     if (!hasExistingWorkspace && cloudRes.isNetworkOrTimeoutError) {
       if (!mounted) return;
-      final retry = await showDialog<bool>(
-        context: context,
-        builder: (dctx) => AlertDialog(
-          title: const Row(
-            children: [
-              Icon(Icons.wifi_off_rounded, color: Colors.orange, size: 22),
-              SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'تعذر التحقق من الحساب',
-                  style: TextStyle(fontSize: 15.5, fontWeight: FontWeight.w800),
-                ),
-              ),
-            ],
-          ),
-          content: const Text(
-            'تعذر التحقق من حسابك بسبب بطء أو انقطاع الاتصال.. يرجى إعادة المحاولة',
-            style: TextStyle(fontSize: 13.5, height: 1.6),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dctx).pop(false),
-              child: const Text('إلغاء'),
-            ),
-            FilledButton.icon(
-              onPressed: () => Navigator.of(dctx).pop(true),
-              icon: const Icon(Icons.refresh_rounded, size: 18),
-              label: const Text('إعادة المحاولة'),
-            ),
-          ],
-        ),
-      );
-      if (retry == true && mounted) {
-        await _resolveWorkspaceOrRedirectToRegister(
-          account: account,
-          isLoginFlow: isLoginFlow,
-        );
-      }
+      setState(() {
+        _authError =
+            'خطأ في الاتصال بالإنترنت، تأكد من اتصالك بالشبكة وأعد المحاولة.';
+      });
+      Sfx.error();
       return;
     }
 
-    final existingWsId = cloudRes.found
-        ? cloudRes.workspaceId
-        : (localMatches.isNotEmpty ? localMatches.first.workspaceId : '');
-    final existingStoreName = (cloudRes.meta?['storeName'] ??
-            cloudRes.meta?['store_name'] ??
-            cloudRes.meta?['businessName'] ??
-            (localMatches.isNotEmpty ? localMatches.first.storeName : ''))
-        .toString()
-        .trim();
-
-    if (!isLoginFlow && hasExistingWorkspace && existingWsId.isNotEmpty) {
-      if (!mounted) return;
-      final decision = await showDialog<String>(
-        context: context,
-        builder: (dctx) => AlertDialog(
-          title: const Text(
-            'البريد الإلكتروني مسجل مسبقاً',
-            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
-          ),
-          content: Text(
-            'البريد الإلكتروني (${account.email}) مرتبط بمنشأة مسجلة مسبقاً'
-            '${existingStoreName.isNotEmpty ? ' باسم «$existingStoreName»' : ''}.\n\n'
-            'لا يُسمح بإنشاء أكثر من منشأة بنفس البريد الإلكتروني. هل ترغب بفتح منشأتك الحالية؟',
-            style: const TextStyle(fontSize: 13.5, height: 1.6),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(dctx).pop('cancel'),
-              child: const Text('إلغاء'),
-            ),
-            FilledButton(
-              onPressed: () => Navigator.of(dctx).pop('restore'),
-              child: const Text('فتح منشأتي السابقة'),
-            ),
-          ],
-        ),
-      );
-
-      if (decision == 'cancel' || decision == null || !mounted) return;
-    }
-
-    if (hasExistingWorkspace && existingWsId.isNotEmpty) {
+    // 2) إذا كان المستخدم مسجلاً سابقاً ولديه منشأة: فتح منشأته فوراً
+    if (hasExistingWorkspace) {
       bool restored = false;
       if (url.isNotEmpty) {
         try {
@@ -552,7 +497,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
         restored = await AccountWorkspace.switchToExistingWorkspace(
           repo,
           backendUrl: url,
-          targetWorkspaceId: existingWsId,
+          targetWorkspaceId: targetWsId,
         );
       }
 
@@ -591,20 +536,19 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       }
     }
 
-    // إذا كان تدفق تسجيل دخول عادي ولم يُعثر على أي منشأة سابقة:
-    // إشعار المستخدم صراحة بعدم وجود حساب أو منشأة مسجلة دون إدخاله لمنشأة فارغة جديدة رغماً عنه
+    // 3) إذا كان تسجيل دخول يدوي ولم يُعثر على منشأة سابقة:
     if (isLoginFlow) {
       if (!mounted) return;
       setState(() {
         _authError =
-            'لا توجد منشأة سابقة مسجلة للبريد ($cleanAuthEmail).\nإذا كنت ترغب بتأسيس منشأة جديدة، اضغط على «تسجيل حساب جديد وتأسيس منشأة».';
+            'تم تسجيل الدخول بنجاح، ولكن لا توجد منشأة سابقة مسجلة للبريد ($cleanAuthEmail).\n'
+            'إذا كنت ترغب بتأسيس منشأة جديدة، اضغط على «تسجيل حساب جديد وتأسيس منشأة».';
       });
       Sfx.error();
       return;
     }
 
-    // في حال تدفق إنشاء حساب جديد وتأكد عدم وجود منشأة مسجلة (notFound):
-    // حفظ جلسة الحساب فقط دون توليد أو عزل WS-* وهمي، والتوجيه لشاشة إعداد المنشأة
+    // 4) مستخدم جديد: توجيهه لشاشة إعداد المنشأة
     await FirebaseAuthRest.saveSession(repo, account);
     if (cleanAuthEmail.isNotEmpty) {
       await repo.setSetting('account.email', cleanAuthEmail);
