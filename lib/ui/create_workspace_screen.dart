@@ -174,10 +174,11 @@ class _CreateWorkspaceScreenState extends ConsumerState<CreateWorkspaceScreen> {
               backendUrl: url,
               targetWorkspaceId: existingWs,
             );
-            if (restored && mounted) {
+            if (restored) {
               await repo.setSetting('account.type', 'enterprise');
               await repo.setSetting(kOnboardingDoneKey, '1');
               await repo.setSetting('onboardingCompleted', '1');
+              if (!mounted) return;
               Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
                 MaterialPageRoute(
                     builder: (_) => const LockGate(child: HomeShell())),

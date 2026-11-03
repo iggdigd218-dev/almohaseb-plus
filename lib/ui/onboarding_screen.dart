@@ -544,7 +544,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
           ).timeout(const Duration(seconds: 35));
           restored = outcome == AccountLinkOutcome.switched ||
               outcome == AccountLinkOutcome.migrated ||
-              outcome == AccountLinkOutcome.linkedAlready;
+              outcome == AccountLinkOutcome.recovered;
         } catch (_) {}
       }
 
