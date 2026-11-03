@@ -1,5 +1,5 @@
 {
-  "version": "3.98.16+331",
+  "version": "3.98.17+332",
   "minSupported": "3.13.0",
   "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "releaseUrl": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/tag/latest",
@@ -14,12 +14,12 @@
     "windows": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/NexoraSetup.exe"
   },
   "downloadsMirror": {
-    "android": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.6-317/nexora-arm64.apk",
+    "android": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.17-332/nexora-arm64.apk",
     "androidVariants": {
-      "arm64": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.6-317/nexora-arm64.apk",
-      "armv7": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.6-317/nexora-armv7.apk"
+      "arm64": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.17-332/nexora-arm64.apk",
+      "armv7": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.17-332/nexora-armv7.apk"
     },
-    "windows": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.6-317/NexoraSetup.exe"
+    "windows": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.17-332/NexoraSetup.exe"
   },
   "downloadsFallbackGithub": {
     "android": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/nexora-arm64.apk",
@@ -29,6 +29,6 @@
     },
     "windows": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/NexoraSetup.exe"
   },
-  "publishedAt": "2026-11-02T12:00:00Z",
-  "notes": "• ربط تلقائي فوري للمنشآت المعتمدة والمدفوعة عبر بصمة ومعرف الجهاز ومنع تكرار الحسابات.\n• تطهير فهارس السحابة وإعادة توجيه المشتركين لمنشآتهم الأساسية بدقة مطلقة دون فقدان أي بيانات.\n• تسامح ذكي مع تباعد توقيت الأجهزة (Clock Skew) لتجاوز أخطاء شهادات التشفير TLS بأمان تام."
+  "publishedAt": "2026-11-03T18:40:00Z",
+  "notes": "• منع صريح لتكرار الحسابات ورفض تسجيل منشأة جديدة ببريد إلكتروني مسجل مسبقاً مع إمكانية فتح المنشأة السابقة مباشرة.\n• توجيه زر «تسجيل حساب جديد وتأسيس منشأة» لنافذة تعبئة بيانات المنشأة واعتمادها رسمياً ومباشرة.\n• عزل تام للاستخدام المحلي المستقل: إخفاء أسهم المزامنة وإدارة المجموعة كلياً دون أي مظهر سحابي أو تشويش.\n• دمج المساحات المكررة للأجهزة المشتركة في تطبيق الإدارة، وتوحيد المزامنة التلقائية دون الحاجة لتسجيل الخروج."
 }

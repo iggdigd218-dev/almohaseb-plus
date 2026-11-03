@@ -385,6 +385,11 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
           },
           conflictAlgorithm: ConflictAlgorithm.replace,
         );
+        await db.insert(
+          'sync_meta',
+          {'key': 'workspaceMode', 'value': 'standalone'},
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
       } catch (_) {}
       await repo.restoreManagerOwnership(syncToCloud: false);
       await repo.checkAndAutoPromoteManager();
@@ -538,7 +543,8 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
             forceIsolateNewUser: false,
           ).timeout(const Duration(seconds: 35));
           restored = outcome == AccountLinkOutcome.switched ||
-              outcome == AccountLinkOutcome.migrated;
+              outcome == AccountLinkOutcome.migrated ||
+              outcome == AccountLinkOutcome.recovered;
         } catch (_) {}
       }
 
@@ -585,20 +591,26 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       }
     }
 
-    // في حال تأكد عدم وجود منشأة مسجلة (notFound): حفظ جلسة الحساب فقط دون توليد أو عزل WS-* وهمي
-    // ويتم إنشاء المنشأة الفعلية حصراً عند ضغط المستخدم على زر «إنشاء المنشأة» في CreateWorkspaceScreen
+    // إذا كان تدفق تسجيل دخول عادي ولم يُعثر على أي منشأة سابقة:
+    // إشعار المستخدم صراحة بعدم وجود حساب أو منشأة مسجلة دون إدخاله لمنشأة فارغة جديدة رغماً عنه
+    if (isLoginFlow) {
+      if (!mounted) return;
+      setState(() {
+        _authError =
+            'لا توجد منشأة سابقة مسجلة للبريد ($cleanAuthEmail).\nإذا كنت ترغب بتأسيس منشأة جديدة، اضغط على «تسجيل حساب جديد وتأسيس منشأة».';
+      });
+      Sfx.error();
+      return;
+    }
+
+    // في حال تدفق إنشاء حساب جديد وتأكد عدم وجود منشأة مسجلة (notFound):
+    // حفظ جلسة الحساب فقط دون توليد أو عزل WS-* وهمي، والتوجيه لشاشة إعداد المنشأة
     await FirebaseAuthRest.saveSession(repo, account);
     if (cleanAuthEmail.isNotEmpty) {
       await repo.setSetting('account.email', cleanAuthEmail);
       await repo.setSetting('email', cleanAuthEmail);
     }
     if (!mounted) return;
-    if (isLoginFlow) {
-      showSnack(
-        context,
-        'لا توجد منشأة مسجلة لـ ${account.email} — تم تحويلك لإنشاء حساب جديد مع تعبئة بريدك تلقائياً',
-      );
-    }
     Navigator.of(context, rootNavigator: true).push(
       MaterialPageRoute(
         builder: (_) => CreateWorkspaceScreen(
@@ -610,8 +622,19 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     );
   }
 
-  /// تسجيل الدخول عبر البريد الإلكتروني وكلمة المرور (مع التحويل التلقائي لإنشاء حساب جديد عند عدم وجود الحساب).
-  Future<void> _handleEmailLogin({bool isRegisterButton = false}) async {
+  void _openCreateWorkspace() {
+    final email = _emailCtrl.text.trim().toLowerCase();
+    Navigator.of(context, rootNavigator: true).push(
+      MaterialPageRoute(
+        builder: (_) => CreateWorkspaceScreen(
+          ownerEmail: email,
+        ),
+      ),
+    );
+  }
+
+  /// تسجيل الدخول عبر البريد الإلكتروني وكلمة المرور مع الفحص المحلي الفوري.
+  Future<void> _handleEmailLogin() async {
     if (_busy) return;
     final email = _emailCtrl.text.trim().toLowerCase();
     final password = _passwordCtrl.text;
@@ -635,46 +658,40 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       _authError = null;
     });
 
+    // 1) فحص فوري للمنشآت المحفوظة محلياً على الجهاز لنفس البريد:
+    // إذا وُجدت منشأة محفوظة لهذا البريد على الهاتف، يتم فتحها فوراً دون أي تعقيد
     try {
-      final account = isRegisterButton
-          ? await FirebaseAuthRest.signUpWithEmailPassword(
-              email: email,
-              password: password,
-            )
-          : await FirebaseAuthRest.signInWithEmailPassword(
-              email: email,
-              password: password,
-            );
+      final localMatches = await AccountWorkspace.findLocalWorkspacesOnDevice(
+        filterEmail: email,
+      );
+      if (localMatches.isNotEmpty) {
+        await _openSavedDeviceWorkspace(localMatches.first);
+        return;
+      }
+    } catch (_) {}
+
+    try {
+      final account = await FirebaseAuthRest.signInWithEmailPassword(
+        email: email,
+        password: password,
+      );
 
       await _resolveWorkspaceOrRedirectToRegister(
         account: account,
-        isLoginFlow: !isRegisterButton,
+        isLoginFlow: true,
       );
     } on StateError catch (se) {
       final msg = se.message;
-      // Auto-Redirect Non-Existent Users (USER_NOT_FOUND) to Create New Account with email pre-filled
-      if (msg.contains('USER_NOT_FOUND') ||
-          msg.contains('INVALID_CREDENTIALS_OR_NOT_FOUND')) {
-        FirebaseAccount fallbackAcc;
-        try {
-          fallbackAcc = await FirebaseAuthRest.signUpWithEmailPassword(
-            email: email,
-            password: password,
-          );
-        } catch (_) {
-          fallbackAcc = FirebaseAccount(
-            uid: 'email:${AccountWorkspace.emailToKey(email)}',
-            email: email,
-          );
-        }
-        await _resolveWorkspaceOrRedirectToRegister(
-          account: fallbackAcc,
-          isLoginFlow: true,
-        );
-        return;
-      }
       if (!mounted) return;
-      setState(() => _authError = msg);
+      if (msg.contains('USER_NOT_FOUND') ||
+          msg.contains('INVALID_CREDENTIALS_OR_NOT_FOUND') ||
+          msg.contains('INVALID_PASSWORD') ||
+          msg.contains('EMAIL_NOT_FOUND')) {
+        setState(() => _authError =
+            'بيانات الدخول غير صحيحة أو الحساب غير مسجل.\nإذا كان حسابك مسجلاً عبر Google يرجى الضغط على زر (حساب Google)، أو اضغط على «تسجيل حساب جديد وتأسيس منشأة».');
+      } else {
+        setState(() => _authError = msg);
+      }
       Sfx.error();
     } catch (e) {
       if (!mounted) return;
@@ -1190,18 +1207,15 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
                           TextButton(
-                            onPressed: _busy
-                                ? null
-                                : () =>
-                                    _handleEmailLogin(isRegisterButton: true),
+                            onPressed: _busy ? null : _openCreateWorkspace,
                             style: TextButton.styleFrom(
                               padding: const EdgeInsets.symmetric(
                                   horizontal: 8, vertical: 6),
                             ),
                             child: const Text(
-                              'تسجيل حساب جديد',
+                              'تسجيل حساب جديد وتأسيس منشأة',
                               style: TextStyle(
-                                fontSize: 13.5,
+                                fontSize: 13,
                                 fontWeight: FontWeight.w700,
                               ),
                             ),

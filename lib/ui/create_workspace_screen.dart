@@ -131,6 +131,66 @@ class _CreateWorkspaceScreenState extends ConsumerState<CreateWorkspaceScreen> {
           ? widget.ownerUid.trim()
           : 'email:${AccountWorkspace.emailToKey(email)}';
 
+      if (!widget.isAdditionalWorkspace) {
+        final localMatches = await AccountWorkspace.findLocalWorkspacesOnDevice(
+          filterEmail: email,
+        );
+        if (localMatches.isNotEmpty) {
+          final existingWs = localMatches.first.workspaceId;
+          final existingName = localMatches.first.storeName;
+          if (!mounted) return;
+          setState(() {
+            _busy = false;
+            _errorMsg =
+                'البريد الإلكتروني ($email) مسجل مسبقاً لمنشأة «$existingName» على هذا الجهاز.\nلا يُسمح بإنشاء حساب مكرر بنفس البريد الإلكتروني.';
+          });
+          final openExisting = await showDialog<bool>(
+            context: context,
+            barrierDismissible: false,
+            builder: (dctx) => AlertDialog(
+              title: const Text('البريد مسجل مسبقاً',
+                  style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800)),
+              content: Text(
+                'البريد الإلكتروني ($email) مرتبط بمنشأة سابقة معتمدة على هذا الجهاز باسم «$existingName».\n\n'
+                'لا يُسمح بتكرار الحسابات أو إنشاء منشآت مكررة بنفس البريد. هل ترغب بفتح منشأتك السابقة؟',
+                style: const TextStyle(fontSize: 13.5, height: 1.6),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(dctx).pop(false),
+                  child: const Text('إلغاء'),
+                ),
+                FilledButton.icon(
+                  onPressed: () => Navigator.of(dctx).pop(true),
+                  icon: const Icon(Icons.login_rounded, size: 18),
+                  label: const Text('فتح المنشأة السابقة'),
+                ),
+              ],
+            ),
+          );
+          if (openExisting == true && mounted) {
+            final restored = await AccountWorkspace.switchToExistingWorkspace(
+              repo,
+              backendUrl: url,
+              targetWorkspaceId: existingWs,
+            );
+            if (restored) {
+              await repo.setSetting('account.type', 'enterprise');
+              await repo.setSetting(kOnboardingDoneKey, '1');
+              await repo.setSetting('onboardingCompleted', '1');
+              if (!mounted) return;
+              Navigator.of(context, rootNavigator: true).pushAndRemoveUntil(
+                MaterialPageRoute(
+                    builder: (_) => const LockGate(child: HomeShell())),
+                (route) => false,
+              );
+              return;
+            }
+          }
+          return;
+        }
+      }
+
       if (!widget.isAdditionalWorkspace && url.isNotEmpty) {
         final devId = await ensureDeviceId(repo);
         final rawFp =
@@ -217,7 +277,13 @@ class _CreateWorkspaceScreenState extends ConsumerState<CreateWorkspaceScreen> {
               return;
             }
           } else {
-            if (mounted) setState(() => _busy = false);
+            if (mounted) {
+              setState(() {
+                _busy = false;
+                _errorMsg =
+                    'البريد الإلكتروني ($email) مسجل مسبقاً في السحابة لمنشأة «$existingName».\nلا يُسمح بإنشاء منشآت مكررة بنفس البريد الإلكتروني.';
+              });
+            }
             return;
           }
         }
