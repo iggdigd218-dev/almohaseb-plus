@@ -197,10 +197,11 @@ class _State extends ConsumerState<GroupManagementScreen> {
       // 2. التحقق من الجلسة المعتمدة عند تسجيل الدخول من شاشة البداية
       final st = await repo.settings();
       final acctEmail =
-          '${st['account.email'] ?? st['email'] ?? ''}'
+          (st['account.email'] ?? st['email'] ?? '')
               .trim()
               .toLowerCase();
-      final acctUid = '${st['account.uid'] ?? FirebaseAuthRest.anonymousUid}'.trim();
+      final acctUid =
+          (st['account.uid'] ?? FirebaseAuthRest.anonymousUid).trim();
       if (acctEmail.isNotEmpty &&
           (acctEmail.endsWith('@gmail.com') || acctUid.isNotEmpty)) {
         await auth.persistAccount(

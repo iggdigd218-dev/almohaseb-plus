@@ -18,6 +18,7 @@ import 'package:crypto/crypto.dart';
 import 'package:http/http.dart' as http;
 
 import '../repository.dart';
+import '../../core/license_model.dart';
 import 'device_id.dart';
 import 'device_id.dart' as dev_id;
 import 'firebase_auth_service.dart';
