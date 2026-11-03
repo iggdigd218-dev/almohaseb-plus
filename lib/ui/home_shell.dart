@@ -1781,10 +1781,13 @@ class _HomeShellState extends ConsumerState<HomeShell>
                     rref.watch(settingsProvider).valueOrNull ?? const {};
                 final hasGoogleAuth =
                     rref.watch(googleLinkedProvider).valueOrNull ?? false;
-                final isLocalStandalone = wsMode == 'standalone' &&
-                    (st['cloudWorkspaceProvisioned'] ?? '') != '1' &&
-                    (st['account.email'] ?? '').trim().isEmpty &&
-                    !hasGoogleAuth;
+                final wsId = (st['sync.workspaceId'] ?? '').trim();
+                final cloudProv = (st['cloudWorkspaceProvisioned'] ?? '0').trim();
+                final isLocalStandalone = wsMode == 'standalone' ||
+                    cloudProv != '1' ||
+                    wsId == 'default' ||
+                    (st['account.type'] ?? '') == 'individual' ||
+                    ((st['account.email'] ?? '').trim().isEmpty && !hasGoogleAuth);
                 if (isLocalStandalone) {
                   final isDark = Theme.of(ctx).brightness == Brightness.dark;
                   return _appBarSquircleAction(
@@ -2727,10 +2730,13 @@ class _Drawer extends ConsumerWidget {
     // (3.70.0) «إدارة المجموعة» متاحة للمالك المرتبط بـ Google أو للوكيل في مجموعة نشطة.
     final stDrawer = ref.watch(settingsProvider).valueOrNull ?? const {};
     final googleLinked = ref.watch(googleLinkedProvider).valueOrNull ?? false;
-    final isLocalStandalone = wsMode == 'standalone' &&
-        (stDrawer['cloudWorkspaceProvisioned'] ?? '') != '1' &&
-        (stDrawer['account.email'] ?? '').trim().isEmpty &&
-        !googleLinked;
+    final drawerWsId = (stDrawer['sync.workspaceId'] ?? '').trim();
+    final drawerCloudProv = (stDrawer['cloudWorkspaceProvisioned'] ?? '0').trim();
+    final isLocalStandalone = wsMode == 'standalone' ||
+        drawerCloudProv != '1' ||
+        drawerWsId == 'default' ||
+        (stDrawer['account.type'] ?? '') == 'individual' ||
+        ((stDrawer['account.email'] ?? '').trim().isEmpty && !googleLinked);
     final allowGroupInDrawer = !isLocalStandalone &&
         (googleLinked ||
             effectiveRole == UserRole.agent ||
@@ -2740,7 +2746,7 @@ class _Drawer extends ConsumerWidget {
     final items = _DrawerItems.of(
       user: effectiveUser,
       isOwner: isOwner,
-      workspaceMode: (wsMode == 'standalone' && googleLinked) ? 'host' : wsMode,
+      workspaceMode: isLocalStandalone ? 'standalone' : ((wsMode == 'standalone' && googleLinked) ? 'host' : wsMode),
     );
     final dark = Theme.of(context).brightness == Brightness.dark;
 
