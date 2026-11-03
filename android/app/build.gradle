@@ -1,0 +1,92 @@
+plugins {
+    id "com.android.application"
+    id "com.google.gms.google-services"
+    id "kotlin-android"
+    id "dev.flutter.flutter-gradle-plugin"
+}
+
+def keystoreProperties = new Properties()
+def keystorePropertiesFile = rootProject.file("key.properties")
+if (keystorePropertiesFile.exists()) {
+    keystoreProperties.load(new FileInputStream(keystorePropertiesFile))
+}
+
+android {
+    namespace = "com.nexora.eradata"
+    compileSdk = 36
+    ndkVersion = flutter.ndkVersion
+
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_1_8
+        targetCompatibility = JavaVersion.VERSION_1_8
+    }
+
+    kotlinOptions {
+        jvmTarget = JavaVersion.VERSION_1_8
+    }
+
+    defaultConfig {
+        applicationId = "com.nexora.almohaseb_plus"
+        // (PR-7) 23 هي الأرضية الصلبة لـFlutter 3.35 (فحص ReleaseMinSdkCheck
+        // يرفض 21) — الفجوة 21-22 أندرويد 5 فقط وهي 32-بت مستبعدة أصلًا
+        // بسياسة arm64 حصراً.
+        minSdk = 23
+        targetSdk = 34
+        versionCode = flutter.versionCode
+        versionName = flutter.versionName
+        multiDexEnabled = true
+        // (PR-7) حصر المعمارية على الحديثة 64-بت فقط (قرار المالك
+        // 2026-10-29): مع التوقيع الصارم V1+V2+V3 عبر apksigner ومحاذاة
+        // zipalign في مسار CI — تثبيت سلس على أندرويد 12/13/14/15+.
+        ndk {
+            abiFilters "arm64-v8a"
+        }
+    }
+
+    // ضغط المكتبات الأصلية داخل APK لتقليل الحجم.
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
+    signingConfigs {
+        release {
+            if (keystorePropertiesFile.exists()) {
+                keyAlias = keystoreProperties['keyAlias']
+                keyPassword = keystoreProperties['keyPassword']
+                storeFile = file(keystoreProperties['storeFile'])
+                storePassword = keystoreProperties['storePassword']
+                storeType = keystoreProperties.getProperty('storeType', 'PKCS12')
+            }
+            v1SigningEnabled true
+            v2SigningEnabled true
+            // (PR-7) V3 في AGP بصيغة enableV3Signing حصراً — ليست
+            // v3SigningEnabled مثل v1/v2 القديمتين.
+            enableV3Signing = true
+        }
+    }
+
+    buildTypes {
+        release {
+            // (PR-7) توافق الأجهزة الحديثة (قرار المالك 2026-10-29): مع مفتاح
+            // رسمي (android/key.properties من الأسرار) يوقّع Gradle مباشرة
+            // بـ V1+V2+V3؛ وبدونه يخرج APK غير موقّع ليتولى مسار CI التوقيع
+            // الصارم عبر apksigner بالمفتاح الثابت بعد محاذاة zipalign —
+            // لا فشل بناء ولا حزمة غير موقعة تصل النشر.
+            signingConfig = keystorePropertiesFile.exists() ? signingConfigs.release : null
+            minifyEnabled = false
+            shrinkResources = false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'),
+                          'proguard-rules.pro'
+        }
+    }
+}
+
+flutter {
+    source = "../.."
+}
+
+dependencies {
+    implementation "com.google.android.material:material:1.12.0"
+}
