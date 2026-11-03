@@ -457,10 +457,21 @@ class AccountWorkspace {
     required String backendUrl,
     required String email,
     String uid = '',
+    String deviceId = '',
+    String deviceFingerprint = '',
+    String phone = '',
   }) async {
     final clean = email.trim().toLowerCase();
     final cleanUid = uid.trim();
-    if (clean.isEmpty && cleanUid.isEmpty) {
+    final cleanDev = deviceId.trim();
+    final cleanFp = deviceFingerprint.trim();
+    final cleanPhone = phone.replaceAll(RegExp(r'[^\d]'), '');
+
+    if (clean.isEmpty &&
+        cleanUid.isEmpty &&
+        cleanDev.isEmpty &&
+        cleanFp.isEmpty &&
+        cleanPhone.isEmpty) {
       return const CloudWorkspaceResolution.notFound();
     }
     final root = _trimSlashes(backendUrl);
@@ -640,18 +651,183 @@ class AccountWorkspace {
       return null;
     }
 
+    Future<CloudWorkspaceResolution?> checkDeviceIndexById() async {
+      if (cleanDev.isEmpty) return null;
+      try {
+        final res = await _authedGet(
+          '$root/workspaces/_registry/device_index/$cleanDev.json',
+          timeout: const Duration(seconds: 7),
+        );
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          anyHttpOk = true;
+          final body = utf8.decode(res.bodyBytes).trim();
+          if (body.isNotEmpty && body != 'null') {
+            final m = jsonDecode(body);
+            if (m is Map) {
+              final ws =
+                  '${m['workspaceId'] ?? m['workspace_id'] ?? ''}'.trim();
+              if (ws.isNotEmpty && ws != 'default') {
+                final role = '${m['role'] ?? 'owner'}'.trim();
+                final roleCode =
+                    '${m['role_code'] ?? m['roleCode'] ?? (role == 'member' ? 'cashier' : 'admin')}'
+                        .trim();
+                return CloudWorkspaceResolution(
+                  workspaceId: ws,
+                  role: role.isEmpty ? 'owner' : role,
+                  memberRoleCode: roleCode.isEmpty ? 'admin' : roleCode,
+                  meta: Map<String, dynamic>.from(m),
+                  status: CloudWorkspaceResolutionStatus.found,
+                );
+              }
+            }
+          }
+        } else {
+          anyNetworkError = true;
+        }
+      } on TimeoutException {
+        anyTimeout = true;
+      } catch (_) {
+        anyNetworkError = true;
+      }
+      return null;
+    }
+
+    Future<CloudWorkspaceResolution?> checkDeviceIndexByFingerprint() async {
+      if (cleanFp.isEmpty) return null;
+      try {
+        final res = await _authedGet(
+          '$root/workspaces/_registry/device_index/$cleanFp.json',
+          timeout: const Duration(seconds: 7),
+        );
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          anyHttpOk = true;
+          final body = utf8.decode(res.bodyBytes).trim();
+          if (body.isNotEmpty && body != 'null') {
+            final m = jsonDecode(body);
+            if (m is Map) {
+              final ws =
+                  '${m['workspaceId'] ?? m['workspace_id'] ?? ''}'.trim();
+              if (ws.isNotEmpty && ws != 'default') {
+                final role = '${m['role'] ?? 'owner'}'.trim();
+                final roleCode =
+                    '${m['role_code'] ?? m['roleCode'] ?? (role == 'member' ? 'cashier' : 'admin')}'
+                        .trim();
+                return CloudWorkspaceResolution(
+                  workspaceId: ws,
+                  role: role.isEmpty ? 'owner' : role,
+                  memberRoleCode: roleCode.isEmpty ? 'admin' : roleCode,
+                  meta: Map<String, dynamic>.from(m),
+                  status: CloudWorkspaceResolutionStatus.found,
+                );
+              }
+            }
+          }
+        } else {
+          anyNetworkError = true;
+        }
+      } on TimeoutException {
+        anyTimeout = true;
+      } catch (_) {
+        anyNetworkError = true;
+      }
+      return null;
+    }
+
+    Future<CloudWorkspaceResolution?> checkTrialsByFingerprint() async {
+      if (cleanFp.isEmpty) return null;
+      try {
+        final res = await _authedGet(
+          '$root/trials/$cleanFp.json',
+          timeout: const Duration(seconds: 7),
+        );
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          anyHttpOk = true;
+          final body = utf8.decode(res.bodyBytes).trim();
+          if (body.isNotEmpty && body != 'null') {
+            final m = jsonDecode(body);
+            if (m is Map) {
+              final ws =
+                  '${m['workspace_id'] ?? m['workspaceId'] ?? ''}'.trim();
+              if (ws.isNotEmpty && ws != 'default') {
+                return CloudWorkspaceResolution(
+                  workspaceId: ws,
+                  role: 'owner',
+                  meta: Map<String, dynamic>.from(m),
+                  status: CloudWorkspaceResolutionStatus.found,
+                );
+              }
+            }
+          }
+        } else {
+          anyNetworkError = true;
+        }
+      } on TimeoutException {
+        anyTimeout = true;
+      } catch (_) {
+        anyNetworkError = true;
+      }
+      return null;
+    }
+
+    Future<CloudWorkspaceResolution?> checkPhonesIndex() async {
+      if (cleanPhone.length < 7) return null;
+      final normPhone = cleanPhone.startsWith('00')
+          ? '+${cleanPhone.substring(2)}'
+          : (cleanPhone.startsWith('+') ? cleanPhone : '+$cleanPhone');
+      final phoneKey = normPhone.replaceAll(RegExp(r'[.#\$\[\]/]'), '_');
+      try {
+        final res = await _authedGet(
+          '$root/workspaces/_registry/phones_index/$phoneKey.json',
+          timeout: const Duration(seconds: 7),
+        );
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          anyHttpOk = true;
+          final body = utf8.decode(res.bodyBytes).trim();
+          if (body.isNotEmpty && body != 'null') {
+            final m = jsonDecode(body);
+            if (m is Map) {
+              final ws =
+                  '${m['workspaceId'] ?? m['workspace_id'] ?? ''}'.trim();
+              if (ws.isNotEmpty && ws != 'default') {
+                return CloudWorkspaceResolution(
+                  workspaceId: ws,
+                  role: 'owner',
+                  meta: Map<String, dynamic>.from(m),
+                  status: CloudWorkspaceResolutionStatus.found,
+                );
+              }
+            }
+          }
+        }
+      } catch (_) {}
+      return null;
+    }
+
     try {
       final results = await Future.wait<CloudWorkspaceResolution?>([
         checkEmailsIndex(),
         checkUserWorkspaces(),
         checkAccountsIndexByUid(),
         checkTrialsByUid(),
-      ]).timeout(const Duration(seconds: 8));
+        checkDeviceIndexById(),
+        checkDeviceIndexByFingerprint(),
+        checkTrialsByFingerprint(),
+        checkPhonesIndex(),
+      ]).timeout(const Duration(seconds: 10));
 
-      for (final r in results) {
-        if (r != null && r.found) {
-          return r;
-        }
+      final foundList = results.whereType<CloudWorkspaceResolution>().where((r) => r.found).toList();
+
+      if (foundList.isNotEmpty) {
+        // نرجّح دائماً المنشآت النشطة/المدفوعة (active / enterprise) على المنشآت التجريبية
+        final activeMatch = foundList.firstWhere(
+          (r) {
+            final st = '${r.meta?['status'] ?? r.meta?['subscriptionStatus'] ?? ''}'.trim().toLowerCase();
+            final plan = '${r.meta?['plan_type'] ?? r.meta?['planType'] ?? ''}'.trim().toLowerCase();
+            return st == 'active' || plan == 'enterprise';
+          },
+          orElse: () => foundList.first,
+        );
+        return activeMatch;
       }
     } on TimeoutException {
       return const CloudWorkspaceResolution.timeout();
