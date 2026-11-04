@@ -49,10 +49,19 @@ class Account {
 
   /// الرقم المستخدم للتواصل: واتساب إن وُجد وإلا الهاتف.
   String get contactNumber {
+    // (دفعة التدقيق) كل قنوات الواتساب (القديمة 'whatsapp' وauto_*) تعيد
+    // رقم الواتساب مع سقوط احتياطي للهاتف، وكل قنوات الرسائل النصية
+    // (sms وauto_sms) تعيد رقم الهاتف — كانت القيم auto_* تسقط في الفراغ.
     final ch = notifyChannel;
-    if (ch == 'sms') return phone.trim();
-    if (ch == 'whatsapp') {
-      return whatsapp.trim().isNotEmpty ? whatsapp : phone;
+    if (ch == 'whatsapp' ||
+        ch == 'auto_whatsapp' ||
+        ch == 'auto_w4b' ||
+        ch == 'auto_system') {
+      final wa = whatsapp.trim();
+      return wa.isNotEmpty ? wa : phone.trim();
+    }
+    if (ch == 'sms' || ch == 'auto_sms') {
+      return phone.trim();
     }
     return '';
   }
