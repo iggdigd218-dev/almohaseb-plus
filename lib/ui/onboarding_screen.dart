@@ -444,24 +444,11 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       }
     }
 
-    // 1) في حال وجود منشأة سابقة أو تكرار: استدعاء محرك التوحيد والدمج الذكي
-    String? consolidatedWsId;
-    if (cloudRes.found || localMatches.isNotEmpty) {
-      try {
-        consolidatedWsId =
-            await AccountWorkspace.consolidateAndMergeWorkspacesForEmail(
-          repo,
-          backendUrl: url,
-          email: account.email,
-        );
-      } catch (_) {}
-    }
-
-    final targetWsId = (consolidatedWsId != null && consolidatedWsId.isNotEmpty)
-        ? consolidatedWsId
-        : (cloudRes.found
-            ? cloudRes.workspaceId
-            : (localMatches.isNotEmpty ? localMatches.first.workspaceId : ''));
+    // لا ندمج المنشآت تلقائياً: يجب الحفاظ على قواعد البيانات الأصلية
+    // حتى تتوفر آلية دمج قابلة للتحقق مع نسخ احتياطية ومعالجة التعارضات.
+    final targetWsId = cloudRes.found
+        ? cloudRes.workspaceId
+        : (localMatches.isNotEmpty ? localMatches.first.workspaceId : '');
 
     final hasExistingWorkspace =
         targetWsId.isNotEmpty && targetWsId != 'default';

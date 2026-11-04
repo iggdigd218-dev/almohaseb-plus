@@ -7,6 +7,7 @@
 //
 // Offline-First: الجلسة تُحفظ محلياً (settings) بعد أول دخول ناجح —
 // التطبيق يعمل كاملاً بلا إنترنت ولا يُطلب تسجيل الدخول في كل مرة.
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
