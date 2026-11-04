@@ -225,32 +225,36 @@ class CatalogSyncGuard {
         SyncDiagnostics.instance.setCatalogMismatch(false);
         // نشر لقطة محدثة للكتالوج والحسابات ليتمكن الأعضاء من معالجة أي حسابات أو أصناف مؤقتة
         try {
-          final snap = await CloudJoin.buildWorkspaceSnapshot(repo);
-          // (دفعة التدقيق) لا يُرفع snapshot.json في كل دورة تحقق: البناء
-          // واحد والرفع فقط عند تغير بصمة بيانات اللقطة فعلاً وبمرور فاصل
-          // زمني منذ آخر رفع — كان يُرفع كاملاً في كل استدعاء مهما كرر.
-          // البصمة على «بيانات» اللقطة لا على الغلاف (الطوابع الزمنية
-          // فيهما تتغير دوماً وتبطل أي مقارنة).
-          final snapHash =
-              sha256.convert(utf8.encode(jsonEncode(snap))).toString();
+          // (تصويب معماري) فحص الفاصل الزمني قبل البناء: بناء اللقطة يقرأ
+          // 17 جدولاً ويرمز مصغرات الصور في الذاكرة — لا معنى لأيٍّ منه
+          // إن لم يحن موعد الرفع بعد. الفاصل إذن يخنق خط البناء+الرفع
+          // معاً، والبصمة (على «بيانات» اللقطة لا غلافها) تمنع الرفع
+          // العبثي عند غياب التغيير الفعلي.
           final nowMs = DateTime.now().millisecondsSinceEpoch;
-          if (snapHash != _lastSnapshotHash &&
-              nowMs - _lastSnapshotPublishMs >= _snapshotPublishGapMs) {
-            final snapPayload = {
-              'createdAt': DateTime.now().toIso8601String(),
-              'hostDeviceId': ourId,
-              'compacted_through_ts': DateTime.now().millisecondsSinceEpoch,
-              'data': snap,
-            };
-            await http
-                .put(
-                  Uri.parse('$root/snapshot.json').replace(
-                      queryParameters: token != null ? {'auth': token} : null),
-                  body: jsonEncode(snapPayload),
-                  headers: {'Content-Type': 'application/json'},
-                )
-                .timeout(const Duration(seconds: 10));
-            _lastSnapshotHash = snapHash;
+          if (nowMs - _lastSnapshotPublishMs >= _snapshotPublishGapMs) {
+            final snap = await CloudJoin.buildWorkspaceSnapshot(repo);
+            final snapHash =
+                sha256.convert(utf8.encode(jsonEncode(snap))).toString();
+            if (snapHash != _lastSnapshotHash) {
+              final snapPayload = {
+                'createdAt': DateTime.now().toIso8601String(),
+                'hostDeviceId': ourId,
+                'compacted_through_ts':
+                    DateTime.now().millisecondsSinceEpoch,
+                'data': snap,
+              };
+              await http
+                  .put(
+                    Uri.parse('$root/snapshot.json').replace(queryParameters:
+                        token != null ? {'auth': token} : null),
+                    body: jsonEncode(snapPayload),
+                    headers: {'Content-Type': 'application/json'},
+                  )
+                  .timeout(const Duration(seconds: 10));
+              _lastSnapshotHash = snapHash;
+            }
+            // تثبيت وقت الفحص يمنع إعادة بناء اللقطة كل دورة حتى لو لم
+            // يتغير شيء — فالفحص القادم لا يحدث قبل انقضاء الفاصل مجدداً.
             _lastSnapshotPublishMs = nowMs;
           }
         } catch (_) {}

@@ -567,6 +567,13 @@ class CloudFirebaseTransport implements SyncTransport {
 
       final pendingSelfRevokeOps = <SyncOperation>[];
 
+      // (تصويب معماري — دفعة التدقيق) التحقق الشبكي لعمليات email_takeover
+      // يتم هنا خارج معاملة SQLite: نتائج accounts:lookup تُحضَّر سلفاً
+      // وتُمرَّر للمعاملة جاهزة، فتُفحص داخلها بصورة متزامنة وفورية —
+      // لا يُحتجز قفل قاعدة البيانات بانتظار الشبكة (كان يصل إلى 12ث).
+      final preverifiedTakeoverIdentities =
+          await _preverifyTakeoverIdentities(entries);
+
       await _setForeignKeys(false);
       try {
         const microBatchSize = 40;
@@ -611,7 +618,9 @@ class CloudFirebaseTransport implements SyncTransport {
                   prevOwnerBeforeOp = '${curOwnQ.first['id'] ?? ''}';
                 }
               }
-              final ok = await repo.applyRemoteOperation(txn, op, r);
+              final ok = await repo.applyRemoteOperation(txn, op, r,
+                  preverifiedTakeoverIdentities:
+                      preverifiedTakeoverIdentities);
               if (ok) applied++;
               if (ok &&
                   op.entityType == EntityKind.message &&
@@ -1004,6 +1013,42 @@ class CloudFirebaseTransport implements SyncTransport {
       _sseClient?.close(force: true);
     } catch (_) {}
     _sseClient = null;
+  }
+
+  /// (تصويب معماري — دفعة التدقيق) تحضير هويات email_takeover الموثقة
+  /// قبل فتح معاملات السحب: لكل عملية ownershipTransfer بحمولة
+  /// email_takeover وتوكن ثلاثي الأجزاء، تُستعلم هوية التوكن من Firebase
+  /// خارج القفل، وتُخزَّن النتيجة (أو null للتوكن التالف/الفارغ) بمفتاح
+  /// معرف العملية لاستهلاكها داخل المعاملة دون أي شبكة.
+  Future<Map<String, Map<String, String>?>> _preverifyTakeoverIdentities(
+      List<MapEntry<dynamic, dynamic>> entries) async {
+    final result = <String, Map<String, String>?>{};
+    try {
+      for (final entry in entries) {
+        final v = entry.value;
+        if (v is! Map) continue;
+        final op = SyncOperation.fromMap(Map<String, Object?>.from(v));
+        if (op.entityType != EntityKind.setting ||
+            op.entityId != 'ownershipTransfer') {
+          continue;
+        }
+        try {
+          final decoded = jsonDecode('${op.payload['value'] ?? '{}'}');
+          if (decoded is! Map || decoded['email_takeover'] != true) continue;
+          final claim =
+              '${decoded['verified_claim'] ?? decoded['auth_token'] ?? ''}'
+                  .trim();
+          if (claim.isEmpty || claim.split('.').length != 3) {
+            result[op.id] = null;
+            continue;
+          }
+          result[op.id] = await lookupFirebaseIdentity(claim);
+        } catch (_) {
+          result[op.id] = null;
+        }
+      }
+    } catch (_) {}
+    return result;
   }
 
   Future<void> _sseLoop() async {

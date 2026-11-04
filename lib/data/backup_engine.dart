@@ -7,7 +7,6 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../core/app_version.dart';
-import '../core/cloud_config.dart';
 import '../core/database.dart';
 import '../core/desktop_net.dart';
 import '../core/format.dart';

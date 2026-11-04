@@ -706,8 +706,9 @@ extension ApplyRemoteOp on Repo {
   Future<bool> applyRemoteOperation(
     DatabaseExecutor txn,
     SyncOperation op,
-    ConflictResolver resolver,
-  ) async {
+    ConflictResolver resolver, {
+    Map<String, Map<String, String>?>? preverifiedTakeoverIdentities,
+  }) async {
     final table = _tableFor(op.entityType);
     final primaryKey = switch (op.entityType) {
       EntityKind.setting => 'key',
@@ -1465,7 +1466,8 @@ extension ApplyRemoteOp on Repo {
     // الملكية عن المدير السابق.
     if (op.entityType == EntityKind.setting &&
         op.entityId == 'ownershipTransfer') {
-      await _applyOwnershipTransfer(txn, op);
+      await _applyOwnershipTransfer(txn, op,
+          preverifiedTakeoverIdentities: preverifiedTakeoverIdentities);
     } else if (op.entityType == EntityKind.setting &&
         (op.entityId.startsWith('deviceExpelled:') ||
             op.entityId.startsWith('deviceRevoked:'))) {
@@ -1576,8 +1578,8 @@ extension ApplyRemoteOp on Repo {
 
   /// تطبيق نقل الملكية الوارد: تحقق سيادي (المرسل هو المالك المعروف
   /// محلياً) ثم قلب الأعلام ذرياً داخل نفس المعاملة.
-  Future<void> _applyOwnershipTransfer(
-      DatabaseExecutor txn, SyncOperation op) async {
+  Future<void> _applyOwnershipTransfer(DatabaseExecutor txn, SyncOperation op,
+      {Map<String, Map<String, String>?>? preverifiedTakeoverIdentities}) async {
     try {
       final decoded = jsonDecode('${op.payload['value'] ?? '{}'}');
       if (decoded is! Map) return;
@@ -1602,6 +1604,7 @@ extension ApplyRemoteOp on Repo {
             op: op,
             decoded: decoded,
             newOwnerDev: newOwnerDev,
+            preverifiedTakeoverIdentities: preverifiedTakeoverIdentities,
           );
           if (!allowed) {
             await _logRejectedEmailTakeover(
@@ -1810,6 +1813,7 @@ extension ApplyRemoteOp on Repo {
     required SyncOperation op,
     required Map<dynamic, dynamic> decoded,
     required String newOwnerDev,
+    Map<String, Map<String, String>?>? preverifiedTakeoverIdentities,
   }) async {
     if (op.deviceId != newOwnerDev || newOwnerDev.isEmpty) return false;
     try {
@@ -1882,8 +1886,20 @@ extension ApplyRemoteOp on Repo {
       // عبر accounts:lookup — لا يستطيع أي عضو إصدار توكن يحمل هوية
       // المالك، وأي فشل في التحقق (توكن منتهٍ/مزوّر/شبكة معطلة) يُرفض
       // إغلاقاً كاملاً للباب.
+      //
+      // (تصويب معماري) هذا الاستدعاء يجري داخل db.transaction: طلب الشبكة
+      // هنا كان يحتجز قفل قاعدة البيانات طوال مهلة lookup (حتى 12ث).
+      // pull الحديث يمرر النتائج الموثقة محضّرة سلفاً من خارج المعاملة
+      // فتُستهلك فوراً وبصورة متزامنة؛ غياب المفتاح = رفض دون أي شبكة.
       if (verifiedClaim.isNotEmpty && verifiedClaim.split('.').length == 3) {
-        final identity = await _lookupFirebaseIdentity(verifiedClaim);
+        final Map<String, String>? identity;
+        if (preverifiedTakeoverIdentities != null) {
+          identity = preverifiedTakeoverIdentities[op.id];
+        } else {
+          // مسار الاستدعاء المباشر (بلا تحضير مسبق): يبقى التحقق الشبكي
+          // كما هو — لا يُفتح باب قبول صامت لمجرد غياب التحضير.
+          identity = await lookupFirebaseIdentity(verifiedClaim);
+        }
         if (identity != null) {
           final tokenEmail = (identity['email'] ?? '').trim().toLowerCase();
           final tokenUid = (identity['uid'] ?? '').trim();
@@ -1902,38 +1918,9 @@ extension ApplyRemoteOp on Repo {
     return false;
   }
 
-  /// التحقق الفعلي من توكن Firebase عبر Identity Toolkit (accounts:lookup):
-  /// لا يُقبل التوكن إلا إن كان صادراً حقيقةً من Firebase وغير منتهٍ، وتُعاد
-  /// هويته (البريد + uid) للمقارنة مع المالك المسجّل محلياً. أي فشل
-  /// (شبكة/توكن تالف أو منتهٍ) يعيد null — إغلاق كامل للباب.
-  Future<Map<String, String>?> _lookupFirebaseIdentity(String idToken) async {
-    HttpClient? client;
-    try {
-      client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
-      final uri = Uri.parse(
-          'https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=$effectiveFirebaseApiKey');
-      final req = await client.postUrl(uri);
-      req.headers.contentType = ContentType.json;
-      req.write(jsonEncode({'idToken': idToken}));
-      final res = await req.close().timeout(const Duration(seconds: 12));
-      if (res.statusCode != 200) return null;
-      final body = await res.transform(utf8.decoder).join();
-      final data = jsonDecode(body);
-      if (data is! Map) return null;
-      final users = data['users'];
-      if (users is! List || users.isEmpty) return null;
-      final u = users.first;
-      if (u is! Map) return null;
-      return {
-        'email': '${u['email'] ?? ''}'.trim().toLowerCase(),
-        'uid': '${u['localId'] ?? ''}'.trim(),
-      };
-    } catch (_) {
-      return null;
-    } finally {
-      client?.close();
-    }
-  }
+  // (تصويب معماري) lookupFirebaseIdentity نُقلت إلى دالة عليا عامة أسفل
+  // الملف ليستدعيها الناقل خارج معاملة SQLite قبل فتحها.
+
 
   /// تسجيل حدث أمني مهيكل في سجل التدقيق عند رفض محاولة `email_takeover` غير موثقة.
   Future<void> _logRejectedEmailTakeover(
@@ -2290,5 +2277,42 @@ extension ApplyRemoteOp on Repo {
   Future<int> autoHealOrphanItems({int? sectionId, int? categoryId}) async {
     final db = await database;
     return _autoHealOrphanItems(db, sectionId: sectionId, categoryId: categoryId);
+  }
+}
+
+/// التحقق الفعلي من توكن Firebase عبر Identity Toolkit (accounts:lookup):
+/// لا يُقبل التوكن إلا إن كان صادراً حقيقةً من Firebase وغير منتهٍ، وتُعاد
+/// هويته (البريد + uid) للمقارنة مع المالك المسجّل محلياً. أي فشل
+/// (شبكة/توكن تالف أو منتهٍ) يعيد null — إغلاق كامل للباب.
+///
+/// (تصويب معماري) دالة عليا عامة كي يستدعيها الناقل قبل فتح
+/// db.transaction ويمرر النتائج جاهزة — فلا يُحتجز قفل قاعدة البيانات
+/// بانتظار الشبكة إطلاقاً.
+Future<Map<String, String>?> lookupFirebaseIdentity(String idToken) async {
+  HttpClient? client;
+  try {
+    client = HttpClient()..connectionTimeout = const Duration(seconds: 8);
+    final uri = Uri.parse(
+        'https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=$effectiveFirebaseApiKey');
+    final req = await client.postUrl(uri);
+    req.headers.contentType = ContentType.json;
+    req.write(jsonEncode({'idToken': idToken}));
+    final res = await req.close().timeout(const Duration(seconds: 12));
+    if (res.statusCode != 200) return null;
+    final body = await res.transform(utf8.decoder).join();
+    final data = jsonDecode(body);
+    if (data is! Map) return null;
+    final users = data['users'];
+    if (users is! List || users.isEmpty) return null;
+    final u = users.first;
+    if (u is! Map) return null;
+    return {
+      'email': '${u['email'] ?? ''}'.trim().toLowerCase(),
+      'uid': '${u['localId'] ?? ''}'.trim(),
+    };
+  } catch (_) {
+    return null;
+  } finally {
+    client?.close();
   }
 }
