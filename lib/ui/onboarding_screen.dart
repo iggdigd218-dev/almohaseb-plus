@@ -205,6 +205,15 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
 
   Future<void> _loadSavedDeviceWorkspaces() async {
     try {
+      // (Self-Healing) مسح مسودات المنشآت الوهمية الفارغة من القرص قبل
+      // عرض القائمة: أي nexora_WS-*.db بلا اسم تجاري حقيقي وبلا حسابات
+      // أو حركات تُحذف تلقائياً، فلا تبقى في القائمة إلا منشأة المالك
+      // المعتمدة الحقيقية.
+      try {
+        await AccountWorkspace.purgeGhostWorkspaceDatabasesOnDisk(
+          currentWorkspaceId: ref.read(repoProvider).requireWorkspaceId,
+        );
+      } catch (_) {}
       final list = await AccountWorkspace.findLocalWorkspacesOnDevice();
       if (!mounted) return;
       setState(() {
@@ -491,9 +500,29 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       return;
     }
 
-    final existingWsId = cloudRes.found
-        ? cloudRes.workspaceId
-        : (localMatches.isNotEmpty ? localMatches.first.workspaceId : '');
+    // ══ (إصلاح المنشآت الوهمية) المنشأة المحلية المعتمدة أولى من كل شيء ══
+    // إن وُجد على هذا الهاتف منشأة محفوظة لهذا البريد المسجل باسم تجاري
+    // حقيقي وبيانات مسجلة سابقة، فهي وجهة الدخول المباشرة المعتمدة.
+    WorkspaceInfo? trustedLocal;
+    for (final w in localMatches) {
+      final sn = w.storeName.trim();
+      final hasRealName = sn.isNotEmpty &&
+          sn != 'متجري' &&
+          sn != 'منشأتي' &&
+          !sn.startsWith('منشأة (') &&
+          !sn.startsWith('منشأة(');
+      if (hasRealName) {
+        trustedLocal = w;
+        break;
+      }
+    }
+
+    final existingWsId = trustedLocal?.workspaceId ??
+        (cloudRes.found
+            ? cloudRes.workspaceId
+            : (localMatches.isNotEmpty
+                ? localMatches.first.workspaceId
+                : ''));
     final existingStoreName = (cloudRes.meta?['storeName'] ??
             cloudRes.meta?['store_name'] ??
             cloudRes.meta?['businessName'] ??
@@ -534,7 +563,29 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
 
     if (hasExistingWorkspace && existingWsId.isNotEmpty) {
       bool restored = false;
-      if (url.isNotEmpty) {
+      var didStopSyncEngine = false;
+
+      // ══ (إصلاح المنشآت الوهمية) التوجيه المباشر للمنشأة المعتمدة ══
+      // عند وجود منشأة محفوظة معتمدة على هذا الهاتف للبريد المسجل، يتم
+      // الانتقال إليها فوراً عبر switchToExistingWorkspace — دون المرور
+      // بأي مسار توليد مسودات أو إنشاء قواعد بيانات جديدة خلف المستخدم.
+      if (trustedLocal != null) {
+        try {
+          try {
+            ref.read(syncEngineProvider).stop();
+            didStopSyncEngine = true;
+          } catch (_) {}
+          restored = await AccountWorkspace.switchToExistingWorkspace(
+            repo,
+            backendUrl: url,
+            targetWorkspaceId: trustedLocal.workspaceId,
+          );
+        } catch (_) {
+          restored = false;
+        }
+      }
+
+      if (!restored && url.isNotEmpty) {
         try {
           final outcome = await AccountWorkspace.linkAccountOnly(
             repo,
@@ -557,6 +608,14 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       }
 
       if (restored) {
+        // إعادة تشغيل محرك المزامنة إن كنا قد أوقفناه للتبديل المباشر.
+        if (didStopSyncEngine) {
+          try {
+            final engine = ref.read(syncEngineProvider);
+            await engine.start();
+            unawaited(engine.forceSyncNow());
+          } catch (_) {}
+        }
         await repo.setSetting('account.type', 'enterprise');
         await repo.setSetting(kOnboardingDoneKey, '1');
         await repo.setSetting('onboardingCompleted', '1');

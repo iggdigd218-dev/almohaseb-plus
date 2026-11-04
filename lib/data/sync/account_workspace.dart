@@ -8,15 +8,17 @@
 //   - انضمام الموظفين يبقى عبر QR/PIN — لا يحتاجون حساب Google.
 import 'dart:async';
 import 'dart:convert';
-import 'dart:io' show Platform;
+import 'dart:io' show Platform, File, Directory;
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:path/path.dart' as p;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../../core/database.dart';
+import '../../core/db_init.dart';
 import '../../core/factory_reset.dart';
 import 'auto_backup.dart';
 import '../repository.dart';
@@ -1199,8 +1201,13 @@ class AccountWorkspace {
       }
 
       // السيناريو الثاني (المستخدم جديد تماماً ولا يملك أي منشأة على السحابة):
-      // يُمنع منعاً باتاً فتح أو ربط أي منشأة أو بيانات مخزنة مسبقاً على الهاتف.
-      if (isDifferentAccount || forceIsolateNewUser) {
+      // ══ (إصلاح المنشآت الوهمية — Ghost Workspaces) ══
+      // هذا المسار مقصور حصرياً على الطلب الصريح forceIsolateNewUser == true.
+      // لا يُولَّد معرف مساحة جديد ولا تُنشأ قاعدة بيانات افتراضية
+      // (nexora_WS-XXXX.db) من خلف المستخدم أثناء تسجيل الدخول العادي،
+      // حتى لو اختلف البريد الوارد عن بريد الجهاز السابق: في تلك الحالة
+      // يبقى التوجيه للمنشأة المعتمدة أعلاه (سحابياً أو محلياً) هو الحكم.
+      if (forceIsolateNewUser) {
         try {
           final oldData =
               await repo.exportAll(withImages: false, localOnly: true);
@@ -2126,6 +2133,133 @@ class AccountWorkspace {
     }
   }
 
+  /// ══ (إصلاح المنشآت الوهمية — Self-Healing Cleanup) ══
+  /// يحذف من القرص ملفات قواعد البيانات «الشبح» المولدة تلقائياً باسم
+  /// `nexora_WS-*.db` حين تكون مسودات فارغة: بلا اسم تجاري حقيقي، وبلا
+  /// حسابات أو حركات مالية. هذه المسودات كانت تظهر للعميل كمنشآت وهمية
+  /// وكأنها فقدان لبياناته عند تسجيل الدخول بحساب Google.
+  ///
+  /// حدود الأمان الصارمة:
+  ///  • لا يُمس ملف القاعدة الافتراضية ولا أي ملف لا يحمل بادئة `WS-`.
+  ///  • لا يُمس ملف المساحة النشطة حالياً (المعطاة أو المقروءة من
+  ///    AppDatabase.activeWorkspaceId).
+  ///  • ملف المسودة التالف الذي يتعذر فتحه أصلاً يُحذف هو الآخر.
+  static Future<void> purgeGhostWorkspaceDatabasesOnDisk({
+    String currentWorkspaceId = '',
+  }) async {
+    // بيئة الاختبار تستخدم مزود قواعد وهمي — لا نلمس قرصاً حقيقياً.
+    if (Platform.environment.containsKey('FLUTTER_TEST')) return;
+    try {
+      final active = currentWorkspaceId.trim().isNotEmpty
+          ? currentWorkspaceId.trim()
+          : AppDatabase.activeWorkspaceId.trim();
+      final dir = Directory(await databaseDirectory());
+      if (!dir.existsSync()) return;
+
+      final files = dir
+          .listSync()
+          .whereType<File>()
+          .where((f) {
+            final base = p.basename(f.path);
+            return base.startsWith('nexora_WS-') && base.endsWith('.db');
+          })
+          .toList();
+
+      for (final file in files) {
+        final base = p.basename(file.path);
+        final rawWs = base
+            .substring('nexora_'.length, base.length - '.db'.length)
+            .trim();
+        // لا نمس المساحة النشطة أبداً مهما كانت.
+        if (rawWs.isEmpty || rawWs == active) continue;
+
+        Database? ghost;
+        try {
+          ghost = await openDatabase(file.path, readOnly: true);
+        } catch (_) {
+          // ملف تالف أو ليس قاعدة SQLite صالحة — مسودة شبح تُمسح.
+          await _safeDeleteDbFile(file.path);
+          continue;
+        }
+        try {
+          // (أ) الاسم التجاري الحقيقي.
+          var storeName = '';
+          try {
+            final stRows = await ghost.query(
+              'settings',
+              where: "key = 'businessName'",
+              limit: 1,
+            );
+            if (stRows.isNotEmpty) {
+              storeName = '${stRows.first['value'] ?? ''}'.trim();
+            }
+          } catch (_) {}
+
+          // (ب) الحسابات والعمليات المالية.
+          var accountsCount = 0;
+          var transactionsCount = 0;
+          for (final table in const ['accounts', 'transactions']) {
+            try {
+              final c = await ghost.rawQuery(
+                  "SELECT COUNT(*) AS c FROM $table WHERE COALESCE(deleted_at,'') = ''");
+              final n = int.tryParse('${c.first['c'] ?? 0}') ?? 0;
+              if (table == 'accounts') {
+                accountsCount = n;
+              } else {
+                transactionsCount = n;
+              }
+            } catch (_) {}
+          }
+
+          final isGhost = isGhostWorkspaceSnapshot(
+            storeName: storeName,
+            accountsCount: accountsCount,
+            transactionsCount: transactionsCount,
+          );
+          if (!isGhost) continue;
+
+          // إغلاق المقبض قبل الحذف كي لا يبقى الملف مقفلاً على المنصة.
+          try {
+            await ghost.close();
+          } catch (_) {}
+          ghost = null;
+          await _safeDeleteDbFile(file.path);
+        } finally {
+          try {
+            await ghost?.close();
+          } catch (_) {}
+        }
+      }
+    } catch (_) {
+      // التنظيف الذاتي لا يُفشل أي مسار استدعٍ أبداً.
+    }
+  }
+
+  /// (Self-Healing) معيار «مسودة المنشأة الوهمية»: قاعدة ببادئة WS- بلا
+  /// اسم تجاري حقيقي (فارغ أو الافتراضي «متجري»/«منشأتي») وبلا أي حسابات
+  /// أو حركات مالية — هذه ليست منشأة عميل وإنما مسودة توليد تلقائي.
+  @visibleForTesting
+  static bool isGhostWorkspaceSnapshot({
+    required String storeName,
+    required int accountsCount,
+    required int transactionsCount,
+  }) {
+    final sn = storeName.trim();
+    final hasRealName =
+        sn.isNotEmpty && sn != 'متجري' && sn != 'منشأتي';
+    return !hasRealName && accountsCount == 0 && transactionsCount == 0;
+  }
+
+  /// حذف ملف قاعدة بيانات مع ملفاته المرافقة (-wal/-shm/-journal) بأمان.
+  static Future<void> _safeDeleteDbFile(String dbPath) async {
+    for (final suffix in const ['', '-wal', '-shm', '-journal']) {
+      try {
+        final f = File('$dbPath$suffix');
+        if (f.existsSync()) await f.delete();
+      } catch (_) {}
+    }
+  }
+
   /// فحص واسترجاع المنشآت المحفوظة محلياً على هذا الجهاز (من ملفات SQLite ومن SharedPreferences).
   static Future<List<WorkspaceInfo>> findLocalWorkspacesOnDevice({
     String? filterEmail,
@@ -2133,6 +2267,13 @@ class AccountWorkspace {
   }) async {
     final cleanFilter = (filterEmail ?? '').trim().toLowerCase();
     final mapByWs = <String, WorkspaceInfo>{};
+
+    // (Self-Healing) تنظيف مسودات المنشآت الوهمية الفارغة من القرص أولاً:
+    // أي ملف nexora_WS-*.db بلا اسم تجاري حقيقي وبلا حسابات أو حركات
+    // يُحذف فوراً، فلا يظهر في أي قائمة ولا يعود مرشحاً للدخول أبداً.
+    await purgeGhostWorkspaceDatabasesOnDisk(
+      currentWorkspaceId: currentWorkspaceId,
+    );
 
     // 1) فحص ملفات قواعد البيانات المعزولة على القرص (nexora_*.db)
     if (!Platform.environment.containsKey('FLUTTER_TEST')) {
@@ -2189,10 +2330,22 @@ class AccountWorkspace {
                 info.role.trim().toLowerCase() == 'member') {
               continue;
             }
-            if (info.storeName.isEmpty ||
-                info.storeName == 'متجري' ||
-                info.storeName == 'منشأتي') {
-              continue;
+            // (Self-Healing) استبعاد مسودات المنشآت الوهمية من السجل أيضاً:
+            // بلا اسم تجاري حقيقي، أو بادئة مسودة WS- مع الاسم الاحتياطي،
+            // أو مدخل لا يقابله ملف قاعدة بيانات فعلي على القرص.
+            final sn = info.storeName.trim();
+            final isDraftEntry = sn.isEmpty ||
+                sn == 'متجري' ||
+                sn == 'منشأتي' ||
+                (info.workspaceId.startsWith('WS-') &&
+                    (sn.startsWith('منشأة (') || sn.startsWith('منشأة(')));
+            if (isDraftEntry) continue;
+            if (!Platform.environment.containsKey('FLUTTER_TEST')) {
+              try {
+                final dbFile = File(p.join(await databaseDirectory(),
+                    'nexora_${info.workspaceId}.db'));
+                if (!dbFile.existsSync()) continue;
+              } catch (_) {}
             }
             if (cleanFilter.isEmpty ||
                 info.ownerEmail.toLowerCase() == cleanFilter) {
@@ -2888,7 +3041,11 @@ class AccountWorkspace {
         final emailKey = emailToKey(email);
         paths.add(
             '$root/workspaces/_registry/user_workspaces/$emailKey/$encWs.json');
-        paths.add('$root/workspaces/_registry/emails_index/$emailKey.json');
+        // (حماية الفهرس السحابي) يُمنع منعاً باتاً مسح مؤشر البريد الرئيسي
+        // (emails_index) عند حذف منشأة: هذا المؤشر هو ما يهتدي به تسجيل
+        // الدخول اللاحق إلى منشأة البريد المعتمدة في السحابة، ومسحه كان
+        // يفتح الباب لتوليد منشآت وهمية بديلة عند الدخول التالي بحساب
+        // Google. يُحذف فقط إدخال هذه المنشأة من قائمة منشآت البريد أعلاه.
       }
       final normPhone = normalizePhone(resolvedPhone);
       if (normPhone.length >= 7) {
