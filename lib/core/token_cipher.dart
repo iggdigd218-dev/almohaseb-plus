@@ -17,7 +17,9 @@ import 'package:crypto/crypto.dart';
 import 'package:path_provider/path_provider.dart';
 
 class TokenCipher {
-  static const _prefix = 'enc1:';
+  static const _prefixV1 = 'enc1:';
+  static const _prefixV2 = 'enc2:';
+  static const _nonceLength = 16;
   static Uint8List? _cachedKey;
 
   static Future<Uint8List?> _key() async {
@@ -44,12 +46,21 @@ class TokenCipher {
     }
   }
 
-  static Uint8List _xorStream(Uint8List data, Uint8List key) {
+  static Uint8List _xorStream(
+    Uint8List data,
+    Uint8List key, {
+    Uint8List? nonce,
+  }) {
     final out = Uint8List(data.length);
     var block = 0;
     var i = 0;
     while (i < data.length) {
-      final ks = sha256.convert([...key, block & 0xff, block >> 8]).bytes;
+      final ks = sha256.convert([
+        ...key,
+        if (nonce != null) ...nonce,
+        block & 0xff,
+        (block >> 8) & 0xff,
+      ]).bytes;
       for (var j = 0; j < ks.length && i < data.length; j++, i++) {
         out[i] = data[i] ^ ks[j];
       }
@@ -58,22 +69,53 @@ class TokenCipher {
     return out;
   }
 
-  /// يعمّي نصاً للتخزين. إن تعذّر الوصول للمفتاح يُعاد النص كما هو.
+  /// يعمّي نصاً للتخزين مع متجه تهيئة عشوائي (Nonce) لكل عملية تشفير.
+  /// إن تعذّر الوصول للمفتاح يُعاد النص كما هو.
   static Future<String> protect(String plain) async {
-    if (plain.isEmpty || plain.startsWith(_prefix)) return plain;
+    if (plain.isEmpty ||
+        plain.startsWith(_prefixV2) ||
+        plain.startsWith(_prefixV1)) {
+      return plain;
+    }
     final key = await _key();
     if (key == null) return plain;
-    final enc = _xorStream(Uint8List.fromList(utf8.encode(plain)), key);
-    return '$_prefix${base64Encode(enc)}';
+    final rnd = Random.secure();
+    final nonce = Uint8List.fromList(
+      List<int>.generate(_nonceLength, (_) => rnd.nextInt(256)),
+    );
+    final enc = _xorStream(
+      Uint8List.fromList(utf8.encode(plain)),
+      key,
+      nonce: nonce,
+    );
+    final combined = Uint8List(_nonceLength + enc.length)
+      ..setRange(0, _nonceLength, nonce)
+      ..setRange(_nonceLength, _nonceLength + enc.length, enc);
+    return '$_prefixV2${base64Encode(combined)}';
   }
 
-  /// يفك التعمية. القيم القديمة (نص صريح) تُعاد كما هي — توافق خلفي.
+  /// يفك التعمية (يدعم enc2 المزود بـ Nonce، و enc1 القديم، والنص الصريح توافقاً خلفياً).
   static Future<String> reveal(String stored) async {
-    if (!stored.startsWith(_prefix)) return stored;
+    if (stored.startsWith(_prefixV2)) {
+      final key = await _key();
+      if (key == null) return '';
+      try {
+        final raw = Uint8List.fromList(
+          base64Decode(stored.substring(_prefixV2.length)),
+        );
+        if (raw.length < _nonceLength) return '';
+        final nonce = Uint8List.sublistView(raw, 0, _nonceLength);
+        final cipher = Uint8List.sublistView(raw, _nonceLength);
+        return utf8.decode(_xorStream(cipher, key, nonce: nonce));
+      } catch (_) {
+        return '';
+      }
+    }
+    if (!stored.startsWith(_prefixV1)) return stored;
     final key = await _key();
     if (key == null) return '';
     try {
-      final raw = base64Decode(stored.substring(_prefix.length));
+      final raw = base64Decode(stored.substring(_prefixV1.length));
       return utf8.decode(_xorStream(Uint8List.fromList(raw), key));
     } catch (_) {
       return '';
