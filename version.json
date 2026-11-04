@@ -1,5 +1,5 @@
 {
-  "version": "3.98.18+333",
+  "version": "3.98.19+334",
   "minSupported": "3.13.0",
   "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "releaseUrl": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/tag/latest",
@@ -14,12 +14,12 @@
     "windows": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/NexoraSetup.exe"
   },
   "downloadsMirror": {
-    "android": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.18-333/nexora-arm64.apk",
+    "android": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.19-334/nexora-arm64.apk",
     "androidVariants": {
-      "arm64": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.18-333/nexora-arm64.apk",
-      "armv7": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.18-333/nexora-armv7.apk"
+      "arm64": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.19-334/nexora-arm64.apk",
+      "armv7": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.19-334/nexora-armv7.apk"
     },
-    "windows": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.18-333/NexoraSetup.exe"
+    "windows": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.19-334/NexoraSetup.exe"
   },
   "downloadsFallbackGithub": {
     "android": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/nexora-arm64.apk",
@@ -29,6 +29,6 @@
     },
     "windows": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/NexoraSetup.exe"
   },
-  "publishedAt": "2026-11-03T19:05:00Z",
-  "notes": "• معالجة رسائل أذونات Google Drive وإتاحة الحفظ المباشر عبر تطبيق Drive بسلاسة.\n• عزل كامل للاستخدام المحلي المستقل: إخفاء إدارة المجموعة والأسهم كلياً دون أي أثر سحابي.\n• منع الحسابات المكررة وتوجيه فوري لنافذة تأسيس المنشأة مع دمج بيانات الأجهزة المتطابقة."
+  "publishedAt": "2026-11-03T22:35:00Z",
+  "notes": "• إعادة هيكلة مسارات تسجيل الدخول بالكامل: ردود واضحة ومباشرة عند إدخال البريد وكلمة المرور وحماية من التعليق.\n• دمج وتوحيد المنشآت المتكررة تلقائياً بدون فقدان أي بيانات واسترجاع السجلات التاريخية.\n• فصل أذونات Google Drive عن شاشة الدخول الأولى وفتح المنشأة السابقة للمستخدمين فوراً."
 }

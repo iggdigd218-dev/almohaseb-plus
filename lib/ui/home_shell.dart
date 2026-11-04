@@ -18,6 +18,7 @@ import '../data/providers.dart';
 import '../data/sync/device_registry.dart';
 import '../data/sync/cloud_join.dart';
 import '../data/update_service.dart';
+import 'my_accounts_dialog.dart';
 import 'update_section.dart';
 import 'profile_dialog.dart';
 import 'account_form.dart';
@@ -261,6 +262,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
         await _startGlobalJoinWatcher();
       }
     }());
+
     // (PR-6) استماع لحظي: إعادة تسمية جهازنا من المدير (أو تطبيق الإدارة)
     // تُطبَّق فوراً على الواجهة الحية — مزوّدات الهوية/الإعدادات — دون
     // إعادة تشغيل التطبيق.
@@ -2998,6 +3000,13 @@ class _Drawer extends ConsumerWidget {
                 ],
               ),
             ),
+            ),
+
+            // المنشآت المرتبطة بالبريد المسجّل، أعلى عناصر القائمة الجانبية.
+            ListTile(
+              leading: const Icon(Icons.manage_accounts_outlined),
+              title: const Text('عرض حساباتي'),
+              onTap: () => showMyAccountsDialog(context),
             ),
 
             // ---------- مفتاح كبسولي للتبديل بين وضع المبيعات ووضع المحاسبة ----------
