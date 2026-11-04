@@ -86,8 +86,10 @@ class GoogleAuthService {
   GoogleAuthService(this.db);
 
   /// المثال الموحّد (يعيد null على منصات لا تدعمه كويندوز/لينكس).
-  GoogleSignIn? _ensureSignIn() {
-    _googleSignIn ??= createUnifiedGoogleSignIn(forDrive: true);
+  GoogleSignIn? _ensureSignIn({bool forDrive = false}) {
+    if (_googleSignIn == null) {
+      _googleSignIn = createUnifiedGoogleSignIn(forDrive: forDrive);
+    }
     return _googleSignIn;
   }
 
@@ -244,9 +246,12 @@ class GoogleAuthService {
     return saved.isNotEmpty ? saved : null;
   }
 
-  /// تسجيل الدخول (يفتح نافذة Google للمستخدم) مع حماية صارمة ضد التعليق عند اختيار الحساب.
-  Future<GoogleAuthResult> signIn({bool forceAccountPicker = true}) async {
-    final gs = _ensureSignIn();
+  /// تسجيل الدخول (يفتح نافذة Google للمستخدم) مع معايير المصادقة القياسية.
+  Future<GoogleAuthResult> signIn({
+    bool forceAccountPicker = false,
+    bool forDrive = false,
+  }) async {
+    final gs = _ensureSignIn(forDrive: forDrive);
     final supported = isPlatformSupportingGoogleSignIn();
     if (gs == null) {
       return GoogleAuthResult.fail(supported
@@ -255,8 +260,7 @@ class GoogleAuthService {
               'يمكنك استخدام التطبيق محليًا بدون حساب Google.');
     }
     try {
-      // ضمان فتح نافذة اختيار حساب Google دائماً ليتمكن المستخدم من اختيار أي بريد بحرية
-      if (forceAccountPicker || gs.currentUser != null) {
+      if (forceAccountPicker) {
         try {
           await gs.signOut().timeout(const Duration(seconds: 2));
         } catch (_) {}
@@ -264,13 +268,13 @@ class GoogleAuthService {
 
       GoogleSignInAccount? a;
       try {
-        a = await gs.signIn().timeout(const Duration(seconds: 25));
+        a = await gs.signIn().timeout(const Duration(seconds: 35));
       } on TimeoutException {
         // في حال تعليق Play Services بعد اختيار الحساب، نلتقط الحساب المختار إن وُجد في currentUser أو signInSilently
         a = gs.currentUser ??
             await gs
                 .signInSilently(suppressErrors: true)
-                .timeout(const Duration(seconds: 3), onTimeout: () => null);
+                .timeout(const Duration(seconds: 5), onTimeout: () => null);
         if (a == null) rethrow;
       }
       if (a == null) {

@@ -261,6 +261,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
         await _startGlobalJoinWatcher();
       }
     }());
+
     // (PR-6) استماع لحظي: إعادة تسمية جهازنا من المدير (أو تطبيق الإدارة)
     // تُطبَّق فوراً على الواجهة الحية — مزوّدات الهوية/الإعدادات — دون
     // إعادة تشغيل التطبيق.
