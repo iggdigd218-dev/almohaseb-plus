@@ -13,7 +13,11 @@ import '../core/theme.dart';
 import '../data/backup_engine.dart';
 import '../data/google_drive_service.dart';
 import '../data/providers.dart';
+import '../data/repository.dart'
+    show ParentAccountNotFoundException;
+import '../data/pos_cart.dart';
 import '../data/sync/google_auth_service.dart';
+import '../data/sync/subscription_guard.dart';
 import '../data/sync/sync_engine.dart';
 import 'profile_dialog.dart';
 import 'trial_ui.dart' show ensureFeatureUnlocked;
@@ -311,8 +315,13 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
       );
 
       await _resyncGroupAfterRestore();
-      // تحديث حالة التطبيق ومزودات Riverpod
-      ref.invalidate(repoProvider);
+      // (دفعة التدقيق) لا يُبطل مزود المستودع كلياً بعد الاستعادة —
+      // إعادة إنشاء repoProvider تفتح نسخة موازية وتفقد الحالة المرجعية
+      // لكل ما يمسكها. بدلها: تصفير سلة البيع المسحوبة من بيانات ما قبل
+      // الاستعادة، وتصفير كاش الاشتراك ليعاد فحصه على البيانات الجديدة،
+      // ثم تحديث عام للمزودات.
+      ref.read(posDraftProvider.notifier).clear();
+      SubscriptionGuard.debugReset();
       bump(ref);
 
       if (mounted) {
@@ -891,12 +900,31 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
                     ),
                     trailing: TextButton(
                       onPressed: () async {
-                        await ref
-                            .read(repoProvider)
-                            .restoreFromTrash(t['id'] as int);
-                        bump(ref);
-                        if (context.mounted) {
-                          showSnack(context, 'تم الاسترجاع ✅');
+                        // (دفعة التدقيق) الاسترجاع من السلة قد يفشل إذا
+                        // كان الحساب الأب للعملية محذوفاً نهائياً — رسالة
+                        // واضحة بدل استثناء غير معالج.
+                        try {
+                          await ref
+                              .read(repoProvider)
+                              .restoreFromTrash(t['id'] as int);
+                          bump(ref);
+                          if (context.mounted) {
+                            showSnack(context, 'تم الاسترجاع ✅');
+                          }
+                        } on ParentAccountNotFoundException {
+                          bump(ref);
+                          if (context.mounted) {
+                            showSnack(
+                              context,
+                              'تعذر استرجاع العملية لأن الحساب التابع لها محذوف نهائياً',
+                              error: true,
+                            );
+                          }
+                        } catch (e) {
+                          if (context.mounted) {
+                            showSnack(context, 'تعذر الاسترجاع: $e',
+                                error: true);
+                          }
                         }
                       },
                       child: const Text('استرجاع'),

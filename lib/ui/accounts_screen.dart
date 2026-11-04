@@ -89,10 +89,14 @@ class AccountsScreen extends ConsumerWidget {
                     switch (balanceFilter) {
                       case _BalanceFilter.all:
                         return true;
+                      // (دفعة التدقيق) التوحيد مع accounting.dart و
+                      // account_detail/Dashboard: الموجب = «عليه» (مدين،
+                      // مستحق لنا) والسالب = «له» (دائن، مستحق علينا) —
+                      // كان الاتجاه معكوساً هنا.
                       case _BalanceFilter.debt:
-                        return it.balance < -Fmt.moneyEpsilon;
-                      case _BalanceFilter.credit:
                         return it.balance > Fmt.moneyEpsilon;
+                      case _BalanceFilter.credit:
+                        return it.balance < -Fmt.moneyEpsilon;
                       case _BalanceFilter.settled:
                         return it.balance.abs() <= Fmt.moneyEpsilon;
                     }
@@ -308,14 +312,14 @@ class _EnhancedFilterBarState extends ConsumerState<_EnhancedFilterBar> {
                   'عليكم',
                   balanceFilter == _BalanceFilter.debt,
                   () => bNotifier.state = _BalanceFilter.debt,
-                  color: const Color(0xFFEF4444),
+                  color: const Color(0xFF10B981),
                 ),
                 _chip(
                   context,
                   'لكم',
                   balanceFilter == _BalanceFilter.credit,
                   () => bNotifier.state = _BalanceFilter.credit,
-                  color: const Color(0xFF10B981),
+                  color: const Color(0xFFEF4444),
                 ),
                 _chip(
                   context,
@@ -427,8 +431,10 @@ class _AccountCard extends StatelessWidget {
       orElse: () => kDefaultCurrencies.first,
     );
 
-    final isDebt = item.balance < -Fmt.moneyEpsilon;
-    final isCredit = item.balance > Fmt.moneyEpsilon;
+    // (دفعة التدقيق) نفس التوحيد: موجب = عليكم (مدين، أخضر كما في كشف
+    // الحساب)، سالب = لكم (دائن، أحمر).
+    final isDebt = item.balance > Fmt.moneyEpsilon;
+    final isCredit = item.balance < -Fmt.moneyEpsilon;
     final initials = _getInitials(a.name);
     final accent = _avatarColor(a.name);
 
@@ -538,17 +544,17 @@ class _AccountCard extends StatelessWidget {
                     else
                       Text(
                         isDebt
-                            ? '${Fmt.moneyFor(item.balance.abs(), c)} ${c.symbol}'
+                            ? '+ ${Fmt.moneyFor(item.balance, c)} ${c.symbol}'
                             : (isCredit
-                                ? '+ ${Fmt.moneyFor(item.balance, c)} ${c.symbol}'
+                                ? '${Fmt.moneyFor(item.balance.abs(), c)} ${c.symbol}'
                                 : '0 ${c.symbol}'),
                         style: TextStyle(
                           fontSize: 15.5,
                           fontWeight: FontWeight.w900,
                           color: isDebt
-                              ? const Color(0xFFEF4444)
+                              ? const Color(0xFF10B981)
                               : (isCredit
-                                  ? const Color(0xFF10B981)
+                                  ? const Color(0xFFEF4444)
                                   : (isDark
                                       ? const Color(0xFF94A3B8)
                                       : const Color(0xFF64748B))),
@@ -561,9 +567,9 @@ class _AccountCard extends StatelessWidget {
                         fontSize: 11,
                         fontWeight: FontWeight.w700,
                         color: isDebt
-                            ? const Color(0xFFEF4444)
+                            ? const Color(0xFF10B981)
                             : (isCredit
-                                ? const Color(0xFF10B981)
+                                ? const Color(0xFFEF4444)
                                 : (isDark
                                     ? const Color(0xFF64748B)
                                     : const Color(0xFF94A3B8))),
