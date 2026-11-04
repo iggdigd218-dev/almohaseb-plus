@@ -7474,7 +7474,9 @@ class Repo {
     if (isCreate && itemToSave.plu == null) {
       // (2026-09-24) رقم الترقيم السريع: يُعيَّن مرة واحدة عند الإضافة
       // من أعلى رقم موجود + 1، ثم يثبت للأبد (لا إعادة ترتيب ولا تدوير).
-      itemToSave = itemToSave.copyWith(plu: await AppDatabase.nextPlu(db));
+      itemToSave = itemToSave.copyWith(
+        plu: await AppDatabase.nextPlu(db, workspaceId: _workspaceId),
+      );
     }
     late final int id;
     ({int itemId, String name, double qty, double minQty})? lowStock;

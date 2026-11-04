@@ -12,6 +12,7 @@ import 'package:http/http.dart' as http;
 import 'package:sqflite/sqflite.dart';
 
 import '../../core/database.dart';
+import '../../core/desktop_net.dart';
 import '../../core/token_cipher.dart';
 import 'account_workspace.dart';
 import 'auto_backup.dart';
@@ -53,7 +54,16 @@ class SyncEngine {
   bool _running = false;
   bool _started = false;
   bool get hasStarted => _started;
-  bool get isCloudSyncActive => _started && _cloudTransport != null;
+  bool get isCloudSyncActive {
+    if (!_started || _cloudTransport == null) return false;
+    final diag = SyncDiagnostics.instance.snapshot;
+    if (DesktopNet.netErrorNotifier.value != null ||
+        diag.lastPullFault == SyncFaultSource.network ||
+        diag.lastPushFault == SyncFaultSource.network) {
+      return false;
+    }
+    return true;
+  }
 
   /// «نافذة الخطر»: تُستدعى عندما يكتشف المحرك عرقلة حقيقية تمنع المزامنة
   /// (مثل رفض الصلاحيات/القواعد أو تعارض البيانات أو خطأ برمجي/بنيوي)،

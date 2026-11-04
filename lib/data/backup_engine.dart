@@ -8,9 +8,11 @@ import 'package:path_provider/path_provider.dart';
 import '../core/app_version.dart';
 import '../core/cloud_config.dart';
 import '../core/database.dart';
+import '../core/desktop_net.dart';
 import '../core/format.dart';
 import 'repository.dart';
 import 'sync/subscription_guard.dart';
+import 'sync/sync_diagnostics.dart';
 import 'sync/sync_engine.dart';
 
 /// استثناء مخصص لعمليات النسخ الاحتياطي والاستعادة.
@@ -235,11 +237,20 @@ class BackupEngine {
     if (debugForceCloudSyncActive != null) {
       return debugForceCloudSyncActive!;
     }
-    if (effectiveEngine != null && effectiveEngine.isCloudSyncActive) {
-      final effectiveSub = sub ?? SubscriptionGuard.lastState;
-      if (!effectiveSub.expired && !effectiveSub.isFrozen && effectiveSub.isActive) {
-        return true;
-      }
+    // فحص انقطاع الاتصال الفعلي: لا نمنع المستخدم من الاستعادة أوفلاين
+    final diag = SyncDiagnostics.instance.snapshot;
+    if (DesktopNet.netErrorNotifier.value != null ||
+        diag.lastPullFault == SyncFaultSource.network ||
+        diag.lastPushFault == SyncFaultSource.network) {
+      return false;
+    }
+    final effectiveSub = sub ?? SubscriptionGuard.lastState;
+    if (effectiveSub.expired || effectiveSub.isFrozen || !effectiveSub.isActive) {
+      return false;
+    }
+    // إذا مرر محرك المزامنة الفعلي، نعتمد على حالة اتصاله الحقيقية مباشرةً
+    if (effectiveEngine != null) {
+      return effectiveEngine.isCloudSyncActive;
     }
     try {
       final st = await repo.settings();
@@ -251,12 +262,14 @@ class BackupEngine {
       if (mode == 'standalone') {
         return false;
       }
-      final url = effectiveBackendUrl(st['cloudBackendUrl']);
-      if (url.isEmpty) return false;
-      final effectiveSub = sub ?? SubscriptionGuard.lastState;
-      if (effectiveSub.expired || effectiveSub.isFrozen) {
+      // عدم الاعتماد على الرابط الافتراضي الساكن ما لم تكن المنشأة مهيأة سحابياً بالفعل
+      final configuredUrl = (st['cloudBackendUrl'] ?? '').trim();
+      final isProvisioned = (st['cloudWorkspaceProvisioned'] ?? '').trim() == '1';
+      if (configuredUrl.isEmpty && !isProvisioned) {
         return false;
       }
+      final url = effectiveBackendUrl(configuredUrl);
+      if (url.isEmpty) return false;
       return true;
     } catch (_) {
       return false;
