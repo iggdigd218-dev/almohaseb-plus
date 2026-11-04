@@ -1,16 +1,11 @@
-import 'dart:convert';
-
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:http/http.dart' as http;
 
-import '../core/auth_config.dart';
 import '../core/cloud_config.dart';
 import '../data/providers.dart';
 import '../data/sync/account_workspace.dart';
-import '../data/sync/firebase_auth_service.dart';
 
-/// تعرض المطابقة بالبريد الذي يؤكده Firebase، وليس البريد المدخل يدوياً.
+/// تعرض المنشآت المطابقة للبريد المسجّل في المنشأة الحالية.
 Future<void> showMyAccountsDialog(BuildContext context) async {
   await showDialog<void>(
     context: context,
@@ -40,40 +35,12 @@ class _MyAccountsDialogState extends ConsumerState<_MyAccountsDialog> {
   Future<void> _load() async {
     if (mounted) setState(() { _loading = true; _message = ''; });
     try {
-      if (!FirebaseAuthRest.hasAccountSession || effectiveFirebaseApiKey.isEmpty) {
-        throw StateError('سجّل الدخول بحساب بريد إلكتروني موثّق لعرض منشآتك.');
-      }
-      final token = await FirebaseAuthRest.cloudIdToken();
-      if (token == null || token.isEmpty || !FirebaseAuthRest.hasAccountSession) {
-        throw StateError('تعذّر التحقق من جلسة الحساب. سجّل الدخول مجدداً.');
-      }
-      final response = await http.post(
-        Uri.https('identitytoolkit.googleapis.com', '/v1/accounts:lookup',
-            {'key': effectiveFirebaseApiKey}),
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'idToken': token}),
-      ).timeout(const Duration(seconds: 15));
-      if (response.statusCode != 200) {
-        throw StateError('تعذّر التحقق من البريد. تحقق من الاتصال وسجّل الدخول مجدداً.');
-      }
-      final decoded = jsonDecode(response.body);
-      final users = decoded is Map ? decoded['users'] : null;
-      if (users is! List || users.length != 1 || users.first is! Map) {
-        throw StateError('تعذّر التحقق من هوية الحساب.');
-      }
-      final identity = users.first as Map;
-      final email = '${identity['email'] ?? ''}'.trim().toLowerCase();
-      final uid = '${identity['localId'] ?? ''}'.trim();
-      if (identity['emailVerified'] != true || email.isEmpty ||
-          uid.isEmpty || uid != FirebaseAuthRest.currentUid) {
-        throw StateError('يلزم تسجيل الدخول ببريد إلكتروني موثّق.');
-      }
       final repo = ref.read(repoProvider);
       final settings = await repo.settings();
-      final currentEmail = (settings['account.email'] ?? settings['email'] ?? '')
+      final email = (settings['account.email'] ?? settings['email'] ?? '')
           .trim().toLowerCase();
-      if (currentEmail != email) {
-        throw StateError('البريد الحالي لا يطابق جلسة الحساب الموثّقة.');
+      if (email.isEmpty) {
+        throw StateError('لا يوجد بريد مسجّل في المنشأة الحالية. سجّل الدخول أو أضف البريد أولاً.');
       }
       final all = await AccountWorkspace.listUserWorkspaces(
         repo,
@@ -108,7 +75,7 @@ class _MyAccountsDialogState extends ConsumerState<_MyAccountsDialog> {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.stretch,
                     children: [
-                      Text('المنشآت المرتبطة بالبريد الموثّق: $_email'),
+                      Text('المنشآت المطابقة للبريد المسجّل: $_email'),
                       const Text('قد تكون القائمة غير مكتملة عند تعذر الاتصال بالسحابة.', style: TextStyle(fontSize: 12)),
                       const SizedBox(height: 12),
                       if (_workspaces.isEmpty)

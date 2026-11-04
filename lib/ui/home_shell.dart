@@ -3002,7 +3002,7 @@ class _Drawer extends ConsumerWidget {
             ),
             ),
 
-            // المنشآت المرتبطة بالبريد الموثّق، أعلى عناصر القائمة الجانبية.
+            // المنشآت المرتبطة بالبريد المسجّل، أعلى عناصر القائمة الجانبية.
             ListTile(
               leading: const Icon(Icons.manage_accounts_outlined),
               title: const Text('عرض حساباتي'),
