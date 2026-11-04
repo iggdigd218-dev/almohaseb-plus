@@ -149,6 +149,14 @@ class CatalogSyncGuard {
     );
   }
 
+  /// (دفعة التدقيق) تذكّر آخر لقطة منشورة: بصمة بياناتها + وقت آخر رفع —
+  /// يمنع إعادة رفع snapshot.json الضخم في كل دورة تحقق دون تغيير فعلي.
+  static String? _lastSnapshotHash;
+  static int _lastSnapshotPublishMs = 0;
+
+  /// أدنى فاصل زمني بين رفعين متتاليين للقطة (خنق إرسال).
+  static const int _snapshotPublishGapMs = 120000;
+
   /// التحقق السحابي الشامل ونشر البصمة ومطابقة الأجهزة الأخرى.
   static Future<void> verifyAndPublish({
     required Repo repo,
@@ -218,20 +226,33 @@ class CatalogSyncGuard {
         // نشر لقطة محدثة للكتالوج والحسابات ليتمكن الأعضاء من معالجة أي حسابات أو أصناف مؤقتة
         try {
           final snap = await CloudJoin.buildWorkspaceSnapshot(repo);
-          final snapPayload = {
-            'createdAt': DateTime.now().toIso8601String(),
-            'hostDeviceId': ourId,
-            'compacted_through_ts': DateTime.now().millisecondsSinceEpoch,
-            'data': snap,
-          };
-          await http
-              .put(
-                Uri.parse('$root/snapshot.json').replace(
-                    queryParameters: token != null ? {'auth': token} : null),
-                body: jsonEncode(snapPayload),
-                headers: {'Content-Type': 'application/json'},
-              )
-              .timeout(const Duration(seconds: 10));
+          // (دفعة التدقيق) لا يُرفع snapshot.json في كل دورة تحقق: البناء
+          // واحد والرفع فقط عند تغير بصمة بيانات اللقطة فعلاً وبمرور فاصل
+          // زمني منذ آخر رفع — كان يُرفع كاملاً في كل استدعاء مهما كرر.
+          // البصمة على «بيانات» اللقطة لا على الغلاف (الطوابع الزمنية
+          // فيهما تتغير دوماً وتبطل أي مقارنة).
+          final snapHash =
+              sha256.convert(utf8.encode(jsonEncode(snap))).toString();
+          final nowMs = DateTime.now().millisecondsSinceEpoch;
+          if (snapHash != _lastSnapshotHash &&
+              nowMs - _lastSnapshotPublishMs >= _snapshotPublishGapMs) {
+            final snapPayload = {
+              'createdAt': DateTime.now().toIso8601String(),
+              'hostDeviceId': ourId,
+              'compacted_through_ts': DateTime.now().millisecondsSinceEpoch,
+              'data': snap,
+            };
+            await http
+                .put(
+                  Uri.parse('$root/snapshot.json').replace(
+                      queryParameters: token != null ? {'auth': token} : null),
+                  body: jsonEncode(snapPayload),
+                  headers: {'Content-Type': 'application/json'},
+                )
+                .timeout(const Duration(seconds: 10));
+            _lastSnapshotHash = snapHash;
+            _lastSnapshotPublishMs = nowMs;
+          }
         } catch (_) {}
         return;
       }

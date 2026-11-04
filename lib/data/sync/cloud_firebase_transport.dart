@@ -1059,10 +1059,18 @@ class CloudFirebaseTransport implements SyncTransport {
             eventName = line.substring(6).trim();
           } else if (line.startsWith('data:')) {
             if (eventName == 'put' || eventName == 'patch') {
-              // أول حدث put هو اللقطة الأولية عند فتح القناة — نتجاهله
-              // (السحب الدوري/الافتتاحي يغطيه) ونتفاعل مع ما بعده فقط.
+              // أول حدث put عند فتح القناة: إن كانت حمولته فارغة (data
+              // = null) فهو إشعار اللقطة الافتتاحية الفارغة فنتجاهله
+              // (السحب الدوري/الافتتاحي يغطيه). أما إن حمل بيانات فعلية
+              // فهو تغيير حقيقي وصل بعد مؤشر الاستئناف — إسقاطه كان يفقد
+              // أول تحديث حي (وأسوأه: في مساحة هادئة لا يصل بعده شيء).
               if (!skippedInitial && eventName == 'put') {
                 skippedInitial = true;
+                if (_ssePutHasPayload(line.substring(5).trim())) {
+                  try {
+                    onCloudChanged?.call();
+                  } catch (_) {}
+                }
               } else {
                 try {
                   onCloudChanged?.call();
@@ -1088,6 +1096,23 @@ class CloudFirebaseTransport implements SyncTransport {
       await Future<void>.delayed(Duration(seconds: _sseRetrySeconds));
       // تراجع سريع بين 2 إلى 15 ثانية كحد أقصى لسرعة التعافي وإعادة الاتصال.
       _sseRetrySeconds = (_sseRetrySeconds * 2).clamp(2, 15);
+    }
+  }
+
+  /// (دفعة التدقيق) هل يحمل حدث put الوارد حمولة بيانات فعلية؟
+  /// أحداث Firebase SSE تأتي بصيغة {"path": "...", "data": {...}} —
+  /// فقرة data تساوي null عند اللقطة الافتتاحية الفارغة فقط.
+  static bool _ssePutHasPayload(String dataLine) {
+    if (dataLine.isEmpty) return false;
+    try {
+      final decoded = jsonDecode(dataLine);
+      if (decoded is Map) {
+        return decoded['data'] != null;
+      }
+      return decoded != null;
+    } catch (_) {
+      // حمولة غير قابلة للتفكيك — نتحفظ بها كتغيير محتمل.
+      return true;
     }
   }
 }
