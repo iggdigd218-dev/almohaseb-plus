@@ -113,11 +113,18 @@ Future<String> ensureWorkspace(Database db, {Repo? repo}) async {
   }
 
 
-  // 2.5 (دفعة التدقيق) الإعداد الصريح (rawPref) يسبق المسح الأعمى للجدول:
-  // إذا حُددت مساحة في الإعدادات لكن صفها غاب عن جدول workspaces (استيراد
-  // جزئي أو تنظيف أو ترحيل)، نُعيد إنشاء الصف ونعتمدها — كان السقوط على
-  // «أي صف حقيقي موجود» يعيد توجيه الجهاز إلى مساحة مختلفة كلياً.
-  if (rawPref != null && rawPref.isNotEmpty && rawPref != 'default') {
+  // 2.5 (دفعة التدقيق) الإعداد الصريح (rawPref) يسبق المسح الأعمى للجدول،
+  // لكن **للجهاز المسجل فقط** (account.email معبأ): إذا حُددت مساحة في
+  // الإعدادات لكن صفها غاب عن جدول workspaces (استيراد جزئي أو تنظيف أو
+  // ترحيل)، نُعيد إنشاء الصف ونعتمدها — كان السقوط على «أي صف حقيقي
+  // موجود» يعيد توجيه الجهاز إلى مساحة مختلفة كلياً.
+  // جهاز بلا بريد مسجل: الربط الصريح لصف غير موجود رابط شبح (WSDET-03)
+  // لا يخطف الاختيار — يُهمل ويستمر البحث.
+  if (rawPref != null &&
+      rawPref.isNotEmpty &&
+      rawPref != 'default' &&
+      accountEmail != null &&
+      accountEmail.isNotEmpty) {
     final now = DateTime.now().toIso8601String();
     await db.insert(
       'workspaces',
@@ -125,7 +132,7 @@ Future<String> ensureWorkspace(Database db, {Repo? repo}) async {
         'id': rawPref,
         'name': 'متجري',
         'owner_google_id': '',
-        'owner_email': accountEmail ?? '',
+        'owner_email': accountEmail,
         'owner_name': '',
         'created_at': now,
         'updated_at': now,
