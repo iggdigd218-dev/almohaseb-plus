@@ -20,6 +20,7 @@ import '../core/workspace_mode.dart';
 import 'sync/cloud_join.dart';
 import 'sync/device_id.dart';
 import 'sync/device_registry.dart';
+import 'sync/firebase_auth_service.dart';
 import 'sync/google_auth_service.dart';
 import 'sync/operation.dart';
 // (PR-2) استيراد دائري مقصود ومسموح في Dart: امتداد ApplyRemoteOp يوسّع
@@ -8552,6 +8553,14 @@ class Repo {
               final takeoverSig = Hmac(sha256, sigKey)
                   .convert(utf8.encode(sigPayload))
                   .toString();
+              // (دفعة التدقيق) توكن المصادقة الحقيقي: المستقبِلات المحصّنة
+              // لا تقبل email_takeover إلا عبر تحقق Firebase الفعلي
+              // (accounts:lookup). بقي takeover_signature للتوافق مع
+              // الأجهزة التي لم تُحدَّث بعد فقط.
+              String takeoverToken = '';
+              try {
+                takeoverToken = await FirebaseAuthRest.cloudIdToken() ?? '';
+              } catch (_) {}
               await queueOperation(
                 entityType: EntityKind.setting,
                 entityId: 'ownershipTransfer',
@@ -8566,6 +8575,7 @@ class Repo {
                     'owner_email': ownerEmail,
                     'owner_uid': ownerUid,
                     'takeover_signature': takeoverSig,
+                    'verified_claim': takeoverToken,
                     'demote_previous_to': 'agent',
                     'at': now,
                   }),

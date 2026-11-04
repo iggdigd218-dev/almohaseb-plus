@@ -583,6 +583,10 @@ Future<void> showDevicePermissionsDialog(
                   await repo.setDevicePermissions(
                       device['id'] as String, role, perms);
                   await engine.broadcastRosterChange();
+                  // (دفعة التدقيق) تحديث المزودات فوراً — كان الحوار يغلق
+                  // دون bump فتبقى الأدوار/الصلاحيات المعروضة قديمة حتى
+                  // إعادة الدخول للشاشة.
+                  bump(ref);
                   if (ctx.mounted) Navigator.pop(ctx);
                   Sfx.success();
                 } catch (e) {
