@@ -1927,11 +1927,36 @@ class _HomeShellState extends ConsumerState<HomeShell>
                     onSelected: (val) {
                       if (val == 'theme') {
                         Sfx.tap();
-                        rref.read(themeModeProvider.notifier).state =
-                            darkActive ? ThemeMode.light : ThemeMode.dark;
+                        final next = darkActive
+                            ? ThemeMode.light
+                            : ThemeMode.dark;
+                        rref.read(themeModeProvider.notifier).state = next;
+                        // (دفعة الواجهات) الاختيار كان في الذاكرة فقط: main.dart
+                        // يقرأ المفتاح `theme` عند الإقلاع ولا كاتب له في الشجرة،
+                        // فكان الوضع المختار يزول مع كل إعادة تشغيل.
+                        unawaited(() async {
+                          try {
+                            await rref.read(repoProvider).setSetting(
+                                  'theme',
+                                  next == ThemeMode.dark ? 'dark' : 'light',
+                                );
+                          } catch (_) {}
+                        }());
                       } else if (val == 'balances') {
                         Sfx.tap();
-                        rref.read(hideBalancesProvider.notifier).state = !hidden;
+                        final next = !hidden;
+                        rref.read(hideBalancesProvider.notifier).state = next;
+                        // (دفعة الواجهات) نفس العلة في مفتاح الخصوصية:
+                        // `hideBalances` يُقرأ عند الإقلاع ولا كاتب له — فكانت
+                        // الأرصدة تعود ظاهرة بعد كل تشغيل. حفظ محلي لا مُزامن.
+                        unawaited(() async {
+                          try {
+                            await rref.read(repoProvider).setSetting(
+                                  'hideBalances',
+                                  next ? '1' : '0',
+                                );
+                          } catch (_) {}
+                        }());
                       } else if (val == 'refresh') {
                         bump(ref);
                         _refreshSync();
