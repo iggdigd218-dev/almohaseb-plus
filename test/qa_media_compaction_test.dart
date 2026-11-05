@@ -67,7 +67,7 @@ void main() {
       expect(invSrc, contains('imageQuality: 80'));
       expect(mpSrc, contains('int targetSize = 320'));
       expect(mpSrc, contains('targetSize: 280'));
-      expect(posGridSrc, contains('crispCacheWidth(context, 240)'));
+      expect(posGridSrc, contains('crispCacheWidth(context, 280)'));
       expect(posGridSrc, contains('FilterQuality.medium'));
 
       final tmp = await Directory.systemTemp.createTemp('nexora_crisp_img_');

@@ -49,8 +49,25 @@ final settingsProvider = FutureProvider<Map<String, String>>((ref) async {
       .timeout(const Duration(seconds: 8), onTimeout: () => <String, String>{});
 });
 
-/// وضع السمة.
-final themeModeProvider = StateProvider<ThemeMode>((ref) => ThemeMode.system);
+/// وضع السمة (الافتراضي: النهاري الثابت غير المتأثر بإعدادات الجهاز).
+final themeModeProvider = StateProvider<ThemeMode>((ref) => ThemeMode.light);
+
+/// حفظ وضع المظهر بشكل دائم في كل من SharedPreferences وقاعدة البيانات المحلية.
+Future<void> saveAppThemeMode(WidgetRef ref, ThemeMode mode) async {
+  ref.read(themeModeProvider.notifier).state = mode;
+  final raw = switch (mode) {
+    ThemeMode.dark => 'dark',
+    ThemeMode.system => 'system',
+    ThemeMode.light => 'light',
+  };
+  try {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setString('app_theme_mode', raw);
+  } catch (_) {}
+  try {
+    await ref.read(repoProvider).setSetting('theme', raw);
+  } catch (_) {}
+}
 
 /// إخفاء الأرصدة.
 final hideBalancesProvider = StateProvider<bool>((ref) => false);
