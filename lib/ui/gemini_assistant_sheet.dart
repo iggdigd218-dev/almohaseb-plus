@@ -91,7 +91,11 @@ class _GeminiAssistantSheetState extends ConsumerState<_GeminiAssistantSheet> {
   final ScrollController _scrollCtl = ScrollController();
 
   String _selectedRole = 'accountant';
-  String _selectedModel = 'gemini-3.8-flash';
+
+  /// (دفعة الواجهات) الافتراضي يُشتق من خريطة النماذج الحقيقية نفسها —
+  /// كان مثبتاً على معرّف وهمي (`gemini-3.8-flash`) لا وجود له في `_models`
+  /// ولا عند المزوّد، فيُرسَل في كل طلب أول تشغيل ويفشل بلا أي مؤشر واجهة.
+  String _selectedModel = _models.keys.first;
   bool _showConfig = false;
   bool _sending = false;
   List<GeminiChatTurn> _messages = [];
