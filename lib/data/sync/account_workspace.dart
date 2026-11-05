@@ -20,6 +20,7 @@ import 'package:sqflite/sqflite.dart';
 import '../../core/database.dart';
 import '../../core/db_init.dart';
 import '../../core/factory_reset.dart';
+import '../../core/security.dart';
 import 'auto_backup.dart';
 import '../repository.dart';
 import 'cloud_firebase_transport.dart';
@@ -30,6 +31,23 @@ import 'device_registry.dart';
 import 'firebase_auth_service.dart';
 import 'subscription_guard.dart';
 import 'workspace_service.dart';
+
+/// نتيجة البحث عن منشأة عبر رقم الهاتف لاستعادة الحساب أو كلمة المرور عبر الواتساب.
+class PhoneWorkspaceRecoveryResult {
+  final String workspaceId;
+  final String storeName;
+  final String ownerEmail;
+  final String phone;
+  final bool isLocal;
+
+  const PhoneWorkspaceRecoveryResult({
+    required this.workspaceId,
+    required this.storeName,
+    required this.ownerEmail,
+    required this.phone,
+    this.isLocal = false,
+  });
+}
 
 /// معلومات منشأة مرتبطة بحساب المستخدم (سواء كمالك أو عضو مصرح).
 class WorkspaceInfo {
@@ -380,6 +398,7 @@ class AccountWorkspace {
     required String phone,
     required String workspaceId,
     String email = '',
+    String passwordHash = '',
   }) async {
     final norm = normalizePhone(phone);
     if (norm.length < 7 || workspaceId.isEmpty || workspaceId == 'default') {
@@ -395,12 +414,14 @@ class AccountWorkspace {
         // رقم الهاتف مسجّل مسبقاً لمساحة أخرى — يمنع التكرار منعاً باتاً.
         return false;
       }
-      await _authedPut(
+      await _authedPatch(
         _phoneIndexPath(backendUrl, norm),
         body: jsonEncode({
           'workspaceId': workspaceId,
           'phone': norm,
           if (email.trim().isNotEmpty) 'email': email.trim().toLowerCase(),
+          if (passwordHash.trim().isNotEmpty)
+            'password_hash': passwordHash.trim(),
           'updated_at': {'.sv': 'timestamp'},
         }),
       );
@@ -408,6 +429,328 @@ class AccountWorkspace {
     } catch (_) {
       return false;
     }
+  }
+
+  /// توليد قائمة صيغ رقم الهاتف المحتملة (مع رمز الدولة وبدونه) للبحث المرن في الفهرس.
+  static List<String> _phoneRecoveryCandidates(
+    String rawPhone, {
+    String countryDialCode = '+967',
+  }) {
+    final normInput = normalizePhone(rawPhone);
+    if (normInput.length < 7) return const [];
+    final dialDigits = normalizePhone(countryDialCode);
+    final set = <String>{normInput};
+    var localDigits = normInput;
+    if (dialDigits.isNotEmpty && localDigits.startsWith(dialDigits)) {
+      localDigits = localDigits.substring(dialDigits.length);
+    }
+    if (localDigits.startsWith('0')) {
+      localDigits = localDigits.substring(1);
+    }
+    if (localDigits.length >= 7) {
+      if (dialDigits.isNotEmpty) {
+        set.add('$dialDigits$localDigits');
+      }
+      set.add(localDigits);
+      set.add('0$localDigits');
+      // دعم رموز الدول العربية الشائعة في حال لم يغير المستخدم الرمز الافتراضي
+      for (final code in const ['967', '966', '971', '968', '965', '20']) {
+        set.add('$code$localDigits');
+      }
+    }
+    return set.toList();
+  }
+
+  /// البحث عن المنشأة المرتبطة برقم الهاتف (محلياً وسحابياً) لاستعادة الحساب وكلمة المرور عبر الواتساب.
+  static Future<PhoneWorkspaceRecoveryResult?> lookupWorkspaceByPhoneForRecovery({
+    required String backendUrl,
+    required String phone,
+    String countryDialCode = '+967',
+  }) async {
+    final candidates = _phoneRecoveryCandidates(
+      phone,
+      countryDialCode: countryDialCode,
+    );
+    if (candidates.isEmpty) return null;
+
+    // 1) فحص المنشآت المحفوظة محلياً على هذا الجهاز
+    try {
+      final localList = await findLocalWorkspacesOnDevice();
+      for (final ws in localList) {
+        final wId = ws.workspaceId.trim();
+        if (wId.isEmpty || wId == 'default') continue;
+        final wPhone = normalizePhone(ws.phone);
+        if (wPhone.length < 7) continue;
+        final matched = candidates.any(
+          (c) =>
+              wPhone == c ||
+              (c.length >= 8 && wPhone.endsWith(c)) ||
+              (wPhone.length >= 8 && c.endsWith(wPhone)),
+        );
+        if (matched) {
+          return PhoneWorkspaceRecoveryResult(
+            workspaceId: wId,
+            storeName: ws.storeName.isNotEmpty ? ws.storeName : 'منشأتي ($wId)',
+            ownerEmail: ws.ownerEmail,
+            phone: ws.phone.isNotEmpty ? ws.phone : candidates.first,
+            isLocal: true,
+          );
+        }
+      }
+    } catch (_) {}
+
+    final root = _trimSlashes(backendUrl);
+    if (root.isEmpty) return null;
+
+    // 2) فحص فهرس الهواتف السحابي (/workspaces/_registry/phones_index) لجميع الصيغ المحتملة
+    for (final cand in candidates) {
+      try {
+        final res = await _authedGet(
+          _phoneIndexPath(root, cand),
+          timeout: const Duration(seconds: 8),
+        );
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          final body = utf8.decode(res.bodyBytes).trim();
+          if (body.isNotEmpty && body != 'null') {
+            final m = jsonDecode(body);
+            if (m is Map) {
+              final wsId =
+                  '${m['workspaceId'] ?? m['workspace_id'] ?? ''}'.trim();
+              if (wsId.isNotEmpty && wsId != 'default') {
+                var email =
+                    '${m['email'] ?? m['owner_email'] ?? m['ownerEmail'] ?? ''}'
+                        .trim()
+                        .toLowerCase();
+                var storeName =
+                    '${m['storeName'] ?? m['store_name'] ?? m['businessName'] ?? ''}'
+                        .trim();
+                var storedPhone = '${m['phone'] ?? cand}'.trim();
+
+                // جلب تفاصيل المنشأة من عقدة meta.json لاستكمال الاسم والبريد الإلكتروني
+                try {
+                  final metaRes = await _authedGet(
+                    '$root/workspaces/${Uri.encodeComponent(wsId)}/meta.json',
+                    timeout: const Duration(seconds: 7),
+                  );
+                  if (metaRes.statusCode >= 200 && metaRes.statusCode < 300) {
+                    final metaBody = utf8.decode(metaRes.bodyBytes).trim();
+                    if (metaBody.isNotEmpty && metaBody != 'null') {
+                      final metaMap = jsonDecode(metaBody);
+                      if (metaMap is Map) {
+                        if (storeName.isEmpty) {
+                          storeName =
+                              '${metaMap['storeName'] ?? metaMap['store_name'] ?? metaMap['businessName'] ?? metaMap['name'] ?? ''}'
+                                  .trim();
+                        }
+                        if (email.isEmpty) {
+                          email =
+                              '${metaMap['owner_email'] ?? metaMap['ownerEmail'] ?? metaMap['email'] ?? ''}'
+                                  .trim()
+                                  .toLowerCase();
+                        }
+                        final mp =
+                            '${metaMap['phone'] ?? metaMap['whatsapp'] ?? ''}'
+                                .trim();
+                        if (mp.isNotEmpty) storedPhone = mp;
+                      }
+                    }
+                  }
+                } catch (_) {}
+
+                return PhoneWorkspaceRecoveryResult(
+                  workspaceId: wsId,
+                  storeName:
+                      storeName.isNotEmpty ? storeName : 'منشأة ($wsId)',
+                  ownerEmail: email,
+                  phone: storedPhone.isNotEmpty ? storedPhone : cand,
+                  isLocal: false,
+                );
+              }
+            }
+          }
+        }
+      } catch (_) {}
+    }
+
+    return null;
+  }
+
+  /// حفظ بصمة كلمة المرور الجديدة (SHA-256 المملحة) في بيانات المنشأة وفهرس البريد والهاتف في السحابة.
+  static Future<bool> saveWorkspacePasswordHash({
+    required String backendUrl,
+    required String workspaceId,
+    String email = '',
+    String phone = '',
+    required String newPassword,
+  }) async {
+    final cleanWs = workspaceId.trim();
+    final cleanPass = newPassword.trim();
+    if (cleanWs.isEmpty || cleanWs == 'default' || cleanPass.length < 6) {
+      return false;
+    }
+    final root = _trimSlashes(backendUrl);
+    if (root.isEmpty) return false;
+
+    final pwHash = Security.hash(cleanPass);
+    final cleanEmail = email.trim().toLowerCase();
+    final cleanPhone = normalizePhone(phone);
+
+    var anySaved = false;
+    try {
+      final r1 = await _authedPatch(
+        '$root/workspaces/${Uri.encodeComponent(cleanWs)}/meta.json',
+        body: jsonEncode({
+          'password_hash': pwHash,
+          'updated_at': {'.sv': 'timestamp'},
+        }),
+      );
+      if (r1.statusCode >= 200 && r1.statusCode < 300) anySaved = true;
+    } catch (_) {}
+
+    if (cleanEmail.isNotEmpty && cleanEmail.contains('@')) {
+      try {
+        final r2 = await _authedPatch(
+          _emailIndexPath(root, cleanEmail),
+          body: jsonEncode({
+            'workspaceId': cleanWs,
+            'email': cleanEmail,
+            'password_hash': pwHash,
+            'updated_at': {'.sv': 'timestamp'},
+          }),
+        );
+        if (r2.statusCode >= 200 && r2.statusCode < 300) anySaved = true;
+      } catch (_) {}
+
+      // محاولة تسجيل الحساب في Firebase Identity Toolkit إن لم يكن مسجلاً فيها بعد
+      try {
+        await FirebaseAuthRest.signUpWithEmailPassword(
+          email: cleanEmail,
+          password: cleanPass,
+        );
+      } catch (_) {}
+    }
+
+    if (cleanPhone.length >= 7) {
+      try {
+        final r3 = await _authedPatch(
+          _phoneIndexPath(root, cleanPhone),
+          body: jsonEncode({
+            'workspaceId': cleanWs,
+            'phone': cleanPhone,
+            if (cleanEmail.isNotEmpty) 'email': cleanEmail,
+            'password_hash': pwHash,
+            'updated_at': {'.sv': 'timestamp'},
+          }),
+        );
+        if (r3.statusCode >= 200 && r3.statusCode < 300) anySaved = true;
+      } catch (_) {}
+    }
+
+    return anySaved;
+  }
+
+  /// التحقق من كلمة المرور مقابل بصمة المنشأة المحفوظة سحابياً (بالبريد الإلكتروني أو رقم الهاتف).
+  static Future<PhoneWorkspaceRecoveryResult?> verifyWorkspacePasswordInCloud({
+    required String backendUrl,
+    required String emailOrPhone,
+    required String password,
+    String countryDialCode = '+967',
+  }) async {
+    final root = _trimSlashes(backendUrl);
+    final cleanInput = emailOrPhone.trim();
+    final cleanPass = password.trim();
+    if (root.isEmpty || cleanInput.isEmpty || cleanPass.length < 6) {
+      return null;
+    }
+
+    String wsId = '';
+    String ownerEmail = '';
+    String storeName = '';
+    String resolvedPhone = '';
+    String storedHash = '';
+
+    if (cleanInput.contains('@')) {
+      ownerEmail = cleanInput.toLowerCase();
+      try {
+        final res = await _authedGet(
+          _emailIndexPath(root, ownerEmail),
+          timeout: const Duration(seconds: 7),
+        );
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          final body = utf8.decode(res.bodyBytes).trim();
+          if (body.isNotEmpty && body != 'null') {
+            final m = jsonDecode(body);
+            if (m is Map) {
+              wsId = '${m['workspaceId'] ?? m['workspace_id'] ?? ''}'.trim();
+              storeName =
+                  '${m['storeName'] ?? m['store_name'] ?? m['businessName'] ?? ''}'
+                      .trim();
+              resolvedPhone = '${m['phone'] ?? ''}'.trim();
+              storedHash = '${m['password_hash'] ?? ''}'.trim();
+            }
+          }
+        }
+      } catch (_) {}
+    } else {
+      final phoneLookup = await lookupWorkspaceByPhoneForRecovery(
+        backendUrl: root,
+        phone: cleanInput,
+        countryDialCode: countryDialCode,
+      );
+      if (phoneLookup != null) {
+        wsId = phoneLookup.workspaceId;
+        ownerEmail = phoneLookup.ownerEmail;
+        storeName = phoneLookup.storeName;
+        resolvedPhone = phoneLookup.phone;
+      }
+    }
+
+    if (wsId.isEmpty || wsId == 'default') return null;
+
+    // فحص عقدة meta.json للمنشأة لجلب password_hash والبيانات الأساسية
+    try {
+      final metaRes = await _authedGet(
+        '$root/workspaces/${Uri.encodeComponent(wsId)}/meta.json',
+        timeout: const Duration(seconds: 7),
+      );
+      if (metaRes.statusCode >= 200 && metaRes.statusCode < 300) {
+        final metaBody = utf8.decode(metaRes.bodyBytes).trim();
+        if (metaBody.isNotEmpty && metaBody != 'null') {
+          final metaMap = jsonDecode(metaBody);
+          if (metaMap is Map) {
+            final mh = '${metaMap['password_hash'] ?? ''}'.trim();
+            if (mh.isNotEmpty) storedHash = mh;
+            if (storeName.isEmpty) {
+              storeName =
+                  '${metaMap['storeName'] ?? metaMap['store_name'] ?? metaMap['businessName'] ?? metaMap['name'] ?? ''}'
+                      .trim();
+            }
+            if (ownerEmail.isEmpty) {
+              ownerEmail =
+                  '${metaMap['owner_email'] ?? metaMap['ownerEmail'] ?? metaMap['email'] ?? ''}'
+                      .trim()
+                      .toLowerCase();
+            }
+            if (resolvedPhone.isEmpty) {
+              resolvedPhone =
+                  '${metaMap['phone'] ?? metaMap['whatsapp'] ?? ''}'.trim();
+            }
+          }
+        }
+      }
+    } catch (_) {}
+
+    if (storedHash.isNotEmpty && Security.verify(cleanPass, storedHash)) {
+      return PhoneWorkspaceRecoveryResult(
+        workspaceId: wsId,
+        storeName: storeName.isNotEmpty ? storeName : 'منشأة ($wsId)',
+        ownerEmail: ownerEmail,
+        phone: resolvedPhone,
+        isLocal: false,
+      );
+    }
+
+    return null;
   }
 
   static String _trimSlashes(String url) {
@@ -955,11 +1298,13 @@ class AccountWorkspace {
         );
       }
       if (phone.trim().isNotEmpty) {
+        final pwHash = '${extraMeta?['password_hash'] ?? ''}'.trim();
         await bindPhoneWorkspace(
           backendUrl: backendUrl,
           phone: phone,
           workspaceId: workspaceId,
           email: email,
+          passwordHash: pwHash,
         );
       }
     } catch (_) {}
@@ -2445,6 +2790,7 @@ class AccountWorkspace {
     String emailOverride = '',
     String uidOverride = '',
     String displayNameOverride = '',
+    String password = '',
     bool isAdditionalWorkspace = false,
   }) async {
     final stBefore = await repo.settings();
@@ -2672,6 +3018,13 @@ class AccountWorkspace {
       displayName: displayName,
     );
 
+    final cleanPassword = password.trim();
+    final pwHash =
+        cleanPassword.length >= 6 ? Security.hash(cleanPassword) : '';
+    if (pwHash.isNotEmpty) {
+      await repo.setSetting('account.passwordHash', pwHash);
+    }
+
     // 4) تسجيل المنشأة في فايربيس باسم هذا البريد وبحالة اشتراك غير مفعل حتى يتم الترخيص
     if (backendUrl.isNotEmpty) {
       final extraMeta = <String, Object?>{
@@ -2682,6 +3035,7 @@ class AccountWorkspace {
         'businessActivity': cleanActivity,
         'defaultCurrency': cleanCurrency,
         'subscriptionStatus': 'unactivated',
+        if (pwHash.isNotEmpty) 'password_hash': pwHash,
       };
       if (isAdditionalWorkspace) {
         // (تدقيق بند 12) منشأة إضافية معزولة: تُسجَّل في user_workspaces فقط
