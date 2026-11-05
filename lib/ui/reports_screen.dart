@@ -456,10 +456,13 @@ ReportTable buildReport(
     case ReportTab.period:
       final buckets = <String, List<double>>{};
       for (final t in d.txs) {
+        // (دفعة الواجهات) التجميع على تاريخ تقويمي UTC: طرح الأيام من تاريخ
+        // محلي يزيح الساعة عند تغيير التوقيت الصيفي فيُسند الحدث لأسبوع آخر.
+        final day = DateTime.utc(t.date.year, t.date.month, t.date.day);
         final key = switch (unit) {
           PeriodUnit.day => Fmt.date(t.date),
           PeriodUnit.week => Fmt.date(
-              t.date.subtract(Duration(days: t.date.weekday % 7)),
+              day.subtract(Duration(days: day.weekday % 7)),
             ),
           PeriodUnit.month =>
             '${t.date.year}/${t.date.month.toString().padLeft(2, '0')}',
