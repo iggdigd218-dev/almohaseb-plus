@@ -493,12 +493,14 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                       children: [
                         // [بطاقة المظهر والمنشأة]
                         _tabPage([
+                          const ThemeModeSelectorCard(),
+                          const SizedBox(height: 12),
                           Card(
                             child: ListTile(
                               leading: const Icon(Icons.palette_outlined),
                               title: const Text('المظهر والأصوات'),
                               subtitle: const Text(
-                                  'حجم الخط، الأصوات والاهتزاز والتنبيهات'),
+                                  'الوضع الليلي/النهاري، حجم الخط، الأصوات والاهتزاز'),
                               trailing: const Icon(Icons.chevron_left),
                               onTap: () => Navigator.of(context).push(
                                 MaterialPageRoute(
