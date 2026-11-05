@@ -66,10 +66,10 @@ class PosItemTile extends StatelessWidget {
   }
 
   Widget _buildThumb(BuildContext context) {
-    // (PR-8) حدة Retina: نكاش الصورة بكثافة بكسل الشاشة الفيزيائية
+    // (PR-8) حدة Retina: نكاش الصورة بكثافة بكسل الشاشة الفيزيائية (240px منطقي)
     // (منع البكسلة والتمدد) + جودة معالجة عالية داخل ClipRRect بقص
-    // متناسق — بلا أي غباش.
-    final thumbCacheWidth = crispCacheWidth(context, 160);
+    // متناسق — بلا أي غباش أو وميض عند التحديث.
+    final thumbCacheWidth = crispCacheWidth(context, 240);
     if (item.image.isEmpty) return _fallback(context);
     if (item.image.startsWith('http')) {
       return ClipRRect(
@@ -80,6 +80,7 @@ class PosItemTile extends StatelessWidget {
             fit: BoxFit.cover,
             cacheWidth: thumbCacheWidth,
             filterQuality: FilterQuality.medium,
+            gaplessPlayback: true,
             errorBuilder: (_, __, ___) => _fallback(context),
           ),
         ),
@@ -94,6 +95,7 @@ class PosItemTile extends StatelessWidget {
             fit: BoxFit.cover,
             cacheWidth: thumbCacheWidth,
             filterQuality: FilterQuality.medium,
+            gaplessPlayback: true,
             errorBuilder: (_, __, ___) => _fallback(context),
           ),
         ),
