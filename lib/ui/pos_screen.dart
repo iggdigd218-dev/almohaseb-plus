@@ -4163,18 +4163,31 @@ class _PosHistoryTabState extends ConsumerState<_PosHistoryTab> {
                 );
               }
 
-              var totalSales = 0.0;
-              var cashSales = 0.0;
-              var creditSales = 0.0;
+              // (دفعة الواجهات) الفواتير المعروضة قد تحمل عملات مختلفة، وكان
+              // الجمع يخلطها ثم يسمّي الناتج بعملة أحدث فاتورة — رقم لا معنى له.
+              // الآن: العمود الرئيسي بعملة أحدث فاتورة، وبقية العملات مفصّلة.
               final primaryCur = posTxs.first.currency;
+              final salesByCur = <String, double>{};
+              final cashByCur = <String, double>{};
+              final creditByCur = <String, double>{};
               for (final t in posTxs) {
-                totalSales += t.amount;
+                salesByCur[t.currency] =
+                    (salesByCur[t.currency] ?? 0) + t.amount;
                 if (t.type == OpType.revenue) {
-                  cashSales += t.amount;
+                  cashByCur[t.currency] =
+                      (cashByCur[t.currency] ?? 0) + t.amount;
                 } else {
-                  creditSales += t.amount;
+                  creditByCur[t.currency] =
+                      (creditByCur[t.currency] ?? 0) + t.amount;
                 }
               }
+              final totalSales = salesByCur[primaryCur] ?? 0.0;
+              final cashSales = cashByCur[primaryCur] ?? 0.0;
+              final creditSales = creditByCur[primaryCur] ?? 0.0;
+              final otherCurrencies = salesByCur.entries
+                  .where((e) => e.key != primaryCur && e.value != 0)
+                  .map((e) => '${Fmt.money(e.value)} ${e.key}')
+                  .toList();
 
               final perms =
                   ref.watch(effectivePermissionsProvider).valueOrNull;
@@ -4229,6 +4242,15 @@ class _PosHistoryTabState extends ConsumerState<_PosHistoryTab> {
                                     color: AppColors.text3Of(context),
                                   ),
                                 ),
+                                if (otherCurrencies.isNotEmpty)
+                                  Text(
+                                    'عملات أخرى: ${otherCurrencies.join(' • ')}',
+                                    style: TextStyle(
+                                      fontSize: 11,
+                                      fontWeight: FontWeight.w600,
+                                      color: AppColors.text3Of(context),
+                                    ),
+                                  ),
                               ],
                             ),
                           ),
