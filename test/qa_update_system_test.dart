@@ -229,6 +229,66 @@ void main() {
         isNot(contains('workspaces/_registry')),
       );
     });
+
+    test('مرآة البيان على نطاق غير محجوب — https وتحت مستودع التطبيق', () {
+      expect(UpdateService.kMirrorManifestUrl, startsWith('https://'));
+      expect(UpdateService.kMirrorManifestUrl, contains('github.io'));
+      expect(
+        UpdateService.kMirrorManifestUrl,
+        endsWith('/almohaseb-plus/version.json'),
+      );
+      expect(
+        UpdateService.kMirrorManifestUrl,
+        isNot(equals(UpdateService.kDefaultManifestUrl)),
+      );
+    });
+
+    test('المرآة تُنقذ القناة حين تُغلق Firebase ويُحجب github.com', () async {
+      // الواقع المقيس: /system/plus/version_manifest.json يعيد 401،
+      // وgithub.com محجوب في شبكات اليمن — فلا بد أن يصل البيان من المرآة.
+      final asked = <String>[];
+      final svc = UpdateService(
+        manifestUrl: UpdateService.kDefaultManifestUrl,
+        current: const AppSemVer(3, 98, 23, 338),
+        platform: UpdatePlatform.android,
+        clientFactory: () => MockClient((req) async {
+          asked.add(req.url.host);
+          if (req.url.host.contains('firebasedatabase.app')) {
+            return http.Response('{"error":"Permission denied"}', 401);
+          }
+          if (req.url.host == 'iggdigd218-dev.github.io') {
+            return http.Response(
+              manifest(version: '3.98.24+339'),
+              200,
+              headers: {'content-type': 'application/json'},
+            );
+          }
+          throw const SocketException('blocked');
+        }),
+      );
+      final info = await svc.check();
+      expect(info.status, UpdateStatus.available,
+          reason: 'المرآة وحدها كافية لإعلان التحديث');
+      expect(info.latest!.build, 339);
+      expect(info.downloadUrl, isNotNull);
+      expect(asked.length, greaterThanOrEqualTo(2),
+          reason: 'المصادر تُجلب بالتوازي لا بالتعاقب');
+    });
+
+    test('تساوي الإصدار في كل المصادر = لا تحديث (لا إعلان كاذب)', () async {
+      final svc = UpdateService(
+        manifestUrl: UpdateService.kDefaultManifestUrl,
+        current: const AppSemVer(3, 98, 24, 339),
+        platform: UpdatePlatform.android,
+        clientFactory: () => MockClient((_) async => http.Response(
+              manifest(version: '3.98.24+339'),
+              200,
+              headers: {'content-type': 'application/json'},
+            )),
+      );
+      final info = await svc.check();
+      expect(info.hasUpdate, isFalse);
+    });
   });
 
   test('يطلب البيان من الرابط الصحيح + معامل كسر الكاش', () async {
