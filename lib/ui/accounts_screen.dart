@@ -30,7 +30,6 @@ class AccountsScreen extends ConsumerWidget {
     final balanceFilter = ref.watch(_balanceFilterProvider);
     final txCounts =
         ref.watch(accountTxCountsProvider).valueOrNull ?? const {};
-    final summary = ref.watch(summaryProvider).valueOrNull;
 
     return Stack(
       children: [
@@ -41,7 +40,6 @@ class AccountsScreen extends ConsumerWidget {
               filter: filter,
               currencies: curs,
               balanceFilter: balanceFilter,
-              summary: summary,
             ),
             Expanded(
               child: list.when(
@@ -85,20 +83,32 @@ class AccountsScreen extends ConsumerWidget {
                 ),
                 data: (rawItems) {
                   // تطبيق فلتر الرصيد (الكل، عليكم، لكم، مسدد)
+                  //
+                  // (دفعة الواجهات) الحكم على الرصيد يُحسب بمنازل عملة **كل
+                  // حساب** لا بهامش ثابت: حساب بعملة بلا منازل (ريال) برصيد
+                  // 0.4 كان يُصنّف «عليه» بالهامش الثابت، بينما البطاقة تعرضه
+                  // «0» — أي تناقض بين الفلتر وما يراه المستخدم. التقريب بمنازل
+                  // العملة يجعل الحكم مطابقاً للرقم المعروض، ويصحّ للحسابات
+                  // متعددة العملات لأن كل حساب يُقاس بعملته هو.
+                  final decimals = <String, int>{
+                    for (final c in curs)
+                      c.code.trim().toUpperCase(): c.decimal,
+                  };
                   final items = rawItems.where((it) {
+                    // الموجب = «عليه» (مدين، مستحق لنا) والسالب = «له»،
+                    // مطابقاً لـ accounting.dart و account_detail و Dashboard.
+                    final dec =
+                        decimals[it.account.currency.trim().toUpperCase()];
+                    final bal = Fmt.roundMoney(it.balance, dec ?? 2);
                     switch (balanceFilter) {
                       case _BalanceFilter.all:
                         return true;
-                      // (دفعة التدقيق) التوحيد مع accounting.dart و
-                      // account_detail/Dashboard: الموجب = «عليه» (مدين،
-                      // مستحق لنا) والسالب = «له» (دائن، مستحق علينا) —
-                      // كان الاتجاه معكوساً هنا.
                       case _BalanceFilter.debt:
-                        return it.balance > Fmt.moneyEpsilon;
+                        return bal > 0;
                       case _BalanceFilter.credit:
-                        return it.balance < -Fmt.moneyEpsilon;
+                        return bal < 0;
                       case _BalanceFilter.settled:
-                        return it.balance.abs() <= Fmt.moneyEpsilon;
+                        return bal == 0;
                     }
                   }).toList();
 
@@ -166,13 +176,11 @@ class _EnhancedFilterBar extends ConsumerStatefulWidget {
   final AccountFilter filter;
   final List<CurrencyDef> currencies;
   final _BalanceFilter balanceFilter;
-  final Summary? summary;
 
   const _EnhancedFilterBar({
     required this.filter,
     required this.currencies,
     required this.balanceFilter,
-    required this.summary,
   });
 
   @override
@@ -433,8 +441,12 @@ class _AccountCard extends StatelessWidget {
 
     // (دفعة التدقيق) نفس التوحيد: موجب = عليكم (مدين، أخضر كما في كشف
     // الحساب)، سالب = لكم (دائن، أحمر).
-    final isDebt = item.balance > Fmt.moneyEpsilon;
-    final isCredit = item.balance < -Fmt.moneyEpsilon;
+    // (دفعة الواجهات) الحكم بمنازل عملة الحساب لا بهامش ثابت: كان رصيد
+    // 0.4 في عملة بلا منازل يظهر «+ 0» أخضر، ويُدرج في فلتر «عليكم» بينما
+    // يظهر صفراً — الآن التصنيف والفلتر والعرض كلها بمنازل العملة نفسها.
+    final shown = Fmt.roundMoney(item.balance, c.decimal);
+    final isDebt = shown > 0;
+    final isCredit = shown < 0;
     final initials = _getInitials(a.name);
     final accent = _avatarColor(a.name);
 

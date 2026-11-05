@@ -2049,10 +2049,8 @@ class AppDatabase {
     for (final r in rows) {
       final wsId = ('${r['ws_id'] ?? defaultWorkspaceIdConst}').trim();
       final effectiveWs = wsId.isEmpty ? defaultWorkspaceIdConst : wsId;
-      var next = nextByWs[effectiveWs];
-      if (next == null) {
-        next = await nextPlu(db, workspaceId: effectiveWs);
-      }
+      final next = nextByWs[effectiveWs] ??
+          await nextPlu(db, workspaceId: effectiveWs);
       batch.update('items', {'plu': next},
           where: 'id = ?', whereArgs: [r['id']]);
       nextByWs[effectiveWs] = next + 1;

@@ -912,6 +912,8 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
                             showSnack(context, 'تم الاسترجاع ✅');
                           }
                         } on ParentAccountNotFoundException {
+                          // الحساب الأب محذوف نهائياً: العملية تبقى في السلة
+                          // ولا تُفقد — رسالة صريحة بلا أي استثناء ظاهر.
                           bump(ref);
                           if (context.mounted) {
                             showSnack(
@@ -920,7 +922,18 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
                               error: true,
                             );
                           }
+                        } on StateError catch (e) {
+                          // رفض صلاحية (`_ensureCan`) أو سجل تالف داخل المعاملة:
+                          // نص الرسالة عربي صريح ويُمرَّر عبر المترجم الموحّد.
+                          bump(ref);
+                          if (context.mounted) {
+                            showSnack(context, 'تعذر الاسترجاع: ${e.message}',
+                                error: true);
+                          }
                         } catch (e) {
+                          // أي استثناء آخر (قيود SQLite، فك حمولة، انقطاع…):
+                          // لا انهيار ولا قائمة معلّقة — تحديث ثم رسالة مفهومة.
+                          bump(ref);
                           if (context.mounted) {
                             showSnack(context, 'تعذر الاسترجاع: $e',
                                 error: true);
