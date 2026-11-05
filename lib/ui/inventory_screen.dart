@@ -2627,15 +2627,15 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
     }
   }
 
-  /// اختيار صورة الصنف (معرض الجهاز) — تُضغط وتُصغّر بشدة كـ Thumbnail صغير جداً
-  /// وتُحفظ كمسار نسبي داخل المستندات لتوحيد صور الأصناف عبر السحابة بأقل استهلاك ممكن.
+  /// اختيار صورة الصنف (معرض الجهاز) — تُضغط بدقة Retina حادة (350×350 بجودة 80٪)
+  /// وتُحفظ كمسار نسبي داخل المستندات لتوحيد صور الأصناف عبر السحابة بحجم خفيف (10–15KB).
   Future<void> _pickImage() async {
     try {
       final picked = await ImagePicker().pickImage(
         source: ImageSource.gallery,
-        maxWidth: 160,
-        maxHeight: 160,
-        imageQuality: 45,
+        maxWidth: 350,
+        maxHeight: 350,
+        imageQuality: 80,
       );
       if (picked == null) return;
       final rel = await MediaPaths.saveCompressedItemImage(picked.path);
@@ -3150,6 +3150,7 @@ class _ItemThumb extends StatelessWidget {
       // (PR-8) حدة Retina لصورة الصنف بالشبكة.
       cacheWidth: crispCacheWidth(context, 240),
       filterQuality: FilterQuality.medium,
+      gaplessPlayback: true,
       errorBuilder: (_, __, ___) => placeholder,
     );
   }
@@ -3186,6 +3187,7 @@ class _Thumb extends StatelessWidget {
                 // (PR-8) حدة Retina للمصغّرة (52px).
                 cacheWidth: crispCacheWidth(context, 52),
                 filterQuality: FilterQuality.medium,
+                gaplessPlayback: true,
                 errorBuilder: (_, __, ___) => _fallback(context),
               )
             : _fallback(context),
