@@ -86,7 +86,10 @@ String _group(int n) {
         if (chunk == 1) {
           w = th;
         } else if (chunk == 2) {
-          w = '${th}ان';
+          // (نظافة) الحروف العربية ليست محارف معرّفات في Dart، فـ`$th` ينتهي
+          // عند أول حرف عربي — أي أن هذا التعبير مطابق تماماً لـ`${th}ان` لكنه
+          // يرضي فحصَي unnecessary_brace و prefer_interpolation معاً.
+          w = '$thان';
         } else if (chunk >= 3 && chunk <= 10) {
           w = '$w $thPlural';
         } else {
