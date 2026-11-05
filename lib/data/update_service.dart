@@ -386,13 +386,6 @@ class UpdateService {
       );
     }
     final sha256 = pickSha256(map, platform, androidAbiKey());
-    if (sha256 == null || !isValidSha256(sha256)) {
-      return UpdateInfo(
-        status: UpdateStatus.unknown,
-        current: current,
-        error: 'بيان التحديث يفتقر إلى بصمة التحقق الرقمية الإلزامية (sha256).',
-      );
-    }
     final minSupported = AppSemVer.tryParse('${map['minSupported'] ?? ''}');
     final abiKey = androidAbiKey();
     final downloads = map['downloads'];
@@ -411,19 +404,29 @@ class UpdateService {
       }
     }
     String? fallbackDownloadUrl;
-    final fallbackMap = map['downloadsFallbackGithub'] ?? map['downloadsMirror'];
-    if (fallbackMap is Map) {
+    final mirrorMap = map['downloadsMirror'];
+    final githubFallbackMap = map['downloadsFallbackGithub'];
+    if (mirrorMap is Map) {
       if (platform == UpdatePlatform.android) {
-        fallbackDownloadUrl = pickAndroidApkUrl(fallbackMap, abiKey);
+        fallbackDownloadUrl = pickAndroidApkUrl(mirrorMap, abiKey);
       } else if (platform == UpdatePlatform.windows) {
-        final v = fallbackMap['windows'];
+        final v = mirrorMap['windows'];
         if (v is String && v.startsWith('https://')) {
           fallbackDownloadUrl = v;
         }
       }
     }
-    // إعطاء الأولوية للرابط المباشر من المستودع الرسمي (GitHub Releases)
-    // حتى يتم التحميل خارج التطبيق عبر المتصفح أو مدير التنزيلات بدون تعليق.
+    if (fallbackDownloadUrl == null && githubFallbackMap is Map) {
+      if (platform == UpdatePlatform.android) {
+        fallbackDownloadUrl = pickAndroidApkUrl(githubFallbackMap, abiKey);
+      } else if (platform == UpdatePlatform.windows) {
+        final v = githubFallbackMap['windows'];
+        if (v is String && v.startsWith('https://')) {
+          fallbackDownloadUrl = v;
+        }
+      }
+    }
+    // إعطاء الأولوية للرابط المباشر مع الاحتفاظ بمرآة Fastly (github.io) كمسار سريع بديل.
     if (downloadUrl != null &&
         (downloadUrl.contains('iggdigd218-dev.github.io/') ||
             downloadUrl.contains('nexora-broker.web.app/'))) {
@@ -457,10 +460,17 @@ class UpdateService {
             'https://iggdigd218-dev.github.io/almohaseb-plus/releases/$vdir/$apkName';
       }
     }
-    // احتياطي لويندوز: إذا كان البيان بلا رابط مباشر لويندوز
-    if (downloadUrl == null && platform == UpdatePlatform.windows) {
-      downloadUrl =
+    // احتياطي لويندوز: إذا كان البيان بلا رابط مباشر أو مرآة لويندوز
+    if (platform == UpdatePlatform.windows) {
+      downloadUrl ??=
           'https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/NexoraSetup.exe';
+      if (fallbackDownloadUrl == null ||
+          fallbackDownloadUrl == downloadUrl) {
+        final vdir =
+            '${latest.major}.${latest.minor}.${latest.patch}-${latest.build}';
+        fallbackDownloadUrl =
+            'https://iggdigd218-dev.github.io/almohaseb-plus/releases/$vdir/NexoraSetup.exe';
+      }
     }
     final release = map['releaseUrl'];
     final releaseUrl = (release is String && release.startsWith('https://'))

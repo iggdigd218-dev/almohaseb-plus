@@ -272,13 +272,13 @@ jobs:
           tag_name: latest
           name: المحاسب بلاس — الإصدار الرسمي الأحدث
           body: |
-            ## 📥 التحميل المباشر لتطبيق المحاسب بلاس
+            ## 📥 التحميل المباشر السريع (روابط قصيرة بسطر واحد — صالحة للمشاركة المباشرة)
 
-            ### 📱 للأندرويد:
-            - **النسخة الموحدة للهواتف الحديثة (64-بت):** حمّل **`Almohaseb-Plus-arm64.apk`** *(موقّعة V1+V2+V3 ومحاذية — تثبيت سلس على أندرويد 12/13/14/15+ بلا «الحزمة تبدو غير صالحة»)*.
+            ### 📱 للأندرويد (64-بت):
+            - **رابط مباشر قصير:** https://${{ github.repository_owner }}.github.io/almohaseb-plus/Almohaseb-Plus-arm64.apk
 
-            ### 🖥️ لويندوز
-            - حمّل **`NexoraSetup.exe`** وثبّته مباشرة، أو النسخة المحمولة `nexora-windows.zip`.
+            ### 🖥️ للكمبيوتر (ويندوز):
+            - **رابط مباشر قصير:** https://${{ github.repository_owner }}.github.io/almohaseb-plus/NexoraSetup.exe
           prerelease: false
           make_latest: true
         env:
