@@ -1007,12 +1007,20 @@ class _ProfileDialogState extends ConsumerState<_ProfileDialog> {
                   ),
                 ),
               const SizedBox(height: 10),
-              // الحقول (تمت إزالة حقل تعديل البريد الإلكتروني وقفل تعديله برمجياً — الملاحظة 3)
+              // الحقول (تم قفل تعديل البريد الإلكتروني برمجياً — الملاحظة 3)
               _field(
                 controller: _userNameCtrl,
                 label: 'اسم المستخدم / هذا الجهاز',
                 icon: Icons.person_outline,
                 enabled: true,
+              ),
+              const SizedBox(height: 10),
+              _field(
+                controller: _emailCtrl,
+                label: 'البريد الإلكتروني',
+                icon: Icons.alternate_email,
+                keyboard: TextInputType.emailAddress,
+                enabled: false,
               ),
               const SizedBox(height: 10),
               _field(
