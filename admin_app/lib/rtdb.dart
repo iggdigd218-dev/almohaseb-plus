@@ -2976,7 +2976,570 @@ extension RtdbMetrics on Rtdb {
       totalRevenue: totalRev,
     );
   }
+
+  // ==========================================================================
+  // 🔐 إدارة وتغيير كلمة المرور للمنشأة من تطبيق الأدمن + استعادة Gemini الذكية
+  // ==========================================================================
+
+  static const List<int> _sha256K = <int>[
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
+    0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
+    0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
+    0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
+    0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
+    0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
+    0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
+    0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
+    0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+  ];
+
+  static int _rotr32(int x, int n) => ((x & 0xffffffff) >>> n) | ((x << (32 - n)) & 0xffffffff);
+
+  static List<int> _sha256Bytes(List<int> input) {
+    final msg = List<int>.from(input);
+    final bitLen = msg.length * 8;
+    msg.add(0x80);
+    while ((msg.length % 64) != 56) {
+      msg.add(0x00);
+    }
+    for (var i = 7; i >= 0; i--) {
+      msg.add((bitLen >> (i * 8)) & 0xff);
+    }
+
+    var h0 = 0x6a09e667;
+    var h1 = 0xbb67ae85;
+    var h2 = 0x3c6ef372;
+    var h3 = 0xa54ff53a;
+    var h4 = 0x510e527f;
+    var h5 = 0x9b05688c;
+    var h6 = 0x1f83d9ab;
+    var h7 = 0x5be0cd19;
+
+    final w = List<int>.filled(64, 0);
+    for (var offset = 0; offset < msg.length; offset += 64) {
+      for (var i = 0; i < 16; i++) {
+        final j = offset + (i * 4);
+        w[i] = ((msg[j] & 0xff) << 24) |
+            ((msg[j + 1] & 0xff) << 16) |
+            ((msg[j + 2] & 0xff) << 8) |
+            (msg[j + 3] & 0xff);
+      }
+      for (var i = 16; i < 64; i++) {
+        final s0 = _rotr32(w[i - 15], 7) ^ _rotr32(w[i - 15], 18) ^ ((w[i - 15] & 0xffffffff) >>> 3);
+        final s1 = _rotr32(w[i - 2], 17) ^ _rotr32(w[i - 2], 19) ^ ((w[i - 2] & 0xffffffff) >>> 10);
+        w[i] = (w[i - 16] + s0 + w[i - 7] + s1) & 0xffffffff;
+      }
+
+      var a = h0, b = h1, c = h2, d = h3, e = h4, f = h5, g = h6, h = h7;
+      for (var i = 0; i < 64; i++) {
+        final s1 = _rotr32(e, 6) ^ _rotr32(e, 11) ^ _rotr32(e, 25);
+        final ch = (e & f) ^ ((~e & 0xffffffff) & g);
+        final temp1 = (h + s1 + ch + _sha256K[i] + w[i]) & 0xffffffff;
+        final s0 = _rotr32(a, 2) ^ _rotr32(a, 13) ^ _rotr32(a, 22);
+        final maj = (a & b) ^ (a & c) ^ (b & c);
+        final temp2 = (s0 + maj) & 0xffffffff;
+
+        h = g;
+        g = f;
+        f = e;
+        e = (d + temp1) & 0xffffffff;
+        d = c;
+        c = b;
+        b = a;
+        a = (temp1 + temp2) & 0xffffffff;
+      }
+
+      h0 = (h0 + a) & 0xffffffff;
+      h1 = (h1 + b) & 0xffffffff;
+      h2 = (h2 + c) & 0xffffffff;
+      h3 = (h3 + d) & 0xffffffff;
+      h4 = (h4 + e) & 0xffffffff;
+      h5 = (h5 + f) & 0xffffffff;
+      h6 = (h6 + g) & 0xffffffff;
+      h7 = (h7 + h) & 0xffffffff;
+    }
+
+    final out = <int>[];
+    for (final v in <int>[h0, h1, h2, h3, h4, h5, h6, h7]) {
+      out.add((v >> 24) & 0xff);
+      out.add((v >> 16) & 0xff);
+      out.add((v >> 8) & 0xff);
+      out.add(v & 0xff);
+    }
+    return out;
+  }
+
+  static String _hexBytes(List<int> bytes) =>
+      bytes.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+
+  /// تجزئة كلمة المرور بنفس صيغة `Security.hash` المعتمدة في تطبيق المحاسب (`v2$<salt-base64>$<hex>`).
+  static String hashWorkspacePassword(String password) {
+    final clean = password.trim();
+    if (clean.isEmpty) return '';
+    final rnd = Random.secure();
+    final salt = List<int>.generate(16, (_) => rnd.nextInt(256));
+    var digest = _sha256Bytes(<int>[...salt, ...utf8.encode(clean)]);
+    for (var i = 1; i < 10000; i++) {
+      digest = _sha256Bytes(<int>[...salt, ...digest]);
+    }
+    return 'v2\$${base64Encode(salt)}\$${_hexBytes(digest)}';
+  }
+
+  static String _emailIndexKey(String email) {
+    final e = email.trim().toLowerCase();
+    if (e.isEmpty) return '';
+    return e.replaceAll(RegExp(r'[.#$\[\]/]'), ',');
+  }
+
+  static String _phoneIndexKey(String phone) {
+    var digits = phone.replaceAll(RegExp(r'[^0-9]'), '');
+    if (digits.startsWith('00') && digits.length > 9) {
+      digits = digits.substring(2);
+    }
+    if (digits.startsWith('0') && digits.length >= 10) {
+      digits = digits.substring(1);
+    }
+    return digits;
+  }
+
+  /// تحديث حقل `password_hash` في عقدة المنشأة المستهدفة (`/workspaces/{ws}/meta/password_hash`)
+  /// بشكل مباشر وآمن باستخدام صلاحيات الأدمن، مع تحديث فهارس الحسابات المرتبطة إن وجدت.
+  Future<String> adminUpdateWorkspacePassword({
+    required String workspaceId,
+    required String newPassword,
+    String ownerEmail = '',
+    String phone = '',
+  }) async {
+    final ws = workspaceId.trim();
+    final cleanPwd = newPassword.trim();
+    if (ws.isEmpty) {
+      throw Exception('معرّف المنشأة فارغ.');
+    }
+    if (cleanPwd.length < 4) {
+      throw Exception('يجب ألا تقل كلمة المرور الجديدة عن 4 محارف.');
+    }
+
+    final passwordHash = hashWorkspacePassword(cleanPwd);
+    final enc = Uri.encodeComponent(ws);
+    final now = DateTime.now().millisecondsSinceEpoch;
+
+    // 1. قراءة بيانات المنشأة الحالية لاكتشاف البريد والهاتف المرتبطين بالفهارس
+    String effectiveEmail = ownerEmail.trim().toLowerCase();
+    String effectivePhone = phone.trim();
+    try {
+      final meta = await _get('workspaces/$enc/meta');
+      if (meta is Map) {
+        if (effectiveEmail.isEmpty) {
+          effectiveEmail = asStr(meta['owner_email']).trim().toLowerCase();
+        }
+        if (effectivePhone.isEmpty) {
+          effectivePhone =
+              _pick(meta['phone'], meta['phone_number'], '').trim();
+        }
+      }
+      if (effectivePhone.isEmpty || effectiveEmail.isEmpty) {
+        final sub = await _get('workspaces/$enc/subscription');
+        if (sub is Map) {
+          if (effectiveEmail.isEmpty) {
+            effectiveEmail = asStr(sub['owner_email']).trim().toLowerCase();
+          }
+          if (effectivePhone.isEmpty) {
+            effectivePhone =
+                _pick(sub['phone'], sub['phone_number'], '').trim();
+          }
+        }
+      }
+    } catch (_) {}
+
+    // 2. التحديث المباشر والآمن لعقدة `/workspaces/{ws}/meta/password_hash`
+    await _patch('workspaces/$enc/meta', <String, Object?>{
+      'password_hash': passwordHash,
+      'password_updated_at': now,
+      'password_updated_by': 'admin_app',
+    });
+
+    // 3. تحديث فهارس الحسابات المرتبطة (`emails_index` و `phones_index`) إن وجدت
+    final emailKey = _emailIndexKey(effectiveEmail);
+    if (emailKey.isNotEmpty) {
+      try {
+        final existingEmailIdx = await _get(
+            'workspaces/_registry/emails_index/${Uri.encodeComponent(emailKey)}');
+        if (existingEmailIdx is Map) {
+          await _patch(
+            'workspaces/_registry/emails_index/${Uri.encodeComponent(emailKey)}',
+            <String, Object?>{
+              'password_hash': passwordHash,
+              'updated_at': now,
+            },
+          );
+        }
+      } catch (_) {}
+    }
+
+    final phoneKey = _phoneIndexKey(effectivePhone);
+    if (phoneKey.isNotEmpty) {
+      try {
+        final existingPhoneIdx = await _get(
+            'workspaces/_registry/phones_index/${Uri.encodeComponent(phoneKey)}');
+        if (existingPhoneIdx is Map) {
+          await _patch(
+            'workspaces/_registry/phones_index/${Uri.encodeComponent(phoneKey)}',
+            <String, Object?>{
+              'password_hash': passwordHash,
+              'updated_at': now,
+            },
+          );
+        }
+      } catch (_) {}
+    }
+
+    // 4. توثيق العملية في سجل الإدارة للمنشأة
+    try {
+      await _put('workspaces/$enc/admin_log/$now', <String, Object?>{
+        'action': 'admin_change_password',
+        'workspace_id': ws,
+        'updated_at': now,
+      });
+    } catch (_) {}
+
+    return passwordHash;
+  }
+
+  /// فك تشفير والتحقق من حزمة `nexora-ai-rpc` البرمجية المشفرة المرسلة من العميل.
+  static Map<String, dynamic>? decodeAndVerifyAiRecoveryPacket(
+      String rawMessage) {
+    final text = rawMessage.trim();
+    if (text.isEmpty) return null;
+
+    Map<String, dynamic>? outer;
+    final codeBlockMatch = RegExp(
+      r'```(?:nexora-ai-rpc|json)?\s*(\{[\s\S]*?\})\s*```',
+      multiLine: true,
+    ).firstMatch(text);
+    final candidateJson =
+        codeBlockMatch != null ? codeBlockMatch.group(1)! : text;
+
+    try {
+      final decoded = jsonDecode(candidateJson);
+      if (decoded is Map) {
+        outer = Map<String, dynamic>.from(decoded);
+      }
+    } catch (_) {
+      final braceStart = text.indexOf('{');
+      final braceEnd = text.lastIndexOf('}');
+      if (braceStart >= 0 && braceEnd > braceStart) {
+        try {
+          final decoded =
+              jsonDecode(text.substring(braceStart, braceEnd + 1));
+          if (decoded is Map) {
+            outer = Map<String, dynamic>.from(decoded);
+          }
+        } catch (_) {}
+      }
+    }
+
+    if (outer == null) return null;
+    final payloadB64 = asStr(outer['payload_b64']).trim();
+    final sigSha256 = asStr(outer['sig_sha256']).trim().toLowerCase();
+    if (payloadB64.isEmpty || sigSha256.isEmpty) return null;
+
+    try {
+      final rawPayload = utf8.decode(base64Url.decode(payloadB64));
+      final payloadMap = jsonDecode(rawPayload);
+      if (payloadMap is! Map) return null;
+      final pKey = asStr(payloadMap['p_key']).trim();
+      final dId = asStr(payloadMap['d_id']).trim();
+      final ts = payloadMap['ts'];
+
+      final expectedSig = _hexBytes(
+        _sha256Bytes(
+          utf8.encode('NEXORA_AI_RECOVERY_V2::$rawPayload::$pKey::$dId::$ts'),
+        ),
+      ).substring(0, 24).toLowerCase();
+
+      if (expectedSig != sigSha256) return null;
+
+      return <String, dynamic>{
+        'verified_signature': true,
+        'phone_key': pKey,
+        'phone_raw': asStr(payloadMap['p_raw']).isNotEmpty
+            ? asStr(payloadMap['p_raw'])
+            : pKey,
+        'workspace_hint': asStr(payloadMap['ws_hint']),
+        'device_id': dId,
+        'device_fingerprint': asStr(payloadMap['d_fp']),
+        'timestamp': asInt(ts),
+      };
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// توليد كلمة مرور مؤقتة وتحليل طلب العميل عبر فهرس `phones_index` ومساعد Gemini،
+  /// وتحديث `/workspaces/{ws}/meta/password_hash` آلياً عند مطابقة البيانات الموثقة.
+  Future<Map<String, dynamic>> processSmartSupportPasswordRecovery({
+    required String messageText,
+    String workspaceIdHint = '',
+  }) async {
+    final packet = decodeAndVerifyAiRecoveryPacket(messageText);
+    String phoneCandidate =
+        packet != null ? asStr(packet['phone_key']) : '';
+    String deviceCandidate =
+        packet != null ? asStr(packet['device_id']) : '';
+
+    // إذا لم يُعثر على رقم الهاتف مباشرة من الحزمة المشفرة، نستخرج الرقم من النص
+    if (phoneCandidate.isEmpty) {
+      final digitsMatch =
+          RegExp(r'(\+?\d[\d\s\-]{7,16}\d)').firstMatch(messageText);
+      if (digitsMatch != null) {
+        phoneCandidate = digitsMatch.group(1) ?? '';
+      }
+    }
+
+    final phoneKey = _phoneIndexKey(phoneCandidate);
+    if (phoneKey.isEmpty) {
+      throw Exception(
+          'تعذر التحقق: الرسالة لا تتضمن كود استعادة مشفر (nexora-ai-rpc) أو رقم هاتف صالح للمطابقة في phones_index.');
+    }
+
+    final indexNode = await _get(
+        'workspaces/_registry/phones_index/${Uri.encodeComponent(phoneKey)}');
+    if (indexNode is! Map) {
+      throw Exception(
+          'رقم الهاتف ($phoneKey) غير موجود في فهرس phones_index السحابي الموثق.');
+    }
+
+    final verifiedWs = _pick(
+      indexNode['workspace_id'],
+      indexNode['workspaceId'],
+      workspaceIdHint,
+    ).trim();
+    if (verifiedWs.isEmpty) {
+      throw Exception(
+          'تعذر تحديد المنشأة المرتبطة برقم الهاتف ($phoneKey) في phones_index.');
+    }
+
+    // توليد كلمة مرور مؤقتة من 8 محارف وتحديث المنشأة والفهارس بصلاحية الأدمن
+    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    final rnd = Random.secure();
+    final tempPassword =
+        List.generate(8, (_) => chars[rnd.nextInt(chars.length)]).join();
+
+    await adminUpdateWorkspacePassword(
+      workspaceId: verifiedWs,
+      newPassword: tempPassword,
+      ownerEmail: asStr(indexNode['owner_email']),
+      phone: phoneKey,
+    );
+
+    final replyMessage =
+        'تم التحقق الآلي من كود الاستعادة المشفر ومطابقة رقم الهاتف ($phoneKey) في فهرس المنشأة ($verifiedWs) بنجاح ✓\n'
+        'كلمة المرور المؤقتة الجديدة لمنشأتك هي:\n'
+        '$tempPassword\n'
+        'يرجى تسجيل الدخول بها وتغييرها من إعدادات الحساب فور الدخول.';
+
+    return <String, dynamic>{
+      'verified': true,
+      'workspace_id': verifiedWs,
+      'phone': phoneKey,
+      'device_id': deviceCandidate,
+      'temporary_password': tempPassword,
+      'reply_message': replyMessage,
+    };
+  }
+
+  /// التحقق المباشر من رقم هاتف في فهرس `/workspaces/_registry/phones_index`.
+  Future<Map<String, dynamic>?> lookupPhoneInCloudIndex(String rawPhone) async {
+    final phoneKey = _phoneIndexKey(rawPhone);
+    if (phoneKey.isEmpty) return null;
+    final node = await _get(
+        'workspaces/_registry/phones_index/${Uri.encodeComponent(phoneKey)}');
+    if (node is Map) {
+      return <String, dynamic>{
+        'phone_key': phoneKey,
+        ...Map<String, dynamic>.from(node),
+      };
+    }
+    return null;
+  }
+
+  /// بناء سياق حي ومتكامل لمساعد الذكاء الاصطناعي (Gemini) يشمل بنية النظام،
+  /// بيانات المساحات والمنشآت، فهارس الهواتف (`phones_index`)، وطلبات استعادة كلمات المرور،
+  /// مع تعليمات الصلاحيات التنفيذية الكاملة.
+  Future<String> buildLiveAdminAiContext({
+    String? focusWorkspaceId,
+    String? userQuery,
+  }) async {
+    if (!configured) return '';
+    final buf = StringBuffer();
+    buf.writeln('\n=== [بنية النظام والصلاحيات التنفيذية الكاملة لمساعد الأدمن الذكي (Gemini)] ===');
+    buf.writeln(
+      'أنت تمتلك صلاحيات الإدارة الكاملة (Full Admin Privileges) والوصول المباشر لعقد السحابة في منظومة "المحاسب بلاس" وتطبيق الإدارة (Admin App):\n'
+      '- عقد المساحات: `/workspaces/{ws}/meta` (تضم `password_hash`, `owner_email`, `phone`, `store_name`) و `/workspaces/{ws}/subscription`.\n'
+      '- فهارس التحقق السحابية: `/workspaces/_registry/phones_index/{phoneKey}` و `/workspaces/_registry/emails_index/{emailKey}`.\n'
+      '- طلبات استعادة كلمات المرور: `/workspaces/_registry/password_reset_requests/{ws}` وحزم `nexora-ai-rpc` المشفرة بتوقيع SHA-256.\n'
+      '- لتنفيذ أي إجراء إداري فعلي في السحابة فوراً أثناء ردك، أدرج في نهاية ردك وسم أمر تنفيذي بصيغة JSON واحدة أو أكثر على الشكل التالي:\n'
+      '  <admin_action>{"op":"change_password","workspace_id":"WS_ID","new_password":"NEW_PASS"}</admin_action>\n'
+      '  أو لتوليد كلمة مرور مؤقتة آلياً بعد التحقق من رقم الهاتف في phones_index:\n'
+      '  <admin_action>{"op":"reset_password_by_phone","phone":"PHONE_NUMBER","workspace_id":"OPTIONAL_WS_ID"}</admin_action>\n'
+      '  أو للتحقق من رقم هاتف في phones_index:\n'
+      '  <admin_action>{"op":"verify_phone","phone":"PHONE_NUMBER"}</admin_action>\n'
+      '  أو لقفل/فك تجميد منشأة:\n'
+      '  <admin_action>{"op":"toggle_freeze","workspace_id":"WS_ID","freeze":true}</admin_action>\n'
+      '  أو لفك ارتباط أجهزة منشأة:\n'
+      '  <admin_action>{"op":"unlink_device","workspace_id":"WS_ID"}</admin_action>\n'
+      '  أو لإرسال إشعار مباشر لمنشأة:\n'
+      '  <admin_action>{"op":"send_alert","workspace_id":"WS_ID","title":"العنوان","body":"النص"}</admin_action>',
+    );
+
+    try {
+      final subs = await recentSubscribers(limit: 40, includeAbandoned: true)
+          .timeout(const Duration(seconds: 8), onTimeout: () => const []);
+      if (subs.isNotEmpty) {
+        buf.writeln('\n--- قائمة المساحات والمنشآت المسجلة حالياً (${subs.length}) ---');
+        for (final s in subs.take(30)) {
+          buf.writeln(
+            '• المنشأة: "${s.storeName.isNotEmpty ? s.storeName : s.workspaceId}" | '
+            'المعرف: ${s.workspaceId} | المسؤول: ${s.clientName.isNotEmpty ? s.clientName : "—"} | '
+            'الهاتف: ${s.phone.isNotEmpty ? s.phone : "—"} | البريد: ${s.ownerEmail.isNotEmpty ? s.ownerEmail : "—"} | '
+            'الحالة: ${s.isFrozen ? "معلق" : s.status} | الأجهزة: ${s.activeDevices}/${s.maxDevices}',
+          );
+        }
+      }
+    } catch (_) {}
+
+    // إذا كان هناك تركيز على منشأة معينة أو رقم هاتف في رسالة المستخدم، نفحص phones_index مباشرًة
+    final queryText = (userQuery ?? '').trim();
+    final packet = decodeAndVerifyAiRecoveryPacket(queryText);
+    if (packet != null) {
+      buf.writeln('\n--- فحص حزمة nexora-ai-rpc المشفرة في الرسالة ---');
+      buf.writeln(
+        'تم التحقق من صحة توقيع SHA-256 للحزمة البرمجية ✓: '
+        'phone_key=${packet['phone_key']}, device_id=${packet['device_id']}, '
+        'device_fingerprint=${packet['device_fingerprint']}, ws_hint=${packet['workspace_hint']}',
+      );
+    }
+
+    String phoneToLookup = packet != null ? asStr(packet['phone_key']) : '';
+    if (phoneToLookup.isEmpty && queryText.isNotEmpty) {
+      final m = RegExp(r'(\+?\d[\d\s\-]{7,16}\d)').firstMatch(queryText);
+      if (m != null) phoneToLookup = m.group(1) ?? '';
+    }
+    if (phoneToLookup.isNotEmpty) {
+      try {
+        final idxNode = await lookupPhoneInCloudIndex(phoneToLookup);
+        if (idxNode != null) {
+          buf.writeln(
+            '\n--- نتيجة التحقق الفوري من فهرس phones_index للرقم ($phoneToLookup) ---\n'
+            'موجود وموثق ✓: workspace_id=${idxNode['workspace_id'] ?? idxNode['workspaceId']}, '
+            'owner_email=${idxNode['owner_email'] ?? ""}, store_name=${idxNode['store_name'] ?? ""}',
+          );
+        } else {
+          buf.writeln(
+            '\n--- نتيجة التحقق الفوري من فهرس phones_index للرقم ($phoneToLookup) ---\n'
+            'غير مسجل في phones_index.',
+          );
+        }
+      } catch (_) {}
+    }
+
+    if (focusWorkspaceId != null && focusWorkspaceId.trim().isNotEmpty) {
+      final ws = focusWorkspaceId.trim();
+      try {
+        final enc = Uri.encodeComponent(ws);
+        final meta = await _get('workspaces/$enc/meta');
+        if (meta is Map) {
+          buf.writeln(
+            '\n--- بيانات المنشأة الحالية ($ws) من /workspaces/$ws/meta ---\n'
+            'store_name=${meta['store_name'] ?? meta['business_name'] ?? ""}, '
+            'owner_email=${meta['owner_email'] ?? ""}, phone=${meta['phone'] ?? ""}, '
+            'has_password_hash=${asStr(meta['password_hash']).isNotEmpty}',
+          );
+        }
+      } catch (_) {}
+    }
+
+    return buf.toString();
+  }
+
+  /// تنفيذ أمر إداري صادر عن مساعد الذكاء الاصطناعي (Gemini) بصلاحيات الأدمن الكاملة.
+  Future<String> executeAiAdminCommand(Map<String, dynamic> cmd) async {
+    final op = asStr(cmd['op'] ?? cmd['action']).trim().toLowerCase();
+    switch (op) {
+      case 'change_password':
+      case 'admin_update_password':
+        final ws = asStr(cmd['workspace_id'] ?? cmd['workspaceId']).trim();
+        final newPass =
+            asStr(cmd['new_password'] ?? cmd['password']).trim();
+        if (ws.isEmpty || newPass.isEmpty) {
+          return '⚠️ لم يتم تحديد معرف المنشأة أو كلمة المرور الجديدة.';
+        }
+        await adminUpdateWorkspacePassword(
+          workspaceId: ws,
+          newPassword: newPass,
+          ownerEmail: asStr(cmd['owner_email']),
+          phone: asStr(cmd['phone']),
+        );
+        return '✅ [تنفيذ آلي من المساعد الذكي]: تم تحديث كلمة المرور (`password_hash`) للمنشأة ($ws) وتحديث فهارسها السحابية بنجاح. كلمة المرور الجديدة: `$newPass`';
+
+      case 'reset_password_by_phone':
+      case 'smart_recovery':
+        final phone = asStr(cmd['phone'] ?? cmd['phone_key']).trim();
+        final wsHint =
+            asStr(cmd['workspace_id'] ?? cmd['workspaceId']).trim();
+        final res = await processSmartSupportPasswordRecovery(
+          messageText: phone,
+          workspaceIdHint: wsHint,
+        );
+        return '✅ [تنفيذ آلي من المساعد الذكي]: ${res['reply_message']}';
+
+      case 'verify_phone':
+      case 'lookup_phone':
+        final phone = asStr(cmd['phone']).trim();
+        final idx = await lookupPhoneInCloudIndex(phone);
+        if (idx == null) {
+          return 'ℹ️ [فحص phones_index]: الرقم ($phone) غير مسجل في فهرس الهواتف السحابي.';
+        }
+        return '✅ [فحص phones_index]: الرقم (${idx['phone_key']}) موثق ومرتبط بالمنشأة (${idx['workspace_id'] ?? idx['workspaceId']}) — البريد: ${idx['owner_email'] ?? "—"}.';
+
+      case 'toggle_freeze':
+        final ws = asStr(cmd['workspace_id'] ?? cmd['workspaceId']).trim();
+        final freeze = cmd['freeze'] == true || asStr(cmd['freeze']) == 'true';
+        if (ws.isEmpty) return '⚠️ معرف المنشأة مطلوب.';
+        await toggleFreezeSubscriber(ws, freeze);
+        return '✅ [تنفيذ آلي من المساعد الذكي]: تم ${freeze ? "تجميد وقفل" : "فك تجميد"} المنشأة ($ws) بنجاح.';
+
+      case 'unlink_device':
+        final ws = asStr(cmd['workspace_id'] ?? cmd['workspaceId']).trim();
+        if (ws.isEmpty) return '⚠️ معرف المنشأة مطلوب.';
+        await unlinkSubscriberDevice(ws);
+        return '✅ [تنفيذ آلي من المساعد الذكي]: تم فك ارتباط الجهاز للمنشأة ($ws) بنجاح.';
+
+      case 'send_alert':
+        final ws = asStr(cmd['workspace_id'] ?? cmd['workspaceId']).trim();
+        final title = asStr(cmd['title']).trim();
+        final body = asStr(cmd['body'] ?? cmd['message']).trim();
+        if (ws.isEmpty || body.isEmpty) return '⚠️ بيانات الإشعار غير مكتملة.';
+        await sendDirectAlert(
+          workspaceId: ws,
+          title: title.isNotEmpty ? title : 'تنبيه من الإدارة',
+          body: body,
+        );
+        return '✅ [تنفيذ آلي من المساعد الذكي]: تم إرسال الإشعار المباشر للمنشأة ($ws) بنجاح.';
+
+      default:
+        return '';
+    }
+  }
 }
+
 
 String _pick(dynamic a, dynamic b, String dflt) {
   final sa = asStr(a);
@@ -3074,7 +3637,7 @@ const int kDeepSeekMaxTokens = 2048;
 /// سعة سياق المحادثة الموسعة.
 const int kMaxConversationContextMessages = 100;
 
-/// موجه النظام الافتراضي (Persona: الرفيق العفوي متعدد الاهتمامات) — يُحقن كرسالة `system`.
+/// موجه النظام الافتراضي (Persona: الرفيق العفوي متعدد الاهتمامات + الصلاحيات الإدارية الكاملة) — يُحقن كرسالة `system`.
 const String kOwnerSystemInstruction = '''
 أنت رفيق شخصي تفاعلي، ذكي، وخفيف الظل، ومستمع وفيّ للفضفضة والدردشة مع المدير.
 - شخصيتك وطبيعتك: إنسان واسع الاطلاع، سريع البديهة، حاضر الفكاهة، وتجيد خوض الأحاديث في شتى مجالات الحياة (السمر، الفضفضة، التجارة، الثقافة، يوميات العمل، النقاشات العامة، والفلسفة) بنفس الكفاءة التي تفهم بها التقنية.
@@ -3082,13 +3645,15 @@ const String kOwnerSystemInstruction = '''
   1. تكيّف فوراً مع موضوع المستخدم ومزاجه؛ إذا أراد فضفضة عامة أو نقاشاً حراً فتحدث معه كصديق واقعي في جلسة سمر، ولا تجرّ الحديث أبداً نحو البرمجة أو الأكواد ما لم يطلب هو ذلك صراحة.
   2. تحدث بلهجة عربية عفوية وودودة، بلا مقدمات ترحيبية رسمية مكررة ("أهلاً بك كيف أساعدك اليوم") وبلا أسلوب روبوتي.
   3. كن موجزاً ومركزاً وذا لمسة ذكية؛ لا تكتب مقالات طويلة إلا إذا استدعى النقاش ذلك.
+- صلاحيات الإدارة والتحكم بالمنشآت (Full Admin Control):
+  عندما يسألك المدير عن المنشآت، التراخيص، الهواتف المسجلة في `phones_index`، أو يطلب منك تغيير كلمة مرور منشأة، أو معالجة حزمة استعادة مشفرة (`nexora-ai-rpc`)، أو تجميد/فك تجميد منشأة، فلديك الصلاحيات الكاملة للوصول لبيانات المساحات وتنفيذ الأوامر الإدارية مباشرة عبر وسوم `<admin_action>{...}</admin_action>`.
 ''';
 
 /// الموجه الرسمي للنمط الثاني: الدعم الفني للمستخدمين (Client Support Mode).
 const String kClientSupportSystemInstruction = '''
 أنت موظف دعم فني بشري محترف لمنظومة "المحاسب" وتطبيق التراخيص.
 - شخصيتك والأسلوب: إنسان حقيقي، لبق، متفهم، هادئ، ومتعاون إلى أقصى حد. يُمنع منعاً باتاً السخرية أو التلميح بالمزاح أو استخدام لهجة غير رسمية مع العملاء.
-- مهمتك: مساعدة أصحاب المحلات في حل المشاكل الشائعة خطوة بخطوة (إعدادات الربط، الباركود، الطابعات، وتفعيل التراخيص).
+- مهمتك: مساعدة أصحاب المحلات في حل المشاكل الشائعة خطوة بخطوة (إعدادات الربط، الباركود، الطابعات، وتفعيل التراخيص)، ومعالجة طلبات استعادة كلمات المرور الموثقة عبر فهرس `phones_index` وحزم `nexora-ai-rpc` المشفرة وتوليد كلمات مرور مؤقتة وتحديث `/workspaces/{ws}/meta/password_hash` آلياً عند مطابقة البيانات الموثقة.
 - قاعدة التصعيد الإلزامية (Human Escalation):
   إذا واجه العميل مشكلة فنية معقدة، خطأ غير مألوف في المزامنة أو قاعدة البيانات، أو طلباً مالياً/إدارياً خارج الصلاحيات:
   يُمنع التخمين أو تقديم حلول غير مؤكدة، والرد حصراً بصيغة:
@@ -3222,6 +3787,8 @@ class ChatSession {
     String? model,
     String? existingMessageId,
     http.Client? httpClient,
+    bool includeLiveContext = false,
+    String? focusWorkspaceId,
   }) async* {
     final cleanPrompt = userText.trim();
     if (cleanPrompt.isEmpty) return;
@@ -3275,9 +3842,21 @@ class ChatSession {
             : 0)
         .toList();
 
-    final effectiveSystemPrompt = personaId == 'owner_companion'
+    var effectiveSystemPrompt = personaId == 'owner_companion'
         ? engine.systemPrompt.trim()
         : systemInstruction.trim();
+
+    if (includeLiveContext) {
+      try {
+        final liveCtx = await Rtdb.instance.buildLiveAdminAiContext(
+          focusWorkspaceId: focusWorkspaceId,
+          userQuery: cleanPrompt,
+        );
+        if (liveCtx.trim().isNotEmpty) {
+          effectiveSystemPrompt = '$effectiveSystemPrompt\n$liveCtx';
+        }
+      } catch (_) {}
+    }
 
     final messagesPayload = <Map<String, dynamic>>[
       if (effectiveSystemPrompt.isNotEmpty)
@@ -3308,11 +3887,38 @@ class ChatSession {
       rethrow;
     }
 
-    final finalReply = buffer.toString().trim();
+    var finalReply = buffer.toString().trim();
     if (finalReply.isEmpty) {
       const errText = 'تعذر الحصول على رد من مزود الذكاء الاصطناعي.';
       updateMessageState(userMsg.id, hasError: true, errorText: errText);
       throw Exception(errText);
+    }
+
+    // تنفيذ أي أوامر إدارية مضمنة <admin_action>{...}</admin_action> تلقائياً
+    final actionMatches = RegExp(
+      r'<admin_action>\s*(\{[\s\S]*?\})\s*</admin_action>',
+      multiLine: true,
+    ).allMatches(finalReply).toList();
+    if (actionMatches.isNotEmpty) {
+      for (final match in actionMatches) {
+        final rawJson = match.group(1) ?? '';
+        try {
+          final decoded = jsonDecode(rawJson);
+          if (decoded is Map) {
+            final execResult = await Rtdb.instance
+                .executeAiAdminCommand(Map<String, dynamic>.from(decoded));
+            if (execResult.isNotEmpty) {
+              final addon = '\n\n$execResult';
+              finalReply =
+                  finalReply.replaceAll(match.group(0)!, '').trim() + addon;
+              yield addon;
+            }
+          }
+        } catch (e) {
+          final errAddon = '\n\n⚠️ تعذر تنفيذ الأمر الإداري الآلي: $e';
+          yield errAddon;
+        }
+      }
     }
 
     updateMessageState(userMsg.id, hasError: false, errorText: null);
@@ -3335,6 +3941,8 @@ class ChatSession {
     String? baseUrl,
     String? model,
     http.Client? httpClient,
+    bool includeLiveContext = false,
+    String? focusWorkspaceId,
   }) async {
     final buf = StringBuffer();
     await for (final chunk in sendMessageStream(
@@ -3343,6 +3951,8 @@ class ChatSession {
       baseUrl: baseUrl,
       model: model,
       httpClient: httpClient,
+      includeLiveContext: includeLiveContext,
+      focusWorkspaceId: focusWorkspaceId,
     )) {
       buf.write(chunk);
     }

@@ -7,7 +7,6 @@ import 'operation.dart';
 import 'sync_queue.dart';
 import 'workspace_service.dart';
 import '../../core/cloud_config.dart';
-import '../../core/database.dart';
 
 typedef SyncNotifyFn = void Function();
 
@@ -47,46 +46,83 @@ class SyncRecorder {
     );
   }
 
-  /// (تعافٍ ذاتي) هل الخطأ هو «جدول مزامنة مفقود»؟
-  /// يحدث حين تُفتح قاعدة أنشأها بناء قديم دون `operations`/`sync_queue`
-  /// (انظر `AppDatabase.execSchemaScript`)، أو بعد استعادة ملف ناقص.
-  static bool _isMissingSyncTable(Object error) {
-    final m = '$error'.toLowerCase();
-    return m.contains('no such table: operations') ||
-        m.contains('no such table: sync_queue');
+  /// تعافٍ ذاتي فوري (Auto-Heal): ينشئ جداول المزامنة الأساسية (`operations`, `sync_queue`, `settings`, `workspaces`)
+  /// في حال واجَه الحفظ قاعدة بيانات ناقصة الجداول على أندرويد دون إفشال عملية المستخدم.
+  Future<void> _autoHealMissingSyncTables() async {
+    const ddlStatements = <String>[
+      '''CREATE TABLE IF NOT EXISTS workspaces (
+        id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '',
+        owner_google_id TEXT DEFAULT '', owner_email TEXT DEFAULT '',
+        owner_name TEXT DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      )''',
+      '''CREATE TABLE IF NOT EXISTS operations (
+        id TEXT PRIMARY KEY, device_id TEXT NOT NULL, workspace_id TEXT NOT NULL,
+        user_id INTEGER, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL,
+        op_type TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1,
+        parent_op_id TEXT DEFAULT '', payload TEXT NOT NULL,
+        device_time TEXT NOT NULL, server_time TEXT DEFAULT '',
+        timestamp TEXT NOT NULL, synced INTEGER NOT NULL DEFAULT 0,
+        is_synced INTEGER NOT NULL DEFAULT 0
+      )''',
+      '''CREATE TABLE IF NOT EXISTS sync_queue (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, operation_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending', target TEXT NOT NULL DEFAULT 'cloud',
+        attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT DEFAULT '',
+        next_try_at TEXT DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        UNIQUE(operation_id, target)
+      )''',
+      '''CREATE TABLE IF NOT EXISTS settings (
+        key TEXT PRIMARY KEY,
+        value TEXT
+      )''',
+    ];
+    for (final sql in ddlStatements) {
+      try {
+        await db.execute(sql);
+      } catch (_) {}
+    }
+    try {
+      final now = DateTime.now().toIso8601String();
+      await db.insert(
+        'workspaces',
+        {
+          'id': workspaceId.trim().isEmpty ? defaultWorkspaceId : workspaceId.trim(),
+          'name': 'متجري',
+          'owner_google_id': '',
+          'owner_email': '',
+          'owner_name': '',
+          'created_at': now,
+          'updated_at': now,
+        },
+        conflictAlgorithm: ConflictAlgorithm.ignore,
+      );
+    } catch (_) {}
   }
 
-  /// ينشئ جداول المزامنة الناقصة **على نفس المنفّذ** (المعاملة أو القاعدة)
-  /// ثم يُعيد المحاولة مرة واحدة. الجداول idempotent، فلا ضرر من التكرار.
-  Future<T> _healAndRetry<T>(Future<T> Function() op) async {
-    try {
-      await AppDatabase.ensureSyncTablesForExecutor(db);
-    } catch (_) {
-      // فشل الإنشاء سيظهر في المحاولة الثانية كخطأ حقيقي غير مُبتلَع.
-    }
-    return op();
-  }
-
-  /// ينفّذ عملية على جداول المزامنة، ويتعافى تلقائياً إن كانت الجداول غائبة
-  /// — فلا يُفشل حفظ الحساب أو الفاتورة أمام المستخدم بسبب مخطط ناقص.
-  Future<T> _withSyncTables<T>(Future<T> Function() op) async {
-    try {
-      return await op();
-    } on DatabaseException catch (e) {
-      if (!_isMissingSyncTable(e)) rethrow;
-      return _healAndRetry(op);
-    }
-  }
+  static bool _isMissingTableError(Object e) =>
+      '$e'.toLowerCase().contains('no such table');
 
   /// آخر version معروف للكيان (للبدء من 1 إن لم يوجد).
   Future<int> nextVersion(EntityKind entity, String entityId) async {
-    final r = await _withSyncTables(() => db.rawQuery(
-          'SELECT MAX(version) AS v FROM operations '
-          'WHERE entity_type = ? AND entity_id = ?',
+    try {
+      final r = await db.rawQuery(
+        'SELECT MAX(version) AS v FROM operations WHERE entity_type = ? AND entity_id = ?',
+        [entity.name, entityId],
+      );
+      final cur = (r.first['v'] as int?) ?? 0;
+      return cur + 1;
+    } on DatabaseException catch (e) {
+      if (_isMissingTableError(e)) {
+        await _autoHealMissingSyncTables();
+        final r = await db.rawQuery(
+          'SELECT MAX(version) AS v FROM operations WHERE entity_type = ? AND entity_id = ?',
           [entity.name, entityId],
-        ));
-    final cur = (r.first['v'] as int?) ?? 0;
-    return cur + 1;
+        );
+        final cur = (r.isNotEmpty ? r.first['v'] as int? : null) ?? 0;
+        return cur + 1;
+      }
+      rethrow;
+    }
   }
 
   /// يسجّل عملية في جدول operations + صفوف في sync_queue.
@@ -145,12 +181,13 @@ class SyncRecorder {
       );
     }
     try {
-      // (تعافٍ ذاتي) إن كان جدول operations غائباً يُنشأ ويُعاد الإدراج.
-      await _withSyncTables(() => db.insert('operations', opMap));
+      await db.insert('operations', opMap);
     } on DatabaseException catch (e) {
-      if ('$e'.contains('is_synced')) {
-        await _withSyncTables(
-            () => db.insert('operations', op.toMap(includeIsSynced: false)));
+      if (_isMissingTableError(e)) {
+        await _autoHealMissingSyncTables();
+        await db.insert('operations', opMap);
+      } else if ('$e'.contains('is_synced')) {
+        await db.insert('operations', op.toMap(includeIsSynced: false));
       } else {
         rethrow;
       }
@@ -160,10 +197,23 @@ class SyncRecorder {
     // لا نضيف هدف Cloud إلا إذا كان خادم سحابي مهيأ فعلاً — إضافته دائماً
     // كانت تترك صفوفاً «بانتظار الإرسال» للأبد (لا ناقل يلتقطها) فتظهر
     // للمستخدم كمزامنات عالقة وتزاحم الطابور.
-    final st = await db.query('settings',
-        columns: ['key', 'value'],
-        where: 'key IN (?, ?, ?)',
-        whereArgs: ['cloudBackendUrl', 'cloudAutoSync', 'account.type']);
+    List<Map<String, Object?>> st;
+    try {
+      st = await db.query('settings',
+          columns: ['key', 'value'],
+          where: 'key IN (?, ?, ?)',
+          whereArgs: ['cloudBackendUrl', 'cloudAutoSync', 'account.type']);
+    } on DatabaseException catch (e) {
+      if (_isMissingTableError(e)) {
+        await _autoHealMissingSyncTables();
+        st = await db.query('settings',
+            columns: ['key', 'value'],
+            where: 'key IN (?, ?, ?)',
+            whereArgs: ['cloudBackendUrl', 'cloudAutoSync', 'account.type']);
+      } else {
+        rethrow;
+      }
+    }
     final map = {for (final r in st) r['key'] as String: r['value'] as String?};
     final cloudOn =
         effectiveBackendUrl(map['cloudBackendUrl']).isNotEmpty &&
@@ -180,20 +230,28 @@ class SyncRecorder {
             ...extraTargets,
           };
     for (final t in targets) {
-      await _withSyncTables(() => db.insert(
-            'sync_queue',
-            {
-              'operation_id': id,
-              'status': SyncStatus.pending.name,
-              'target': t,
-              'attempts': 0,
-              'last_error': '',
-              'next_try_at': '',
-              'created_at': qnow,
-              'updated_at': qnow,
-            },
-            conflictAlgorithm: ConflictAlgorithm.ignore,
-          ));
+      final qRow = {
+        'operation_id': id,
+        'status': SyncStatus.pending.name,
+        'target': t,
+        'attempts': 0,
+        'last_error': '',
+        'next_try_at': '',
+        'created_at': qnow,
+        'updated_at': qnow,
+      };
+      try {
+        await db.insert('sync_queue', qRow,
+            conflictAlgorithm: ConflictAlgorithm.ignore);
+      } on DatabaseException catch (e) {
+        if (_isMissingTableError(e)) {
+          await _autoHealMissingSyncTables();
+          await db.insert('sync_queue', qRow,
+              conflictAlgorithm: ConflictAlgorithm.ignore);
+        } else {
+          rethrow;
+        }
+      }
     }
     // إشعار بمحاولة push فورية بعد الانتهاء من المعاملة (جدولة خارج الـ txn).
     try {
