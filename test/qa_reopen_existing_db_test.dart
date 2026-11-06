@@ -10,6 +10,10 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:nexora_app/core/database.dart';
+import 'package:nexora_app/data/sync/account_workspace.dart';
+import 'package:nexora_app/data/sync/models.dart';
+import 'package:nexora_app/data/sync/recorder.dart';
+import 'package:nexora_app/data/sync/smart_support_recovery_service.dart';
 
 void main() {
   test('فتح قاعدة فيها workspaces مسبقاً لا يرمي "already exists"', () async {
@@ -122,5 +126,57 @@ void main() {
         .first['c'] as int;
     expect(c2, c1, reason: 'البذرة idempotent — لا تضاعف العملات');
     await db.close();
+  });
+
+  test('Auto-Heal في SyncRecorder يُنشئ جدولي operations و sync_queue تلقائياً عند فقدانهما',
+      () async {
+    sqfliteFfiInit();
+    final db = await databaseFactoryFfi.openDatabase(
+      inMemoryDatabasePath,
+      options: OpenDatabaseOptions(version: 1),
+    );
+    // قاعدة بيانات تخلو تماماً من جدول operations و sync_queue
+    final recorder = SyncRecorder(
+      () async => db,
+      deviceIdLoader: () async => 'DEV-TEST-01',
+      workspaceIdLoader: () async => 'ws_test_heal',
+    );
+    final op = await recorder.record(
+      entity: EntityKind.account,
+      entityId: 'acc_1',
+      type: OpType.create,
+      payload: const {'id': 'acc_1', 'name': 'عميل تجريبي'},
+    );
+    expect(op.entityId, 'acc_1');
+    final ops = await db.query('operations');
+    expect(ops.length, 1);
+    await db.close();
+  });
+
+  test('توليد وفك تشفير حزمة استعادة كلمة المرور البرمجية (nexora-ai-rpc) بتوقيع SHA-256 صحيح',
+      () {
+    final packet = AccountWorkspace.buildEncryptedAiRecoveryPacket(
+      phone: '0551234567',
+      deviceId: 'DEVICE-ABCD1234',
+      deviceFingerprint: 'FP-XYZ-987654',
+      workspaceHint: 'ws_owner_1',
+    );
+    expect(packet, contains('nexora-ai-rpc'));
+    expect(packet, contains('NEXORA_AI_CORE_RPC'));
+
+    final verified =
+        SmartSupportRecoveryService.decodeAndVerifyAiRecoveryPacket(packet);
+    expect(verified, isNotNull);
+    expect(verified!['verified_signature'], isTrue);
+    expect(verified['phone_key'], '551234567');
+    expect(verified['device_id'], 'DEVICE-ABCD1234');
+    expect(verified['device_fingerprint'], 'FP-XYZ-987654');
+
+    // التلاعب بالتوقيع يرفض الحزمة فوراً
+    final tampered = packet.replaceFirst('"sig_sha256": "', '"sig_sha256": "0000');
+    expect(
+      SmartSupportRecoveryService.decodeAndVerifyAiRecoveryPacket(tampered),
+      isNull,
+    );
   });
 }

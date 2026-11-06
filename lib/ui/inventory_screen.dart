@@ -3500,19 +3500,19 @@ class _ShortagesListSheetState extends ConsumerState<_ShortagesListSheet> {
 
   Set<String> _itemGroupKeys(
     Item item,
-    Map<int, Section> sectionsById,
-    Map<int, ItemCategory> categoriesById,
+    Map<String, Section> sectionsById,
+    Map<String, ItemCategory> categoriesById,
   ) {
     final keys = <String>{};
-    final secId = item.sectionId;
-    if (secId != null && sectionsById.containsKey(secId)) {
+    final secId = (item.sectionId ?? '').trim();
+    if (secId.isNotEmpty && sectionsById.containsKey(secId)) {
       keys.add('sec:$secId');
     }
-    final catId = item.categoryId;
-    if (catId != null && categoriesById.containsKey(catId)) {
+    final catId = (item.categoryId ?? '').trim();
+    if (catId.isNotEmpty && categoriesById.containsKey(catId)) {
       keys.add('cat:$catId');
-      final catSecId = categoriesById[catId]?.sectionId;
-      if (catSecId != null && sectionsById.containsKey(catSecId)) {
+      final catSecId = (categoriesById[catId]?.sectionId ?? '').trim();
+      if (catSecId.isNotEmpty && sectionsById.containsKey(catSecId)) {
         keys.add('sec:$catSecId');
       }
     }
@@ -3530,19 +3530,12 @@ class _ShortagesListSheetState extends ConsumerState<_ShortagesListSheet> {
     List<Section> sections,
     List<ItemCategory> categories,
   ) {
-    final secById = <int, Section>{
-      for (final s in sections)
-        if (s.id != null) s.id!: s,
-    };
-    final catById = <int, ItemCategory>{
-      for (final c in categories)
-        if (c.id != null) c.id!: c,
-    };
+    final secById = {for (final s in sections) s.id: s};
+    final catById = {for (final c in categories) c.id: c};
     final options = <_ShortageGroupOption>[];
     final addedLabelsLower = <String>{};
 
     for (final s in sections) {
-      if (s.id == null) continue;
       final key = 'sec:${s.id}';
       final cnt = _rows
           .where((r) => _itemGroupKeys(r.item, secById, catById).contains(key))
@@ -3554,7 +3547,6 @@ class _ShortagesListSheetState extends ConsumerState<_ShortagesListSheet> {
     }
 
     for (final c in categories) {
-      if (c.id == null) continue;
       final key = 'cat:${c.id}';
       final cnt = _rows
           .where((r) => _itemGroupKeys(r.item, secById, catById).contains(key))
@@ -3603,8 +3595,8 @@ class _ShortagesListSheetState extends ConsumerState<_ShortagesListSheet> {
 
   bool _matchesSelectedGroups(
     Item item,
-    Map<int, Section> secById,
-    Map<int, ItemCategory> catById,
+    Map<String, Section> secById,
+    Map<String, ItemCategory> catById,
   ) {
     if (_selectedGroupKeys.isEmpty) return true;
     final itemKeys = _itemGroupKeys(item, secById, catById);
@@ -3616,14 +3608,8 @@ class _ShortagesListSheetState extends ConsumerState<_ShortagesListSheet> {
     List<ItemCategory> categories,
   ) {
     if (_selectedGroupKeys.isEmpty) return _rows;
-    final secById = <int, Section>{
-      for (final s in sections)
-        if (s.id != null) s.id!: s,
-    };
-    final catById = <int, ItemCategory>{
-      for (final c in categories)
-        if (c.id != null) c.id!: c,
-    };
+    final secById = {for (final s in sections) s.id: s};
+    final catById = {for (final c in categories) c.id: c};
     return _rows
         .where((r) => _matchesSelectedGroups(r.item, secById, catById))
         .toList();
