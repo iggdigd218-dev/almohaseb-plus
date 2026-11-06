@@ -58,7 +58,6 @@ class CloudControlService {
   /// معالج عند وصول تنبيه سحابي جديد في الوقت الفعلي
   void Function(CloudAlert alert)? onNewAlertReceived;
 
-  bool _initializedAlertScan = false;
   final Set<String> _notifiedAlertIds = <String>{};
 
   Timer? _heartbeatTimer;
