@@ -2499,4 +2499,68 @@ class AppDatabase {
       );
     } catch (_) {}
   }
+
+  /// التحقق الفعلي من وجود جدولي operations و sync_queue في sqlite_master.
+  static Future<bool> hasCoreSyncTables(DatabaseExecutor db) async {
+    try {
+      final rows = await db.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('operations', 'sync_queue')",
+      );
+      final names = rows.map((r) => '${r['name']}').toSet();
+      return names.contains('operations') && names.contains('sync_queue');
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// إنشاء جداول المزامنة الأساسية فوراً على منفّذ قاعدة البيانات (DatabaseExecutor / Transaction / Database).
+  static Future<void> ensureSyncTablesForExecutor(DatabaseExecutor db) async {
+    const ddl = <String>[
+      '''CREATE TABLE IF NOT EXISTS workspaces (
+        id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '',
+        owner_google_id TEXT DEFAULT '', owner_email TEXT DEFAULT '',
+        owner_name TEXT DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      )''',
+      '''CREATE TABLE IF NOT EXISTS devices (
+        id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL,
+        name TEXT NOT NULL DEFAULT '', platform TEXT DEFAULT '',
+        app_version TEXT DEFAULT '', last_seen_at TEXT DEFAULT '',
+        last_sync_at TEXT DEFAULT '', pair_token TEXT DEFAULT '',
+        pair_token_exp TEXT DEFAULT '', auth_secret TEXT DEFAULT '',
+        revoked_at TEXT DEFAULT '', expelled_at TEXT DEFAULT '',
+        user_id INTEGER, paired_by INTEGER,
+        is_paired INTEGER NOT NULL DEFAULT 1, is_owner INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      )''',
+      '''CREATE TABLE IF NOT EXISTS operations (
+        id TEXT PRIMARY KEY, device_id TEXT NOT NULL, workspace_id TEXT NOT NULL,
+        user_id INTEGER, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL,
+        op_type TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1,
+        parent_op_id TEXT DEFAULT '', payload TEXT NOT NULL,
+        device_time TEXT NOT NULL, server_time TEXT DEFAULT '',
+        timestamp TEXT NOT NULL, synced INTEGER NOT NULL DEFAULT 0,
+        is_synced INTEGER NOT NULL DEFAULT 0
+      )''',
+      '''CREATE TABLE IF NOT EXISTS sync_queue (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, operation_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending', target TEXT NOT NULL DEFAULT 'cloud',
+        attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT DEFAULT '',
+        next_try_at TEXT DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        UNIQUE(operation_id, target)
+      )''',
+      'CREATE TABLE IF NOT EXISTS sync_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)',
+      'CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)',
+    ];
+    for (final sql in ddl) {
+      try {
+        await db.execute(sql);
+      } catch (_) {}
+    }
+    try {
+      final cols = await db.rawQuery('PRAGMA table_info(operations)');
+      if (!cols.any((c) => c['name'] == 'is_synced')) {
+        await db.execute('ALTER TABLE operations ADD COLUMN is_synced INTEGER NOT NULL DEFAULT 0');
+      }
+    } catch (_) {}
+  }
 }
