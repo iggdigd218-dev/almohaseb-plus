@@ -25,7 +25,6 @@ import '../data/providers.dart';
 import '../data/sync/account_workspace.dart';
 import '../data/sync/device_id.dart';
 import '../data/sync/firebase_auth_service.dart';
-import '../data/sync/smart_support_recovery_service.dart';
 import '../data/sync/subscription_guard.dart';
 import 'home_shell.dart';
 import 'lock_gate.dart';
@@ -874,261 +873,38 @@ class _WorkspaceManagerDialogState
     }
   }
 
-  Future<void> _changeWorkspacePassword(WorkspaceInfo ws) async {
-    final passCtrl = TextEditingController();
-    final confirmCtrl = TextEditingController();
-    bool obscure1 = true;
-    bool obscure2 = true;
-    bool saving = false;
-    String? errMsg;
-
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, setDState) => AlertDialog(
-          titlePadding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
-          contentPadding: const EdgeInsets.fromLTRB(16, 6, 16, 12),
-          title: Row(
-            children: [
-              Icon(Icons.lock_reset_rounded,
-                  color: AppColors.primaryOf(context), size: 20),
-              const SizedBox(width: 8),
-              Expanded(
-                child: Text(
-                  'تغيير كلمة المرور للمنشأة — ${ws.storeName}',
-                  style: const TextStyle(
-                      fontSize: 14, fontWeight: FontWeight.w800),
-                ),
-              ),
-            ],
-          ),
-          content: SizedBox(
-            width: 330,
-            child: SingleChildScrollView(
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  Text(
-                    'تحديث مباشر وآمن لحقل password_hash في عقدة المنشأة (/workspaces/${ws.workspaceId}/meta/password_hash).',
-                    style: TextStyle(
-                      fontSize: 11.5,
-                      height: 1.4,
-                      color: AppColors.text2Of(context),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextField(
-                    controller: passCtrl,
-                    obscureText: obscure1,
-                    enabled: !saving,
-                    textDirection: TextDirection.ltr,
-                    decoration: InputDecoration(
-                      labelText: 'كلمة المرور الجديدة *',
-                      isDense: true,
-                      prefixIcon:
-                          const Icon(Icons.lock_outline_rounded, size: 18),
-                      suffixIcon: IconButton(
-                        icon: Icon(
-                          obscure1
-                              ? Icons.visibility_outlined
-                              : Icons.visibility_off_outlined,
-                          size: 18,
-                        ),
-                        onPressed: () =>
-                            setDState(() => obscure1 = !obscure1),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 10),
-                  TextField(
-                    controller: confirmCtrl,
-                    obscureText: obscure2,
-                    enabled: !saving,
-                    textDirection: TextDirection.ltr,
-                    decoration: InputDecoration(
-                      labelText: 'تأكيد كلمة المرور الجديدة *',
-                      isDense: true,
-                      prefixIcon:
-                          const Icon(Icons.verified_user_outlined, size: 18),
-                      suffixIcon: IconButton(
-                        icon: Icon(
-                          obscure2
-                              ? Icons.visibility_outlined
-                              : Icons.visibility_off_outlined,
-                          size: 18,
-                        ),
-                        onPressed: () =>
-                            setDState(() => obscure2 = !obscure2),
-                      ),
-                    ),
-                  ),
-                  if (errMsg != null) ...[
-                    const SizedBox(height: 8),
-                    Text(
-                      errMsg!,
-                      style: const TextStyle(
-                        color: Colors.redAccent,
-                        fontSize: 11.5,
-                        fontWeight: FontWeight.w700,
-                      ),
-                    ),
-                  ],
-                ],
-              ),
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: saving ? null : () => Navigator.of(ctx).pop(),
-              child: const Text('إلغاء'),
-            ),
-            FilledButton.icon(
-              onPressed: saving
-                  ? null
-                  : () async {
-                      final p1 = passCtrl.text.trim();
-                      final p2 = confirmCtrl.text.trim();
-                      if (p1.length < 4) {
-                        setDState(() => errMsg =
-                            'يرجى إدخال كلمة مرور لا تقل عن 4 محارف.');
-                        return;
-                      }
-                      if (p1 != p2) {
-                        setDState(() => errMsg =
-                            'كلمتا المرور غير متطابقتين. يرجى التأكد من التطابق.');
-                        return;
-                      }
-                      setDState(() {
-                        saving = true;
-                        errMsg = null;
-                      });
-                      try {
-                        final repo = ref.read(repoProvider);
-                        final st = await repo.settings();
-                        final url = effectiveBackendUrl(st['cloudBackendUrl']);
-                        final token = await FirebaseAuthService.getValidIdToken(
-                          repo,
-                          apiKey: FirebaseWebAuthConfig.apiKey,
-                        );
-                        if (token == null || token.isEmpty) {
-                          throw Exception(
-                              'يلزم تسجيل الدخول بحساب المنشأة لتحديث كلمة المرور.');
-                        }
-                        await SmartSupportRecoveryService
-                            .adminUpdateWorkspacePassword(
-                          backendUrl: url,
-                          adminIdToken: token,
-                          workspaceId: ws.workspaceId,
-                          newPassword: p1,
-                          ownerEmail: ws.ownerEmail,
-                          phone: ws.phone,
-                        );
-                        if (ctx.mounted) Navigator.of(ctx).pop();
-                        if (mounted) {
-                          showSnack(context,
-                              'تم تحديث كلمة المرور للمنشأة «${ws.storeName}» بنجاح ✅');
-                        }
-                      } catch (e) {
-                        setDState(() {
-                          saving = false;
-                          errMsg = '$e';
-                        });
-                      }
-                    },
-              icon: saving
-                  ? const SizedBox(
-                      width: 14,
-                      height: 14,
-                      child: CircularProgressIndicator(
-                          strokeWidth: 2, color: Colors.white),
-                    )
-                  : const Icon(Icons.save_rounded, size: 16),
-              label: const Text('حفظ'),
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final primary = AppColors.primaryOf(context);
-    WorkspaceInfo? currentWs;
-    for (final w in _workspaces) {
-      if (w.isCurrent) {
-        currentWs = w;
-        break;
-      }
-    }
-    currentWs ??= _workspaces.isNotEmpty ? _workspaces.first : null;
-
     return AlertDialog(
-      insetPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 24),
-      titlePadding: const EdgeInsets.fromLTRB(14, 10, 8, 4),
-      contentPadding: const EdgeInsets.fromLTRB(14, 4, 14, 10),
-      actionsPadding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
       title: Row(
         children: [
-          Icon(Icons.domain_rounded, color: primary, size: 20),
+          Icon(Icons.domain_rounded, color: primary),
           const SizedBox(width: 8),
           const Expanded(
             child: Text(
               'إدارة المنشآت',
-              style: TextStyle(fontSize: 14.5, fontWeight: FontWeight.w800),
+              style: TextStyle(fontSize: 15.5, fontWeight: FontWeight.w800),
             ),
           ),
-          if (currentWs != null && !_loading && !_switching)
-            PopupMenuButton<String>(
-              tooltip: 'خيارات المنشأة',
-              icon: const Icon(Icons.more_vert_rounded, size: 19),
-              padding: EdgeInsets.zero,
-              onSelected: (val) {
-                if (val == 'change_password' && currentWs != null) {
-                  _changeWorkspacePassword(currentWs);
-                }
-              },
-              itemBuilder: (_) => const [
-                PopupMenuItem<String>(
-                  value: 'change_password',
-                  child: Row(
-                    children: [
-                      Icon(Icons.lock_reset_rounded, size: 18),
-                      SizedBox(width: 8),
-                      Text(
-                        'تغيير كلمة المرور للمنشأة',
-                        style: TextStyle(
-                            fontSize: 12.5, fontWeight: FontWeight.w800),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
         ],
       ),
       content: SizedBox(
-        width: 350,
+        width: 440,
         child: _loading || _switching
             ? Padding(
-                padding: const EdgeInsets.symmetric(vertical: 22),
+                padding: const EdgeInsets.symmetric(vertical: 32),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    const SizedBox(
-                      width: 24,
-                      height: 24,
-                      child: CircularProgressIndicator(strokeWidth: 2.3),
-                    ),
-                    const SizedBox(height: 10),
+                    const CircularProgressIndicator(),
+                    const SizedBox(height: 14),
                     Text(
                       _switching
-                          ? 'جاري التبديل وفتح قاعدة بيانات المنشأة المختارة...'
+                          ? 'جاري إغلاق المنشأة الحالية وفتح قاعدة بيانات المنشأة المختارة...'
                           : 'جاري تحميل قائمة منشآتك...',
                       textAlign: TextAlign.center,
-                      style: const TextStyle(fontSize: 12),
+                      style: const TextStyle(fontSize: 13),
                     ),
                   ],
                 ),
@@ -1138,20 +914,19 @@ class _WorkspaceManagerDialogState
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Text(
-                    'قاعدة بيانات SQLite مستقلة لكل منشأة — انقر للتبديل السريع:',
+                    'لكل منشأة معرف مستقل وملف قاعدة بيانات SQLite معزول بالكامل حتى لا تتداخل حسابات أو عمليات المنشآت مع بعضها.',
                     style: TextStyle(
-                      fontSize: 11,
-                      height: 1.35,
+                      fontSize: 12,
+                      height: 1.5,
                       color: AppColors.text2Of(context),
                     ),
                   ),
-                  const SizedBox(height: 8),
-                  ConstrainedBox(
-                    constraints: const BoxConstraints(maxHeight: 260),
+                  const SizedBox(height: 12),
+                  Flexible(
                     child: ListView.separated(
                       shrinkWrap: true,
                       itemCount: _workspaces.length,
-                      separatorBuilder: (_, __) => const SizedBox(height: 5),
+                      separatorBuilder: (_, __) => const SizedBox(height: 8),
                       itemBuilder: (ctx, i) {
                         final ws = _workspaces[i];
                         return Container(
@@ -1159,21 +934,16 @@ class _WorkspaceManagerDialogState
                             color: ws.isCurrent
                                 ? primary.withValues(alpha: 0.1)
                                 : Theme.of(context).cardColor,
-                            borderRadius: BorderRadius.circular(10),
+                            borderRadius: BorderRadius.circular(12),
                             border: Border.all(
                               color: ws.isCurrent
                                   ? primary
                                   : Colors.grey.withValues(alpha: 0.3),
-                              width: ws.isCurrent ? 1.4 : 1,
+                              width: ws.isCurrent ? 1.5 : 1,
                             ),
                           ),
                           child: ListTile(
-                            dense: true,
-                            visualDensity: VisualDensity.compact,
-                            contentPadding: const EdgeInsets.symmetric(
-                                horizontal: 8, vertical: 2),
                             leading: CircleAvatar(
-                              radius: 15,
                               backgroundColor: ws.isCurrent
                                   ? primary
                                   : Colors.grey.withValues(alpha: 0.2),
@@ -1183,143 +953,84 @@ class _WorkspaceManagerDialogState
                                 ws.isCurrent
                                     ? Icons.check_circle_rounded
                                     : Icons.store_rounded,
-                                size: 16,
+                                size: 20,
                               ),
                             ),
                             title: Text(
                               ws.storeName,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
                               style: const TextStyle(
                                 fontWeight: FontWeight.w800,
-                                fontSize: 12.5,
+                                fontSize: 13.5,
                               ),
                             ),
                             subtitle: Text(
                               [
-                                ws.workspaceId,
+                                'المعرف: ${ws.workspaceId}',
+                                if (ws.ownerEmail.isNotEmpty) ws.ownerEmail,
+                                if (ws.businessActivity.isNotEmpty)
+                                  ws.businessActivity,
                                 ws.defaultCurrency,
                               ].join(' • '),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(fontSize: 10.5),
+                              style: const TextStyle(fontSize: 11.5),
                             ),
-                            trailing: Row(
-                              mainAxisSize: MainAxisSize.min,
-                              children: [
-                                if (ws.isCurrent)
-                                  Container(
+                            trailing: ws.isCurrent
+                                ? Container(
                                     padding: const EdgeInsets.symmetric(
-                                        horizontal: 6, vertical: 2.5),
+                                        horizontal: 8, vertical: 4),
                                     decoration: BoxDecoration(
                                       color: primary,
-                                      borderRadius: BorderRadius.circular(6),
+                                      borderRadius: BorderRadius.circular(8),
                                     ),
                                     child: const Text(
-                                      'النشطة',
+                                      'النشطة حالياً',
                                       style: TextStyle(
                                         color: Colors.white,
-                                        fontSize: 10,
+                                        fontSize: 10.5,
                                         fontWeight: FontWeight.bold,
                                       ),
                                     ),
                                   )
-                                else
-                                  TextButton(
-                                    style: TextButton.styleFrom(
-                                      visualDensity: VisualDensity.compact,
-                                      padding: const EdgeInsets.symmetric(
-                                          horizontal: 8),
-                                    ),
-                                    onPressed: () => _switchTo(ws),
-                                    child: const Text(
-                                      'تبديل',
-                                      style: TextStyle(
-                                          fontSize: 11.5,
-                                          fontWeight: FontWeight.w800),
-                                    ),
-                                  ),
-                                PopupMenuButton<String>(
-                                  tooltip: 'خيارات المنشأة',
-                                  icon: const Icon(Icons.more_vert_rounded,
-                                      size: 17),
-                                  padding: EdgeInsets.zero,
-                                  onSelected: (val) {
-                                    if (val == 'change_password') {
-                                      _changeWorkspacePassword(ws);
-                                    } else if (val == 'delete' &&
-                                        !ws.isCurrent) {
-                                      _deleteWorkspace(ws);
-                                    }
-                                  },
-                                  itemBuilder: (_) => [
-                                    const PopupMenuItem<String>(
-                                      value: 'change_password',
-                                      child: Row(
-                                        children: [
-                                          Icon(Icons.lock_reset_rounded,
-                                              size: 17),
-                                          SizedBox(width: 8),
-                                          Text(
-                                            'تغيير كلمة المرور للمنشأة',
-                                            style: TextStyle(
-                                              fontSize: 12,
-                                              fontWeight: FontWeight.w800,
-                                            ),
-                                          ),
-                                        ],
+                                : Row(
+                                    mainAxisSize: MainAxisSize.min,
+                                    children: [
+                                      IconButton(
+                                        icon: const Icon(Icons.delete_outline,
+                                            color: Colors.redAccent, size: 20),
+                                        tooltip: 'حذف المنشأة الزائدة',
+                                        onPressed: () => _deleteWorkspace(ws),
                                       ),
-                                    ),
-                                    if (!ws.isCurrent)
-                                      const PopupMenuItem<String>(
-                                        value: 'delete',
-                                        child: Row(
-                                          children: [
-                                            Icon(Icons.delete_outline,
-                                                color: Colors.redAccent,
-                                                size: 17),
-                                            SizedBox(width: 8),
-                                            Text(
-                                              'حذف المنشأة',
-                                              style: TextStyle(
-                                                fontSize: 12,
-                                                color: Colors.redAccent,
-                                              ),
-                                            ),
-                                          ],
+                                      const SizedBox(width: 4),
+                                      OutlinedButton(
+                                        onPressed: () => _switchTo(ws),
+                                        child: const Text(
+                                          'تبديل',
+                                          style: TextStyle(fontSize: 12),
                                         ),
                                       ),
-                                  ],
-                                ),
-                              ],
-                            ),
+                                    ],
+                                  ),
                             onTap: ws.isCurrent ? null : () => _switchTo(ws),
                           ),
                         );
                       },
                     ),
                   ),
-                  const SizedBox(height: 8),
+                  const SizedBox(height: 12),
                   OutlinedButton.icon(
-                    style: OutlinedButton.styleFrom(
-                      visualDensity: VisualDensity.compact,
-                    ),
                     onPressed: () {
                       Navigator.of(context).pop();
                       showSecuredLogout(ref);
                     },
-                    icon: const Icon(Icons.logout_rounded, size: 16),
-                    label: const Text('تسجيل الخروج لشاشة الدخول والمنشآت',
-                        style: TextStyle(fontSize: 11.5)),
+                    icon: const Icon(Icons.logout_rounded, size: 18),
+                    label: const Text('تسجيل الخروج لشاشة الدخول والمنشآت'),
                   ),
                 ],
               ),
       ),
       actions: [
         TextButton(
-          style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
           onPressed: _switching ? null : () => Navigator.of(context).pop(),
-          child: const Text('إغلاق', style: TextStyle(fontSize: 12)),
+          child: const Text('إغلاق'),
         ),
       ],
     );
