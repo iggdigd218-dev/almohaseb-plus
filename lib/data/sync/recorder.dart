@@ -7,6 +7,7 @@ import 'operation.dart';
 import 'sync_queue.dart';
 import 'workspace_service.dart';
 import '../../core/cloud_config.dart';
+import '../../core/database.dart';
 
 typedef SyncNotifyFn = void Function();
 
@@ -46,57 +47,14 @@ class SyncRecorder {
     );
   }
 
-  /// تعافٍ ذاتي فوري (Auto-Heal): ينشئ جداول المزامنة الأساسية (`operations`, `sync_queue`, `settings`, `workspaces`)
-  /// في حال واجَه الحفظ قاعدة بيانات ناقصة الجداول على أندرويد دون إفشال عملية المستخدم.
+  /// تعافٍ ذاتي فوري (Auto-Heal): ينشئ جداول المزامنة الأساسية في حال
+  /// واجَه الحفظ قاعدة ناقصة الجداول، دون إفشال عملية المستخدم.
+  ///
+  /// (تنظيف المخطط) لا نُكرّر جمل `CREATE TABLE` هنا: المصدر الوحيد هو
+  /// `AppDatabase.ensureSyncTablesForExecutor` — تُرقّي الأعمدة القديمة
+  /// (`is_synced`) أيضًا، فأي تعديل مستقبلي في المخطط يقع في مكان واحد.
   Future<void> _autoHealMissingSyncTables() async {
-    const ddlStatements = <String>[
-      '''CREATE TABLE IF NOT EXISTS workspaces (
-        id TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '',
-        owner_google_id TEXT DEFAULT '', owner_email TEXT DEFAULT '',
-        owner_name TEXT DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-      )''',
-      '''CREATE TABLE IF NOT EXISTS operations (
-        id TEXT PRIMARY KEY, device_id TEXT NOT NULL, workspace_id TEXT NOT NULL,
-        user_id INTEGER, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL,
-        op_type TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1,
-        parent_op_id TEXT DEFAULT '', payload TEXT NOT NULL,
-        device_time TEXT NOT NULL, server_time TEXT DEFAULT '',
-        timestamp TEXT NOT NULL, synced INTEGER NOT NULL DEFAULT 0,
-        is_synced INTEGER NOT NULL DEFAULT 0
-      )''',
-      '''CREATE TABLE IF NOT EXISTS sync_queue (
-        id INTEGER PRIMARY KEY AUTOINCREMENT, operation_id TEXT NOT NULL,
-        status TEXT NOT NULL DEFAULT 'pending', target TEXT NOT NULL DEFAULT 'cloud',
-        attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT DEFAULT '',
-        next_try_at TEXT DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-        UNIQUE(operation_id, target)
-      )''',
-      '''CREATE TABLE IF NOT EXISTS settings (
-        key TEXT PRIMARY KEY,
-        value TEXT
-      )''',
-    ];
-    for (final sql in ddlStatements) {
-      try {
-        await db.execute(sql);
-      } catch (_) {}
-    }
-    try {
-      final now = DateTime.now().toIso8601String();
-      await db.insert(
-        'workspaces',
-        {
-          'id': workspaceId.trim().isEmpty ? defaultWorkspaceId : workspaceId.trim(),
-          'name': 'متجري',
-          'owner_google_id': '',
-          'owner_email': '',
-          'owner_name': '',
-          'created_at': now,
-          'updated_at': now,
-        },
-        conflictAlgorithm: ConflictAlgorithm.ignore,
-      );
-    } catch (_) {}
+    await AppDatabase.ensureSyncTablesForExecutor(db);
   }
 
   static bool _isMissingTableError(Object e) =>

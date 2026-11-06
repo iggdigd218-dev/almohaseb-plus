@@ -4629,7 +4629,7 @@ class _AdminSupportChatDetailScreenState
 
     // إذا كانت الرسالة تحتوي على حزمة استعادة كلمة المرور المشفرة (nexora-ai-rpc)،
     // نتحقق منها آلياً عبر فهرس phones_index ونولّد كلمة مرور مؤقتة ونحدث المنشأة فوراً.
-    if (Rtdb.decodeAndVerifyAiRecoveryPacket(promptText) != null) {
+    if (RtdbMetrics.decodeAndVerifyAiRecoveryPacket(promptText) != null) {
       setState(() => _aiStreaming = true);
       try {
         final result = await Rtdb.instance.processSmartSupportPasswordRecovery(
@@ -4645,6 +4645,15 @@ class _AdminSupportChatDetailScreenState
             escalatedOverride: false,
           );
           await _fetch();
+        }
+        // (R-04) كلمة المرور لا تُرسل في محادثة الدعم: نافذة تسليم يدوي.
+        final tempPass = '${result['temporary_password'] ?? ''}'.trim();
+        if (tempPass.isNotEmpty && mounted && context.mounted) {
+          await _showRecoveryCredentials(
+            widget.workspaceId,
+            '${result['phone'] ?? ''}',
+            tempPass,
+          );
         }
       } catch (e) {
         if (mounted) {
@@ -4740,8 +4749,148 @@ class _AdminSupportChatDetailScreenState
           _aiStreaming = false;
           _streamingPreview = '';
         });
+        // (R-03) لا تنفيذ تلقائي: نعرض الأوامر المقترحة للموافقة الصريحة.
+        if (pendingAdminActions.isNotEmpty) {
+          unawaited(_showPendingAdminActions());
+        }
       }
     }
+  }
+
+  /// (R-04) تسليم بيانات الدخول المؤقتة يدويًا عبر واتساب رقم المنشأة الموثق.
+  Future<void> _showRecoveryCredentials(
+    String workspaceId,
+    String phone,
+    String password,
+  ) async {
+    final target = phone.replaceAll(RegExp(r'[^\d]'), '');
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('بيانات الدخول المؤقتة — تسليم يدوي'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('المنشأة: $workspaceId'),
+            Text('الهاتف: $phone'),
+            const SizedBox(height: 10),
+            SelectableText('كلمة المرور: $password',
+                style: const TextStyle(fontWeight: FontWeight.bold)),
+            const SizedBox(height: 10),
+            const Text(
+              'لا تُرسل داخل محادثة الدعم. أرسلها عبر واتساب إلى رقم المنشأة الموثق فقط.',
+              style: TextStyle(fontSize: 12, color: Colors.grey),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: password));
+              Navigator.pop(ctx);
+            },
+            child: const Text('نسخ'),
+          ),
+          FilledButton.icon(
+            onPressed: target.length < 7
+                ? null
+                : () async {
+                    final msg = 'بيانات الدخول المؤقتة — $workspaceId\n'
+                        'كلمة المرور: $password\n'
+                        'يرجى تسجيل الدخول وتغييرها فورًا من إعدادات الحساب.';
+                    final uri = Uri.parse(
+                        'https://wa.me/$target?text=${Uri.encodeComponent(msg)}');
+                    await launchUrl(uri, mode: LaunchMode.externalApplication);
+                  },
+            icon: const Icon(Icons.chat_bubble_outline),
+            label: const Text('إرسال واتساب'),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('إغلاق'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// (R-03) نافذة اعتماد الأوامر الإدارية — لا تنفيذ بلا ضغط المشرف.
+  Future<void> _showPendingAdminActions() async {
+    if (!mounted) return;
+    final actions = pendingAdminActions;
+    if (actions.isEmpty) return;
+    final approved = await showDialog<List<int>>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('أوامر إدارية مقترحة (${actions.length})'),
+        content: SizedBox(
+          width: 420,
+          child: StatefulBuilder(
+            builder: (bctx, setLocal) {
+              final selected = <int>{...List<int>.generate(actions.length, (i) => i)};
+              return Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (var i = 0; i < actions.length; i++)
+                    CheckboxListTile(
+                      value: selected.contains(i),
+                      dense: true,
+                      title: Text(
+                        '${actions[i]['op'] ?? actions[i]['action'] ?? '?'}'
+                        ' — ${actions[i]['workspace_id'] ?? actions[i]['phone'] ?? ''}',
+                      ),
+                      onChanged: (v) => setLocal(() {
+                        if (v == true) {
+                          selected.add(i);
+                        } else {
+                          selected.remove(i);
+                        }
+                      }),
+                    ),
+                  const Padding(
+                    padding: EdgeInsets.only(top: 8),
+                    child: Text(
+                      'لن يُنفَّذ أي أمر دون موافقتك، ويُسجَّل كل تنفيذ في admin_log.',
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                  ),
+                ],
+              );
+            },
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, <int>[]),
+            child: const Text('تجاهل الكل'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(
+                ctx, List<int>.generate(actions.length, (i) => i)),
+            child: const Text('تنفيذ المعتمد'),
+          ),
+        ],
+      ),
+    );
+    clearPendingAdminActions();
+    if (approved == null || approved.isEmpty) return;
+    for (final i in approved) {
+      final cmd = actions[i];
+      try {
+        final res = await Rtdb.instance.executeAiAdminCommand(cmd);
+        if (mounted && res.isNotEmpty) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text(res)));
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('$e'), backgroundColor: Colors.red));
+        }
+      }
+    }
+    await _fetch();
   }
 
   Future<void> _escalateManually() async {

@@ -6,6 +6,7 @@ import 'package:sqflite/sqflite.dart';
 
 import '../../core/auth_config.dart';
 import '../../core/database.dart';
+import '../../core/device_names.dart';
 import '../../core/media_paths.dart';
 import '../../core/models.dart';
 import '../repository.dart';
@@ -1539,9 +1540,7 @@ extension ApplyRemoteOp on Repo {
                   final opTime = op.timestamp.isNotEmpty
                       ? op.timestamp
                       : op.deviceTime;
-                  if (localName.isNotEmpty &&
-                      localName != 'جهاز المحاسب' &&
-                      localName != 'جهاز مدير الحسابات' &&
+                  if (isCustomDeviceName(localName) &&
                       localUpd.isNotEmpty &&
                       opTime.isNotEmpty &&
                       localUpd.compareTo(opTime) > 0) {
