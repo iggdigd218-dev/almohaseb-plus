@@ -14,6 +14,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:nexora_app/core/security.dart';
 import 'package:nexora_app/data/sync/account_workspace.dart';
 import 'package:nexora_app/data/sync/recovery_packet.dart';
+import 'package:nexora_app/data/sync/recovery_wizard_logic.dart';
 
 /// نفس خوارزمية تطبيق الإدارة (`Rtdb.hashWorkspacePassword`).
 String adminHashPassword(String password) {
@@ -217,6 +218,118 @@ void main() {
       expect(outcome.deliveredRemotely, isFalse);
       expect(outcome.fullyDelivered, isFalse);
       expect(outcome.errors, isEmpty);
+    });
+  });
+
+  group('REC-PHONE-06 هوية الهاتف بديلاً للبريد', () {
+    test('بريد داخلي معياري مطبّع من رقم الهاتف', () {
+      expect(AccountWorkspace.internalEmailForPhone('+967 77 419 0040'),
+          'u_967774190040@almohaseb.local');
+      expect(AccountWorkspace.internalEmailForPhone('0774190040'),
+          'u_0774190040@almohaseb.local');
+    });
+
+    test('تمييز البريد من الهاتف وتحويل المعرّف إلى بريد مصادقة', () {
+      expect(AccountWorkspace.looksLikeEmail('a@b.com'), isTrue);
+      expect(AccountWorkspace.looksLikeEmail('774190040'), isFalse);
+      expect(AccountWorkspace.authEmailForIdentifier('Owner@Example.COM'),
+          'owner@example.com');
+      expect(AccountWorkspace.authEmailForIdentifier('+967774190040'),
+          'u_967774190040@almohaseb.local');
+    });
+
+    test('البريد الداخلي مميّز ويُتعرف عليه', () {
+      final internal =
+          AccountWorkspace.internalEmailForPhone('+967774190040');
+      expect(AccountWorkspace.isInternalPhoneEmail(internal), isTrue);
+      expect(AccountWorkspace.isInternalPhoneEmail('a@b.com'), isFalse);
+    });
+  });
+
+  group('REC-WIZ-07 معالج الاستعادة متعدد الصفحات (تقييم خلفي)', () {
+    const target = RecoveryTargetSnapshot(
+      workspaceId: 'WS-1',
+      storeName: 'مؤسسة النور التجارية',
+      activity: 'تجارة مواد غذائية',
+      phone: '+967774190040',
+    );
+
+    test('كلمة المرور الصحيحة + اسم مطابق ⇒ اجتياز', () {
+      final a = RecoveryScorer.assess(
+        target: target,
+        answers: const RecoveryAnswers(
+          lastPassword: 'OldPass1',
+          storeName: 'مؤسسة النور التجارية',
+          activity: 'تجارة مواد غذائية',
+        ),
+        passwordMatch: 1,
+      );
+      expect(a.passed, isTrue);
+      expect(a.score, greaterThanOrEqualTo(RecoveryScorer.passThreshold));
+      expect(a.signals, isNotEmpty);
+    });
+
+    test('لا تذكر كلمة المرور لكن اسم المنشأة مطابق ⇒ اجتياز', () {
+      final a = RecoveryScorer.assess(
+        target: target,
+        answers: const RecoveryAnswers(storeName: 'مؤسسة النور التجارية'),
+        passwordMatch: 0,
+      );
+      expect(a.passed, isTrue);
+    });
+
+    test('إجابات خاطئة تمامًا ⇒ رفض', () {
+      final a = RecoveryScorer.assess(
+        target: target,
+        answers: const RecoveryAnswers(
+          lastPassword: 'xyz',
+          storeName: 'مطعم البحر',
+          activity: 'صيانة سيارات',
+        ),
+        passwordMatch: 0,
+      );
+      expect(a.passed, isFalse);
+      expect(a.score, lessThan(RecoveryScorer.passThreshold));
+    });
+
+    test('إشارات جزئية فقط لا تكفي (حماية من التخمين)', () {
+      final a = RecoveryScorer.assess(
+        target: target,
+        answers: const RecoveryAnswers(activity: 'تجارة مواد غذائية'),
+        passwordMatch: 0,
+      );
+      expect(a.passed, isFalse);
+    });
+
+    test('تطبيع عربي: التشكيل وصيغ الألف/الياء لا تمنع التطابق', () {
+      expect(
+        RecoveryScorer.similarity('مؤسسة النُّور التجاريّة', 'مؤسسه النور التجاريه'),
+        greaterThan(0.85),
+      );
+      expect(RecoveryScorer.similarity('', 'أي شيء'), 0);
+    });
+
+    test('بيانات تواصل مطبعة تُطابق الرقم المسجل', () {
+      expect(
+        RecoveryScorer.similarity(
+          RecoveryScorer.digitsOnly('00967-774-190-040'),
+          RecoveryScorer.digitsOnly('+967774190040'),
+        ),
+        greaterThan(0.8),
+      );
+    });
+
+    test('منشأة غير موجودة ⇒ تقييم صفري دائمًا', () {
+      final a = RecoveryScorer.assess(
+        target: RecoveryTargetSnapshot.missing,
+        answers: const RecoveryAnswers(
+          lastPassword: 'anything',
+          storeName: 'anything',
+        ),
+        passwordMatch: 1,
+      );
+      expect(a.passed, isFalse);
+      expect(a.score, 0);
     });
   });
 }

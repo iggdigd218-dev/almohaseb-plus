@@ -26,6 +26,7 @@ import '../repository.dart';
 import 'cloud_firebase_transport.dart';
 import 'cloud_join.dart';
 import 'recovery_packet.dart';
+import 'recovery_wizard_logic.dart';
 import 'workspace_recovery.dart';
 import 'device_id.dart';
 import 'device_registry.dart';
@@ -822,6 +823,260 @@ class AccountWorkspace {
       phone: resolvedPhone,
       isLocal: false,
     );
+  }
+
+  // ────────────────────── هوية الهاتف (بديل البريد) ──────────────────────
+
+  /// بريد داخلي معياري لحساب أُنشئ برقم الهاتف فقط.
+  static String internalEmailForPhone(String phone) {
+    final digits = normalizePhone(phone).replaceAll(RegExp(r'[^0-9]'), '');
+    return 'u_$digits@almohaseb.local';
+  }
+
+  /// هل البريد داخلي (مُولَّد من رقم هاتف)؟
+  static bool isInternalPhoneEmail(String email) =>
+      email.trim().toLowerCase().endsWith('@almohaseb.local');
+
+  /// هل المعرّف المدخل بريد إلكتروني (وإلا فهو رقم هاتف)؟
+  static bool looksLikeEmail(String input) => input.contains('@');
+
+  /// تحويل ما يكتبه المستخدم في خانة المعرّف إلى بريد صالح لمصادقة Firebase.
+  static String authEmailForIdentifier(String input) {
+    final clean = input.trim();
+    if (looksLikeEmail(clean)) return clean.toLowerCase();
+    return internalEmailForPhone(clean);
+  }
+
+  // ────────────────────── معالج الاستعادة متعدد الصفحات ──────────────────────
+
+  /// (الخطوة 1) هل توجد منشأة لهذا المعرّف؟ وماذا نعرف عنها؟
+  /// لا يكشف أي بصمة كلمات مرور — فقط بيانات تعريفية عامة.
+  static Future<RecoveryTargetSnapshot> resolveRecoveryTarget({
+    required String backendUrl,
+    required String identifier,
+    String countryDialCode = '+967',
+  }) async {
+    final root = _trimSlashes(backendUrl);
+    final clean = identifier.trim();
+    if (root.isEmpty || clean.isEmpty) return RecoveryTargetSnapshot.missing;
+
+    String wsId = '';
+    String ownerEmail = '';
+    String storeName = '';
+    String phone = '';
+
+    if (looksLikeEmail(clean)) {
+      ownerEmail = clean.toLowerCase();
+      try {
+        final res = await _authedGet(
+          _emailIndexPath(root, ownerEmail),
+          timeout: const Duration(seconds: 7),
+        );
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          final body = utf8.decode(res.bodyBytes).trim();
+          if (body.isNotEmpty && body != 'null') {
+            final m = jsonDecode(body);
+            if (m is Map) {
+              wsId = '${m['workspaceId'] ?? m['workspace_id'] ?? ''}'.trim();
+              storeName = '${m['storeName'] ?? m['store_name'] ?? ''}'.trim();
+              phone = '${m['phone'] ?? ''}'.trim();
+            }
+          }
+        }
+      } catch (_) {}
+    } else {
+      final found = await lookupWorkspaceByPhoneForRecovery(
+        backendUrl: root,
+        phone: clean,
+        countryDialCode: countryDialCode,
+      );
+      if (found != null) {
+        wsId = found.workspaceId;
+        storeName = found.storeName;
+        phone = found.phone;
+        ownerEmail = found.ownerEmail;
+      }
+    }
+
+    if (wsId.isEmpty || wsId == 'default') return RecoveryTargetSnapshot.missing;
+
+    var activity = '';
+    try {
+      final metaRes = await _authedGet(
+        '$root/workspaces/${Uri.encodeComponent(wsId)}/meta.json',
+        timeout: const Duration(seconds: 7),
+      );
+      if (metaRes.statusCode >= 200 && metaRes.statusCode < 300) {
+        final metaBody = utf8.decode(metaRes.bodyBytes).trim();
+        if (metaBody.isNotEmpty && metaBody != 'null') {
+          final m = jsonDecode(metaBody);
+          if (m is Map) {
+            if (storeName.isEmpty) {
+              storeName = '${m['storeName'] ?? m['store_name'] ?? m['businessName'] ?? m['name'] ?? ''}'.trim();
+            }
+            activity = '${m['businessActivity'] ?? m['activity'] ?? ''}'.trim();
+            if (phone.isEmpty) {
+              phone = '${m['phone'] ?? m['whatsapp'] ?? ''}'.trim();
+            }
+            if (ownerEmail.isEmpty) {
+              ownerEmail = '${m['owner_email'] ?? m['ownerEmail'] ?? ''}'.trim().toLowerCase();
+            }
+          }
+        }
+      }
+    } catch (_) {}
+
+    return RecoveryTargetSnapshot(
+      workspaceId: wsId,
+      storeName: storeName,
+      activity: activity,
+      phone: phone,
+      ownerEmail: ownerEmail,
+    );
+  }
+
+  /// (الخطوة 2) هل الكلمة «المتذكَّرة» تطابق بصمة حالية أو سابقة؟
+  /// يرجع 1.0 للتطابق التام، 0.75 للتطابق مع سجل سابق، 0 لعدم التطابق.
+  static Future<double> passwordRecallScore({
+    required String backendUrl,
+    required String workspaceId,
+    required String candidate,
+  }) async {
+    final root = _trimSlashes(backendUrl);
+    final pass = candidate.trim();
+    if (root.isEmpty || workspaceId.trim().isEmpty || pass.isEmpty) return 0;
+    try {
+      final res = await _authedGet(
+        '$root/workspaces/${Uri.encodeComponent(workspaceId)}/meta.json',
+        timeout: const Duration(seconds: 7),
+      );
+      if (res.statusCode < 200 || res.statusCode >= 300) return 0;
+      final body = utf8.decode(res.bodyBytes).trim();
+      if (body.isEmpty || body == 'null') return 0;
+      final meta = jsonDecode(body);
+      if (meta is! Map) return 0;
+
+      final current = '${meta['password_hash'] ?? ''}'.trim();
+      if (current.isNotEmpty && Security.verify(pass, current)) return 1.0;
+
+      final history = meta['password_history'];
+      if (history is Map) {
+        for (final v in history.values) {
+          final h = '${(v is Map ? (v['hash'] ?? '') : v)}'.trim();
+          if (h.isNotEmpty && Security.verify(pass, h)) return 0.75;
+        }
+      } else if (history is List) {
+        for (final v in history) {
+          final h = '${(v is Map ? (v['hash'] ?? '') : v)}'.trim();
+          if (h.isNotEmpty && Security.verify(pass, h)) return 0.75;
+        }
+      }
+    } catch (_) {}
+    return 0;
+  }
+
+  /// (الخطوة 4) حفظ كلمة المرور الجديدة **بعد** اجتياز المعالج.
+  ///
+  /// يُستدعى فقط من المعالج بعد `RecoveryAssessment.passed == true`، أو من
+  /// مسار المشرف في تطبيق الإدارة. يكتب: بصمة جديدة + سجل البصمة السابقة +
+  /// الفهارس + سجل أمني في المنشأة.
+  static Future<bool> applyRecoveredPassword({
+    required String backendUrl,
+    required String workspaceId,
+    required String newPassword,
+    double confidenceScore = 0,
+    String deviceId = '',
+    String phone = '',
+    String email = '',
+  }) async {
+    final root = _trimSlashes(backendUrl);
+    final cleanWs = workspaceId.trim();
+    final cleanPass = newPassword.trim();
+    if (root.isEmpty || cleanWs.isEmpty || cleanWs == 'default') return false;
+    if (cleanPass.length < 6) return false;
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final pwHash = Security.hash(cleanPass);
+    var saved = false;
+
+    // 1) بصمة جديدة + نقل البصمة القديمة إلى السجل (يتيح «الكلمة المتذكَّرة»).
+    try {
+      String oldHash = '';
+      try {
+        final metaRes = await _authedGet(
+          '$root/workspaces/${Uri.encodeComponent(cleanWs)}/meta.json',
+          timeout: const Duration(seconds: 7),
+        );
+        if (metaRes.statusCode >= 200 && metaRes.statusCode < 300) {
+          final m = jsonDecode(utf8.decode(metaRes.bodyBytes).trim());
+          if (m is Map) oldHash = '${m['password_hash'] ?? ''}'.trim();
+        }
+      } catch (_) {}
+
+      final res = await _authedPatch(
+        '$root/workspaces/${Uri.encodeComponent(cleanWs)}/meta.json',
+        body: jsonEncode({
+          'password_hash': pwHash,
+          'password_updated_at': now,
+          'password_updated_by': 'recovery_wizard',
+          if (oldHash.isNotEmpty)
+            'password_history/${now ~/ 1000}': {
+              'hash': oldHash,
+              'replaced_at': now,
+            },
+          'updated_at': {'.sv': 'timestamp'},
+        }),
+      );
+      saved = res.statusCode >= 200 && res.statusCode < 300;
+    } catch (_) {}
+
+    if (!saved) return false;
+
+    // 2) الفهارس (بريد/هاتف) لتظل الوجهة معروفة للتسجيل لاحقًا.
+    final cleanEmail = email.trim().toLowerCase();
+    final cleanPhone = normalizePhone(phone);
+    if (cleanEmail.isNotEmpty && cleanEmail.contains('@')) {
+      try {
+        await _authedPatch(
+          _emailIndexPath(root, cleanEmail),
+          body: jsonEncode({
+            'workspaceId': cleanWs,
+            'email': cleanEmail,
+            'password_hash': pwHash,
+            'updated_at': {'.sv': 'timestamp'},
+          }),
+        );
+      } catch (_) {}
+    }
+    if (cleanPhone.replaceAll(RegExp(r'[^0-9]'), '').length >= 7) {
+      try {
+        await _authedPatch(
+          _phoneIndexPath(root, cleanPhone),
+          body: jsonEncode({
+            'workspaceId': cleanWs,
+            'phone': cleanPhone,
+            if (cleanEmail.isNotEmpty) 'email': cleanEmail,
+            'password_hash': pwHash,
+            'updated_at': {'.sv': 'timestamp'},
+          }),
+        );
+      } catch (_) {}
+    }
+
+    // 3) سجل أمني دائم (من فعل ماذا ومتى وبأي درجة موثوقية).
+    try {
+      await _authedPut(
+        '$root/workspaces/${Uri.encodeComponent(cleanWs)}/security_log/$now.json',
+        body: jsonEncode({
+          'action': 'password_recovered_by_wizard',
+          'confidence_score': confidenceScore,
+          'device_id': deviceId.trim(),
+          'at': now,
+        }),
+      );
+    } catch (_) {}
+
+    return true;
   }
 
   static String _briefError(Object e) {

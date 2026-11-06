@@ -18,8 +18,14 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'license_model.dart';
+import 'recovery_packet.dart';
 
 export 'license_model.dart';
+
+/// (R-03) أوامر إدارية مقترحة من المساعد تنتظر **موافقة صريحة** من الأدمن.
+/// لا تُنفَّذ تلقائيًا أبدًا — منعًا لهجمات حقن الأوامر (Prompt Injection).
+final List<Map<String, dynamic>> pendingAdminActions = <Map<String, dynamic>>[];
+void clearPendingAdminActions() => pendingAdminActions.clear();
 
 /// الرابط الرسمي الإقليمي لقاعدة النظام.
 const String kOfficialRtdbUrl = String.fromEnvironment(
@@ -3213,73 +3219,25 @@ extension RtdbMetrics on Rtdb {
   }
 
   /// فك تشفير والتحقق من حزمة `nexora-ai-rpc` البرمجية المشفرة المرسلة من العميل.
+  /// (R-01/R-02) التحقق من حزمة الاستعادة — موحّد مع العميل عبر
+  /// `RecoveryPacket`: نفس مفاتيح المظروف ونفس توقيع HMAC-SHA256.
+  /// أي حزمة لا تجتاز التوقيع تُرفض قبل تفسير أي حقل.
   static Map<String, dynamic>? decodeAndVerifyAiRecoveryPacket(
       String rawMessage) {
-    final text = rawMessage.trim();
-    if (text.isEmpty) return null;
-
-    Map<String, dynamic>? outer;
-    final codeBlockMatch = RegExp(
-      r'```(?:nexora-ai-rpc|json)?\s*(\{[\s\S]*?\})\s*```',
-      multiLine: true,
-    ).firstMatch(text);
-    final candidateJson =
-        codeBlockMatch != null ? codeBlockMatch.group(1)! : text;
-
-    try {
-      final decoded = jsonDecode(candidateJson);
-      if (decoded is Map) {
-        outer = Map<String, dynamic>.from(decoded);
-      }
-    } catch (_) {
-      final braceStart = text.indexOf('{');
-      final braceEnd = text.lastIndexOf('}');
-      if (braceStart >= 0 && braceEnd > braceStart) {
-        try {
-          final decoded =
-              jsonDecode(text.substring(braceStart, braceEnd + 1));
-          if (decoded is Map) {
-            outer = Map<String, dynamic>.from(decoded);
-          }
-        } catch (_) {}
-      }
-    }
-
-    if (outer == null) return null;
-    final payloadB64 = asStr(outer['payload_b64']).trim();
-    final sigSha256 = asStr(outer['sig_sha256']).trim().toLowerCase();
-    if (payloadB64.isEmpty || sigSha256.isEmpty) return null;
-
-    try {
-      final rawPayload = utf8.decode(base64Url.decode(payloadB64));
-      final payloadMap = jsonDecode(rawPayload);
-      if (payloadMap is! Map) return null;
-      final pKey = asStr(payloadMap['p_key']).trim();
-      final dId = asStr(payloadMap['d_id']).trim();
-      final ts = payloadMap['ts'];
-
-      final expectedSig = _hexBytes(
-        _sha256Bytes(
-          utf8.encode('NEXORA_AI_RECOVERY_V2::$rawPayload::$pKey::$dId::$ts'),
-        ),
-      ).substring(0, 24).toLowerCase();
-
-      if (expectedSig != sigSha256) return null;
-
-      return <String, dynamic>{
-        'verified_signature': true,
-        'phone_key': pKey,
-        'phone_raw': asStr(payloadMap['p_raw']).isNotEmpty
-            ? asStr(payloadMap['p_raw'])
-            : pKey,
-        'workspace_hint': asStr(payloadMap['ws_hint']),
-        'device_id': dId,
-        'device_fingerprint': asStr(payloadMap['d_fp']),
-        'timestamp': asInt(ts),
-      };
-    } catch (_) {
-      return null;
-    }
+    final packet = RecoveryPacket.decode(rawMessage);
+    if (packet == null) return null;
+    return <String, dynamic>{
+      'verified_signature': true,
+      'phone_key': packet.phoneKey,
+      'phone_raw': packet.phone,
+      'workspace_hint': packet.workspaceId,
+      'store_name': packet.storeName,
+      'owner_email': packet.email,
+      'device_id': packet.deviceId,
+      'device_fingerprint': packet.deviceFingerprint,
+      'timestamp': packet.timestampMs,
+      'is_fresh': packet.isFresh,
+    };
   }
 
   /// توليد كلمة مرور مؤقتة وتحليل طلب العميل عبر فهرس `phones_index` ومساعد Gemini،
@@ -3339,11 +3297,12 @@ extension RtdbMetrics on Rtdb {
       phone: phoneKey,
     );
 
+    // (R-04) لا تُرسل كلمة المرور داخل محادثة الدعم إطلاقًا: تُعرض للمشرف
+    // فقط في نافذة مستقلة، ويُرسلها هو عبر واتساب رقم المنشأة الموثق.
     final replyMessage =
-        'تم التحقق الآلي من كود الاستعادة المشفر ومطابقة رقم الهاتف ($phoneKey) في فهرس المنشأة ($verifiedWs) بنجاح ✓\n'
-        'كلمة المرور المؤقتة الجديدة لمنشأتك هي:\n'
-        '$tempPassword\n'
-        'يرجى تسجيل الدخول بها وتغييرها من إعدادات الحساب فور الدخول.';
+        'تم التحقق من حزمة الاستعادة ومطابقة رقم الهاتف ($phoneKey) في فهرس المنشأة ($verifiedWs) بنجاح ✓\n'
+        'تم تحديث كلمة المرور من لوحة الإدارة. سيتواصل معك الدعم عبر واتساب '
+        'على رقمك المسجل لتسليم بيانات الدخول، ولن تُرسل هنا حفاظًا على الأمان.';
 
     return <String, dynamic>{
       'verified': true,
@@ -3475,19 +3434,10 @@ extension RtdbMetrics on Rtdb {
     switch (op) {
       case 'change_password':
       case 'admin_update_password':
-        final ws = asStr(cmd['workspace_id'] ?? cmd['workspaceId']).trim();
-        final newPass =
-            asStr(cmd['new_password'] ?? cmd['password']).trim();
-        if (ws.isEmpty || newPass.isEmpty) {
-          return '⚠️ لم يتم تحديد معرف المنشأة أو كلمة المرور الجديدة.';
-        }
-        await adminUpdateWorkspacePassword(
-          workspaceId: ws,
-          newPassword: newPass,
-          ownerEmail: asStr(cmd['owner_email']),
-          phone: asStr(cmd['phone']),
-        );
-        return '✅ [تنفيذ آلي من المساعد الذكي]: تم تحديث كلمة المرور (`password_hash`) للمنشأة ($ws) وتحديث فهارسها السحابية بنجاح. كلمة المرور الجديدة: `$newPass`';
+        // (R-03/R-04) كلمة المرور لا يعتمدها النموذج ولا تُعاد في نص:
+        // تُنشأ من واجهة الموافقة بعد ضغط المشرف، ولا تُرسل إلا عبر واتساب.
+        return '⛔ تغيير كلمة المرور يتطلب موافقة المشرف من واجهة '
+            '«اعتماد طلب الاستعادة» — لا يُنفَّذ من نص المساعد.';
 
       case 'reset_password_by_phone':
       case 'smart_recovery':
@@ -3527,11 +3477,10 @@ extension RtdbMetrics on Rtdb {
         final title = asStr(cmd['title']).trim();
         final body = asStr(cmd['body'] ?? cmd['message']).trim();
         if (ws.isEmpty || body.isEmpty) return '⚠️ بيانات الإشعار غير مكتملة.';
-        await sendDirectAlert(
-          workspaceId: ws,
-          title: title.isNotEmpty ? title : 'تنبيه من الإدارة',
-          body: body,
-        );
+        await _put('workspaces/${Uri.encodeComponent(ws)}/alerts/${DateTime.now().millisecondsSinceEpoch}', <String, Object?>{
+          'title': title.isNotEmpty ? title : 'تنبيه من الإدارة',
+          'body': body,
+        });
         return '✅ [تنفيذ آلي من المساعد الذكي]: تم إرسال الإشعار المباشر للمنشأة ($ws) بنجاح.';
 
       default:
@@ -3900,24 +3849,24 @@ class ChatSession {
       multiLine: true,
     ).allMatches(finalReply).toList();
     if (actionMatches.isNotEmpty) {
+      // (R-03) لا تنفيذ تلقائي: نجمع المقترحات ونطلب موافقة صريحة من المشرف.
+      var queued = 0;
       for (final match in actionMatches) {
         final rawJson = match.group(1) ?? '';
         try {
           final decoded = jsonDecode(rawJson);
           if (decoded is Map) {
-            final execResult = await Rtdb.instance
-                .executeAiAdminCommand(Map<String, dynamic>.from(decoded));
-            if (execResult.isNotEmpty) {
-              final addon = '\n\n$execResult';
-              finalReply =
-                  finalReply.replaceAll(match.group(0)!, '').trim() + addon;
-              yield addon;
-            }
+            pendingAdminActions.add(Map<String, dynamic>.from(decoded));
+            queued++;
           }
-        } catch (e) {
-          final errAddon = '\n\n⚠️ تعذر تنفيذ الأمر الإداري الآلي: $e';
-          yield errAddon;
-        }
+        } catch (_) {}
+        finalReply = finalReply.replaceAll(match.group(0)!, '').trim();
+      }
+      if (queued > 0) {
+        final addon = '\n\n🔐 $queued أمر إداري مقترح بانتظار موافقتك — '
+            'افتح «أوامر بانتظار الموافقة» لمراجعتها وتنفيذها.';
+        finalReply = '$finalReply$addon';
+        yield addon;
       }
     }
 

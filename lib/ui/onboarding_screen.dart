@@ -33,6 +33,7 @@ import '../data/sync/google_auth_service.dart';
 import '../data/sync/subscription_guard.dart';
 import 'account_section.dart' show provisionCloudAfterSignIn;
 import 'create_workspace_screen.dart';
+import 'recovery_wizard_screen.dart';
 import 'group_management_screen.dart';
 import 'home_shell.dart';
 import 'join_approval_flow.dart';
@@ -705,10 +706,11 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     final initialPhone = !raw.contains('@') ? raw : '';
 
     await Navigator.of(context, rootNavigator: true).push(
-      MaterialPageRoute<void>(
-        builder: (_) => ForgotPasswordRecoveryScreen(
-          initialEmail: initialEmail,
-          initialPhone: initialPhone,
+      MaterialPageRoute<bool>(
+        builder: (_) => RecoveryWizardScreen(
+          initialIdentifier:
+              initialEmail.isNotEmpty ? initialEmail : initialPhone,
+          countryDialCode: '+967',
         ),
       ),
     );
@@ -779,10 +781,31 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     }
 
     // 2) المصادقة الرسمية عبر Firebase Auth أولاً (المسار الأساسي دائمًا).
-    if (isEmailInput) {
+    //    رقم الهاتف يُترجم إلى بريده الداخلي المعياري (أو بريده المرتبط).
+    {
+      String authEmail = isEmailInput
+          ? email
+          : AccountWorkspace.internalEmailForPhone(rawInput);
+      if (!isEmailInput) {
+        try {
+          final st0 = await ref.read(repoProvider).settings();
+          final url0 = effectiveBackendUrl(st0['cloudBackendUrl']);
+          if (url0.isNotEmpty) {
+            final found =
+                await AccountWorkspace.lookupWorkspaceByPhoneForRecovery(
+              backendUrl: url0,
+              phone: rawInput,
+              countryDialCode: '+967',
+            );
+            if (found != null && found.ownerEmail.contains('@')) {
+              authEmail = found.ownerEmail.toLowerCase();
+            }
+          }
+        } catch (_) {}
+      }
       try {
         final account = await FirebaseAuthRest.signInWithEmailPassword(
-          email: email,
+          email: authEmail,
           password: password,
         );
         await _resolveWorkspaceOrRedirectToRegister(
@@ -2047,7 +2070,7 @@ class _ForgotPasswordRecoveryScreenState
         final found = await AccountWorkspace.lookupWorkspaceByPhoneForRecovery(
           backendUrl: url,
           phone: rawPhone,
-          countryDialCode: _countryDialCode,
+          countryDialCode: '+967',
         );
         if (found != null) {
           resolvedWsId = found.workspaceId;

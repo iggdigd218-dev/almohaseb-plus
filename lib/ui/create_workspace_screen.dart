@@ -119,7 +119,11 @@ class _CreateWorkspaceScreenState extends ConsumerState<CreateWorkspaceScreen> {
       return;
     }
 
-    final email = _emailCtrl.text.trim().toLowerCase();
+    final rawIdentifier = _emailCtrl.text.trim();
+    // (هوية الهاتف) إذا أدخل رقمًا بدل البريد، نولّد بريدًا داخليًا معياريًا
+    // لمصادقة Firebase ونحفظ الرقم في بيانات المنشأة وفهرس phones_index.
+    final email = AccountWorkspace.authEmailForIdentifier(rawIdentifier);
+    final isPhoneIdentity = !AccountWorkspace.looksLikeEmail(rawIdentifier);
     final password = _passwordCtrl.text.trim();
     final storeName = _storeNameCtrl.text.trim();
     final rawPhone = _phoneCtrl.text.trim().replaceAll(RegExp(r'[^\d]'), '');
@@ -325,6 +329,19 @@ class _CreateWorkspaceScreenState extends ConsumerState<CreateWorkspaceScreen> {
         isAdditionalWorkspace: widget.isAdditionalWorkspace,
       );
 
+      // (هوية الهاتف) ربط الرقم بفهرس المنشأة السحابي بعد الإنشاء.
+      if (isPhoneIdentity && url.isNotEmpty) {
+        try {
+          await AccountWorkspace.bindPhoneWorkspace(
+            backendUrl: url,
+            phone: fullPhone,
+            workspaceId:
+                await ref.read(repoProvider).activeWorkspaceId(),
+            email: email,
+          );
+        } catch (_) {}
+      }
+
       // إعادة تشغيل محرك المزامنة وتحديث كافة الـ Providers للمنشأة الجديدة المعزولة
       try {
         final engine = ref.read(syncEngineProvider);
@@ -470,15 +487,25 @@ class _CreateWorkspaceScreenState extends ConsumerState<CreateWorkspaceScreen> {
                       textDirection: TextDirection.ltr,
                       textInputAction: TextInputAction.next,
                       decoration: const InputDecoration(
-                        labelText: 'البريد الإلكتروني للمالك *',
-                        hintText: 'name@example.com',
-                        prefixIcon: Icon(Icons.email_outlined),
+                        labelText: 'البريد الإلكتروني أو رقم الهاتف *',
+                        hintText: 'name@example.com أو 77xxxxxxx',
+                        prefixIcon: Icon(Icons.alternate_email),
                         border: OutlineInputBorder(),
                       ),
                       validator: (v) {
                         final s = (v ?? '').trim();
-                        if (s.isEmpty || !s.contains('@') || !s.contains('.')) {
-                          return 'يرجى إدخال بريد إلكتروني صحيح للمالك';
+                        if (s.isEmpty) {
+                          return 'أدخل البريد الإلكتروني أو رقم الهاتف';
+                        }
+                        if (s.contains('@')) {
+                          if (!s.contains('.')) {
+                            return 'يرجى إدخال بريد إلكتروني صحيح';
+                          }
+                          return null;
+                        }
+                        final d = s.replaceAll(RegExp(r'[^0-9]'), '');
+                        if (d.length < 7) {
+                          return 'رقم الهاتف قصير — أدخل 7 أرقام على الأقل';
                         }
                         return null;
                       },
