@@ -464,8 +464,28 @@ class AppDatabase {
           } catch (_) {
             alreadyEnsured = false;
           }
-          if (!alreadyEnsured) {
+          // (تعافي المخطط) لا نثق بالمفتاح وحده: قاعدة أُنشئت ببناء قديم
+          // سجّل `schema_ensured_v` دون أن تُنشأ جداول المزامنة فعلياً
+          // (لأن `db.execute` على أندرويد ينفّذ أول جملة فقط من السكربت)
+          // تبقى بلا `operations` أبداً، فيفشل حفظ أي حساب أو فاتورة بـ
+          // DatabaseException(no such table: operations). الفحص هنا فعلي.
+          final coreTablesOk = await hasCoreSyncTables(db);
+          if (!alreadyEnsured || !coreTablesOk) {
+            if (!coreTablesOk) {
+              try {
+                await _ensureCoreSyncTables(db);
+              } catch (_) {
+                // سيعيد ensureFullSchema المحاولة أدناه.
+              }
+            }
             await ensureFullSchema(db);
+          }
+        } else {
+          // حتى بعد هجرة ناجحة: شبكة أمان أخيرة لجداول المزامنة الأساسية.
+          if (!await hasCoreSyncTables(db)) {
+            try {
+              await _ensureCoreSyncTables(db);
+            } catch (_) {}
           }
         }
         if (effectiveWs.isNotEmpty && effectiveWs != defaultWorkspaceIdConst) {
@@ -1364,6 +1384,56 @@ class AppDatabase {
 
   /// ترقية المخطط مع الحفاظ على كل البيانات القائمة.
   /// ينشئ جداول المزامنة المفقودة بأمان (للدفاع ضد قواعد قديمة ناقصة).
+  /// DDL الجدولين الأساسيين للمزامنة — **مصدر واحد** يستخدمه الفتح العادي
+  /// والتعافي الذاتي داخل المعاملة، فلا يتفرّع النص بين موضعين.
+  static const String ddlOperationsTable = '''
+        CREATE TABLE IF NOT EXISTS operations (
+          id TEXT PRIMARY KEY, device_id TEXT NOT NULL, workspace_id TEXT NOT NULL,
+          user_id INTEGER, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL,
+          op_type TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1,
+          parent_op_id TEXT DEFAULT '', payload TEXT NOT NULL,
+          device_time TEXT NOT NULL, server_time TEXT DEFAULT '',
+          timestamp TEXT NOT NULL, synced INTEGER NOT NULL DEFAULT 0,
+          is_synced INTEGER NOT NULL DEFAULT 0
+        )''';
+
+  static const String ddlSyncQueueTable = '''
+        CREATE TABLE IF NOT EXISTS sync_queue (
+          id INTEGER PRIMARY KEY AUTOINCREMENT, operation_id TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending', target TEXT NOT NULL DEFAULT 'cloud',
+          attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT DEFAULT '',
+          next_try_at TEXT DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+          UNIQUE(operation_id, target)
+        )''';
+
+  /// هل جداول المزامنة الأساسية موجودة **فعلياً**؟ (sqlite_master لا المفتاح)
+  static Future<bool> hasCoreSyncTables(Database db) async {
+    try {
+      final rows = await db.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type = 'table' "
+        "AND name IN ('operations', 'sync_queue')",
+      );
+      final names = {for (final r in rows) '${r['name']}'};
+      return names.contains('operations') && names.contains('sync_queue');
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// (تعافي ذاتي) ينشئ جداول المزامنة الأساسية على أي منفّذ — `Database` أو
+  /// `Transaction`. يستدعيه `SyncRecorder` داخل المعاملة نفسها عند ظهور
+  /// «no such table»، فيُكمل الحفظ بدل إفشاله أمام المستخدم.
+  static Future<void> ensureSyncTablesForExecutor(DatabaseExecutor ex) async {
+    await ex.execute(ddlOperationsTable);
+    final cols = await ex.rawQuery('PRAGMA table_info(operations)');
+    if (!cols.any((c) => c['name'] == 'is_synced')) {
+      await ex.execute(
+        'ALTER TABLE operations ADD COLUMN is_synced INTEGER NOT NULL DEFAULT 0',
+      );
+    }
+    await ex.execute(ddlSyncQueueTable);
+  }
+
   static Future<void> _ensureCoreSyncTables(Database db) async {
     await _tryCreateTable(
       db,
@@ -1388,25 +1458,9 @@ class AppDatabase {
           is_paired INTEGER NOT NULL DEFAULT 1, is_owner INTEGER NOT NULL DEFAULT 0,
           created_at TEXT NOT NULL, updated_at TEXT NOT NULL
         )''');
-    await _tryCreateTable(db, 'operations', '''
-        CREATE TABLE IF NOT EXISTS operations (
-          id TEXT PRIMARY KEY, device_id TEXT NOT NULL, workspace_id TEXT NOT NULL,
-          user_id INTEGER, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL,
-          op_type TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1,
-          parent_op_id TEXT DEFAULT '', payload TEXT NOT NULL,
-          device_time TEXT NOT NULL, server_time TEXT DEFAULT '',
-          timestamp TEXT NOT NULL, synced INTEGER NOT NULL DEFAULT 0,
-          is_synced INTEGER NOT NULL DEFAULT 0
-        )''');
+    await _tryCreateTable(db, 'operations', ddlOperationsTable);
     await _addColumn(db, 'operations', 'is_synced', 'INTEGER NOT NULL DEFAULT 0');
-    await _tryCreateTable(db, 'sync_queue', '''
-        CREATE TABLE IF NOT EXISTS sync_queue (
-          id INTEGER PRIMARY KEY AUTOINCREMENT, operation_id TEXT NOT NULL,
-          status TEXT NOT NULL DEFAULT 'pending', target TEXT NOT NULL DEFAULT 'cloud',
-          attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT DEFAULT '',
-          next_try_at TEXT DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-          UNIQUE(operation_id, target)
-        )''');
+    await _tryCreateTable(db, 'sync_queue', ddlSyncQueueTable);
     await _tryCreateTable(db, 'google_auth', '''
         CREATE TABLE IF NOT EXISTS google_auth (
           id INTEGER PRIMARY KEY CHECK (id = 1), google_id TEXT DEFAULT '',
@@ -1488,14 +1542,10 @@ class AppDatabase {
   ///   ويندوز القديمة التي استخدمت CREATE TABLE بدون IF NOT EXISTS) يتجاوزها
   ///   بدل أن تنهار الهجرة بالكامل وتُظهر "table workspaces already exists".
   static Future<void> execSchemaScript(Database db, String script) async {
-    // أولاً جرّب التنفيذ المباشر (الأسرع، يدعم المحرك الجُمل المتعددة).
-    try {
-      await db.execute(script);
-      return;
-    } catch (e) {
-      if (!_isAlreadyExistsError('$e')) rethrow;
-    }
-    // مسار التحوّط: نفّذ كل جملة مفردة وتجاوز "already exists".
+    // (تعافي المخطط) **لا مسار مباشر بعد اليوم**: `Database.execute` في
+    // sqflite على أندرويد ينفّذ **أول جملة فقط** ويتجاهل ما بعد أول فاصلة
+    // منقوطة بصمت (بلا استثناء!) — فكانت بقية جداول السكربت لا تُنشأ أبداً
+    // وتظهر لاحقاً كـ«no such table: operations». التقسيم إلزامي دائماً.
     final statements = _splitStatements(script);
     for (final stmt in statements) {
       final trimmed = stmt.trim();

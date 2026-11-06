@@ -7,6 +7,7 @@ import 'operation.dart';
 import 'sync_queue.dart';
 import 'workspace_service.dart';
 import '../../core/cloud_config.dart';
+import '../../core/database.dart';
 
 typedef SyncNotifyFn = void Function();
 
@@ -46,12 +47,44 @@ class SyncRecorder {
     );
   }
 
+  /// (تعافٍ ذاتي) هل الخطأ هو «جدول مزامنة مفقود»؟
+  /// يحدث حين تُفتح قاعدة أنشأها بناء قديم دون `operations`/`sync_queue`
+  /// (انظر `AppDatabase.execSchemaScript`)، أو بعد استعادة ملف ناقص.
+  static bool _isMissingSyncTable(Object error) {
+    final m = '$error'.toLowerCase();
+    return m.contains('no such table: operations') ||
+        m.contains('no such table: sync_queue');
+  }
+
+  /// ينشئ جداول المزامنة الناقصة **على نفس المنفّذ** (المعاملة أو القاعدة)
+  /// ثم يُعيد المحاولة مرة واحدة. الجداول idempotent، فلا ضرر من التكرار.
+  Future<T> _healAndRetry<T>(Future<T> Function() op) async {
+    try {
+      await AppDatabase.ensureSyncTablesForExecutor(db);
+    } catch (_) {
+      // فشل الإنشاء سيظهر في المحاولة الثانية كخطأ حقيقي غير مُبتلَع.
+    }
+    return op();
+  }
+
+  /// ينفّذ عملية على جداول المزامنة، ويتعافى تلقائياً إن كانت الجداول غائبة
+  /// — فلا يُفشل حفظ الحساب أو الفاتورة أمام المستخدم بسبب مخطط ناقص.
+  Future<T> _withSyncTables<T>(Future<T> Function() op) async {
+    try {
+      return await op();
+    } on DatabaseException catch (e) {
+      if (!_isMissingSyncTable(e)) rethrow;
+      return _healAndRetry(op);
+    }
+  }
+
   /// آخر version معروف للكيان (للبدء من 1 إن لم يوجد).
   Future<int> nextVersion(EntityKind entity, String entityId) async {
-    final r = await db.rawQuery(
-      'SELECT MAX(version) AS v FROM operations WHERE entity_type = ? AND entity_id = ?',
-      [entity.name, entityId],
-    );
+    final r = await _withSyncTables(() => db.rawQuery(
+          'SELECT MAX(version) AS v FROM operations '
+          'WHERE entity_type = ? AND entity_id = ?',
+          [entity.name, entityId],
+        ));
     final cur = (r.first['v'] as int?) ?? 0;
     return cur + 1;
   }
@@ -112,10 +145,12 @@ class SyncRecorder {
       );
     }
     try {
-      await db.insert('operations', opMap);
+      // (تعافٍ ذاتي) إن كان جدول operations غائباً يُنشأ ويُعاد الإدراج.
+      await _withSyncTables(() => db.insert('operations', opMap));
     } on DatabaseException catch (e) {
       if ('$e'.contains('is_synced')) {
-        await db.insert('operations', op.toMap(includeIsSynced: false));
+        await _withSyncTables(
+            () => db.insert('operations', op.toMap(includeIsSynced: false)));
       } else {
         rethrow;
       }
@@ -145,19 +180,20 @@ class SyncRecorder {
             ...extraTargets,
           };
     for (final t in targets) {
-      await db.insert(
-          'sync_queue',
-          {
-            'operation_id': id,
-            'status': SyncStatus.pending.name,
-            'target': t,
-            'attempts': 0,
-            'last_error': '',
-            'next_try_at': '',
-            'created_at': qnow,
-            'updated_at': qnow,
-          },
-          conflictAlgorithm: ConflictAlgorithm.ignore);
+      await _withSyncTables(() => db.insert(
+            'sync_queue',
+            {
+              'operation_id': id,
+              'status': SyncStatus.pending.name,
+              'target': t,
+              'attempts': 0,
+              'last_error': '',
+              'next_try_at': '',
+              'created_at': qnow,
+              'updated_at': qnow,
+            },
+            conflictAlgorithm: ConflictAlgorithm.ignore,
+          ));
     }
     // إشعار بمحاولة push فورية بعد الانتهاء من المعاملة (جدولة خارج الـ txn).
     try {
