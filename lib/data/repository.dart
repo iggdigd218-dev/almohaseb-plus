@@ -11,6 +11,7 @@ import '../core/accounting.dart';
 import '../core/app_version.dart';
 import '../core/ids.dart';
 import '../core/database.dart';
+import '../core/device_names.dart';
 import '../core/format.dart';
 import '../core/secret_store.dart';
 import '../core/media_paths.dart';
@@ -822,13 +823,9 @@ class Repo {
     final row = await ownDeviceRow();
     if (row != null) {
       final rawRosterName = '${row['name'] ?? ''}'.trim();
-      final validRosterName = (rawRosterName.isNotEmpty &&
-              rawRosterName != 'جهاز المحاسب' &&
-              rawRosterName != 'جهاز مدير الحسابات' &&
-              rawRosterName != 'جهاز عضو' &&
-              rawRosterName != 'المدير')
-          ? rawRosterName
-          : '';
+      // (توحيد الثوابت) القائمة مشتركة في core/device_names.dart
+      final validRosterName =
+          isCustomDeviceName(rawRosterName) ? rawRosterName : '';
       final uid = row['user_id'] as int?;
       if (uid != null) {
         final u = await userById(uid);

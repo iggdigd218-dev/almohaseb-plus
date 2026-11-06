@@ -5,6 +5,7 @@
 library;
 
 import 'dart:async';
+import '../../core/device_names.dart';
 import 'dart:convert';
 import 'dart:io';
 
@@ -241,8 +242,7 @@ class _ProfileDialogState extends ConsumerState<_ProfileDialog> {
               '')
           .trim();
       final hasCustomSavedName = customSavedName.isNotEmpty &&
-          customSavedName != 'جهاز المحاسب' &&
-          customSavedName != 'جهاز مدير الحسابات';
+          isCustomDeviceName(customSavedName);
       if (hasCustomSavedName && _userNameCtrl.text.trim().isEmpty) {
         _userNameCtrl.text = customSavedName;
       } else if (!hasCustomSavedName &&

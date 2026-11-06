@@ -714,21 +714,47 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     );
   }
 
+  /// (R-05) فتح المنشأة بعد تحقّق قراءة-فقط من البصمة التي اعتمدها المشرف
+  /// عبر `adminUpdateWorkspacePassword`. لا يُنشأ حساب ولا تُكتب أي بيانات.
+  Future<void> _openVerifiedCloudWorkspace(
+    PhoneWorkspaceRecoveryResult rec,
+  ) async {
+    final effectiveEmail = rec.ownerEmail.trim().isNotEmpty
+        ? rec.ownerEmail.trim().toLowerCase()
+        : 'phone.${rec.workspaceId.toLowerCase()}@nexora.local';
+    final account = FirebaseAccount(
+      uid: 'email:${AccountWorkspace.emailToKey(effectiveEmail)}',
+      email: effectiveEmail,
+      displayName: rec.storeName,
+    );
+    await _resolveWorkspaceOrRedirectToRegister(
+      account: account,
+      isLoginFlow: true,
+    );
+  }
+
   /// تسجيل الدخول عبر البريد الإلكتروني وكلمة المرور حصراً عبر Firebase Auth الرسمي أو المنشأة المحلية الموثقة.
   Future<void> _handleEmailLogin() async {
     if (_busy) return;
-    final email = _emailCtrl.text.trim().toLowerCase();
+    final rawInput = _emailCtrl.text.trim();
+    final email = rawInput.toLowerCase();
     final password = _passwordCtrl.text;
+    final isEmailInput = email.contains('@');
+    final digits = rawInput.replaceAll(RegExp(r'[^\d]'), '');
 
-    if (email.isEmpty || !email.contains('@') || !email.contains('.')) {
+    if (!isEmailInput && digits.length < 7) {
       setState(() => _authError =
-          'يرجى إدخال البريد الإلكتروني وكلمة المرور أو التسجيل عبر حساب Google');
+          'أدخل البريد الإلكتروني أو رقم الهاتف المسجل، وكلمة المرور — أو سجل الدخول عبر (حساب Google)');
       Sfx.error();
       return;
     }
-    if (password.trim().length < 6) {
-      setState(
-          () => _authError = 'يرجى إدخال كلمة المرور (6 أحرف على الأقل)');
+    if (isEmailInput && !email.contains('.')) {
+      setState(() => _authError = 'يرجى إدخال بريد إلكتروني صحيح');
+      Sfx.error();
+      return;
+    }
+    if (password.trim().length < 4) {
+      setState(() => _authError = 'يرجى إدخال كلمة المرور (4 أحرف على الأقل)');
       Sfx.error();
       return;
     }
@@ -740,47 +766,79 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     });
 
     // 1) فحص فوري للمنشآت المحفوظة محلياً على الجهاز لنفس البريد الإلكتروني
-    try {
-      final localMatches = await AccountWorkspace.findLocalWorkspacesOnDevice(
-        filterEmail: email,
-      );
-      if (localMatches.isNotEmpty) {
-        await _openSavedDeviceWorkspace(localMatches.first);
+    if (isEmailInput) {
+      try {
+        final localMatches = await AccountWorkspace.findLocalWorkspacesOnDevice(
+          filterEmail: email,
+        );
+        if (localMatches.isNotEmpty) {
+          await _openSavedDeviceWorkspace(localMatches.first);
+          return;
+        }
+      } catch (_) {}
+    }
+
+    // 2) المصادقة الرسمية عبر Firebase Auth أولاً (المسار الأساسي دائمًا).
+    if (isEmailInput) {
+      try {
+        final account = await FirebaseAuthRest.signInWithEmailPassword(
+          email: email,
+          password: password,
+        );
+        await _resolveWorkspaceOrRedirectToRegister(
+          account: account,
+          isLoginFlow: true,
+        );
         return;
+      } on StateError catch (se) {
+        final msg = se.message;
+        final credentialsFailure = msg.contains('USER_NOT_FOUND') ||
+            msg.contains('INVALID_CREDENTIALS_OR_NOT_FOUND') ||
+            msg.contains('INVALID_PASSWORD') ||
+            msg.contains('EMAIL_NOT_FOUND');
+        if (!credentialsFailure) {
+          if (!mounted) return;
+          setState(() => _authError = msg);
+          Sfx.error();
+          setState(() => _busy = false);
+          return;
+        }
+        // فشل معتاد ⇒ نكمل إلى المسار الرديف.
+      } catch (e) {
+        if (!mounted) return;
+        setState(() => _authError = AppErrorMapper.toUserFriendlyMessage(e));
+        Sfx.error();
+        setState(() => _busy = false);
+        return;
+      }
+    }
+
+    // 3) (R-05) مسار رديف للمالك الذي عيّن له المشرف كلمة مرور عبر لوحة
+    //    الإدارة: تحقّق **قراءة فقط** من `meta.password_hash` — بلا أي كتابة.
+    try {
+      final repo = ref.read(repoProvider);
+      final st2 = await repo.settings();
+      final url2 = effectiveBackendUrl(st2['cloudBackendUrl']);
+      if (url2.isNotEmpty) {
+        final verified = await AccountWorkspace.verifyWorkspacePasswordInCloud(
+          backendUrl: url2,
+          emailOrPhone: rawInput,
+          password: password,
+        );
+        if (verified != null) {
+          await _openVerifiedCloudWorkspace(verified);
+          return;
+        }
       }
     } catch (_) {}
 
-    // 2) المصادقة الرسمية الصارمة عبر Firebase Auth فقط
-    try {
-      final account = await FirebaseAuthRest.signInWithEmailPassword(
-        email: email,
-        password: password,
-      );
-
-      await _resolveWorkspaceOrRedirectToRegister(
-        account: account,
-        isLoginFlow: true,
-      );
-    } on StateError catch (se) {
-      final msg = se.message;
-      if (!mounted) return;
-      if (msg.contains('USER_NOT_FOUND') ||
-          msg.contains('INVALID_CREDENTIALS_OR_NOT_FOUND') ||
-          msg.contains('INVALID_PASSWORD') ||
-          msg.contains('EMAIL_NOT_FOUND')) {
-        setState(() => _authError =
-            'بيانات الدخول غير صحيحة أو الحساب غير مسجل.\nإذا نسيت كلمة السر اضغط على «نسيت كلمة السر؟» بالأسفل، أو سجل الدخول عبر (حساب Google).');
-      } else {
-        setState(() => _authError = msg);
-      }
-      Sfx.error();
-    } catch (e) {
-      if (!mounted) return;
-      setState(() => _authError = AppErrorMapper.toUserFriendlyMessage(e));
-      Sfx.error();
-    } finally {
-      if (mounted) setState(() => _busy = false);
+    // 4) لا Firebase Auth ولا بصمة معتمدة ⇒ رسالة موحّدة بلا كشف تفاصيل.
+    if (mounted) {
+      setState(() => _authError =
+          'بيانات الدخول غير صحيحة أو الحساب غير مسجل.\nإذا نسيت كلمة السر اضغط على «نسيت كلمة السر؟» بالأسفل، أو سجل الدخول عبر (حساب Google).');
+      setState(() => _busy = false);
     }
+    Sfx.error();
   }
 
   /// المسار الموحّد لتسجيل الدخول أو إنشاء حساب عبر Google.
@@ -1913,7 +1971,8 @@ class _ForgotPasswordRecoveryScreenState
     super.dispose();
   }
 
-  Future<void> _launchWhatsAppMessage({
+  /// يرجع `true` إذا فُتح واتساب فعلًا (لتظهر النتيجة للمستخدم بصدق).
+  Future<bool> _launchWhatsAppMessage({
     required String targetPhone,
     required String message,
   }) async {
@@ -1925,12 +1984,15 @@ class _ForgotPasswordRecoveryScreenState
     try {
       if (await canLaunchUrl(nativeUri)) {
         await launchUrl(nativeUri, mode: LaunchMode.externalApplication);
-        return;
+        return true;
       }
     } catch (_) {}
     try {
       await launchUrl(webUri, mode: LaunchMode.externalApplication);
-    } catch (_) {}
+      return true;
+    } catch (_) {
+      return false;
+    }
   }
 
   /// إرسال طلب استعادة مشفر برمجياً (`nexora-ai-rpc`) إلى الإدارة ومساعد خدمة العملاء الذكي عبر واتساب.
@@ -2021,8 +2083,10 @@ class _ForgotPasswordRecoveryScreenState
         storeName: resolvedStoreName,
       );
 
+      // (R-06) نُبلّغ بالنتيجة الحقيقية: لا ندّعي نجاحًا لم يحدث.
+      RecoveryRequestOutcome? outcome;
       if (url.isNotEmpty) {
-        await AccountWorkspace.submitPasswordResetSupportRequest(
+        outcome = await AccountWorkspace.submitPasswordResetSupportRequest(
           backendUrl: url,
           workspaceId: resolvedWsId,
           deviceId: devId,
@@ -2033,18 +2097,34 @@ class _ForgotPasswordRecoveryScreenState
         );
       }
 
-      await _launchWhatsAppMessage(
+      final launched = await _launchWhatsAppMessage(
         targetPhone: '967774190040',
         message: aiPacket,
       );
 
       if (!mounted) return;
       Sfx.success();
+      final buffer = StringBuffer();
+      if (launched) {
+        buffer.write('أُرسل طلب استعادة موقّع إلى الدعم عبر الواتساب.\n');
+      } else {
+        buffer.write(
+            'تعذّر فتح واتساب تلقائيًا — انسخ الحزمة أدناه وأرسلها إلى الدعم: 967774190040\n');
+      }
+      if (outcome != null && outcome.fullyDelivered) {
+        buffer.write('وسُجّل الطلب رسميًا في السحابة برقم تذكرة ${outcome.ticketId}.\n');
+      } else if (outcome != null && outcome.deliveredRemotely) {
+        buffer.write('وسُجّل الطلب جزئيًا في السحابة (${outcome.ticketId}).\n');
+      } else {
+        buffer.write('لم يُسجَّل الطلب في السحابة — يكفي إرسال الحزمة عبر الواتساب.\n');
+      }
+      if (outcome != null && outcome.errors.isNotEmpty) {
+        buffer.write('ملاحظات: ${outcome.errors.join(' · ')}');
+      }
       setState(() {
         _busy = false;
         _generatedAiPacket = aiPacket;
-        _successMsg =
-            'تم توليد كود التحقق المشفر وإرساله إلى الإدارة ومساعد الدعم الذكي عبر الواتساب.\nسيقوم النظام بالتحقق من ملكية الرقم وإرسال كلمة المرور الجديدة إليك من الإدارة.';
+        _successMsg = buffer.toString().trim();
       });
     } catch (e) {
       if (!mounted) return;
