@@ -2469,7 +2469,7 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
   static String _fmtNum(double v) {
     if (v == 0) return '';
     final raw = v == v.roundToDouble() ? v.toInt().toString() : '$v';
-    return ThousandsSeparatorInputFormatter()
+    return const ThousandsFormatter()
         .formatEditUpdate(
           TextEditingValue.empty,
           TextEditingValue(text: raw),
@@ -3145,7 +3145,7 @@ class _AmountField extends StatelessWidget {
             controller: controller,
             keyboardType: const TextInputType.numberWithOptions(decimal: true),
             inputFormatters: thousandsSeparator
-                ? [ThousandsSeparatorInputFormatter()]
+                ? const [ThousandsFormatter()]
                 : null,
             style: compact ? const TextStyle(fontSize: 13) : null,
             decoration: InputDecoration(
@@ -3170,7 +3170,7 @@ class _AmountField extends StatelessWidget {
                     final raw =
                         v == v.roundToDouble() ? '${v.toInt()}' : '$v';
                     controller.text = thousandsSeparator
-                        ? ThousandsSeparatorInputFormatter()
+                        ? const ThousandsFormatter()
                             .formatEditUpdate(
                               TextEditingValue.empty,
                               TextEditingValue(text: raw),
