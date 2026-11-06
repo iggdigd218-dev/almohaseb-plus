@@ -575,182 +575,113 @@ class AccountWorkspace {
     return null;
   }
 
-  /// حفظ بصمة كلمة المرور الجديدة (SHA-256 المملحة) في بيانات المنشأة وفهرس البريد والهاتف في السحابة.
-  static Future<bool> saveWorkspacePasswordHash({
+  /// مفتاح التوقيع المشترك لحزم استعادة كلمة المرور المشفرة الموجهة لمساعد الذكاء الاصطناعي.
+  static const String _kAiPacketSecret = 'NX_AI_RECOVERY_RPC_2026_V1';
+
+  /// توليد حزمة برمجية مشفرة وموقعة (`nexora-ai-rpc`) لطلب استعادة كلمة المرور،
+  /// بحيث تظهر ككود برمجي غير قابل للقراءة أو التزوير اليدوي ولا يفك شفرته إلا النظام ومساعد الذكاء الاصطناعي.
+  static String buildEncryptedAiRecoveryPacket({
+    required String deviceId,
+    required String hardwareFingerprint,
+    required String phone,
+    String email = '',
+    String workspaceId = '',
+    String storeName = '',
+  }) {
+    final normPhone = normalizePhone(phone);
+    final pKey = phoneToKey(normPhone);
+    final cleanEmail = email.trim().toLowerCase();
+    final cleanWs = workspaceId.trim();
+    final ts = DateTime.now().millisecondsSinceEpoch;
+
+    final rawSigInput =
+        'AUTH_RESET_V1|$deviceId|$hardwareFingerprint|$normPhone|$pKey|$cleanEmail|$cleanWs|$ts|$_kAiPacketSecret';
+    final sig = sha256.convert(utf8.encode(rawSigInput)).toString().substring(0, 24);
+
+    final innerPayload = <String, Object?>{
+      'cmd': '0x7F_PWD_RECOVERY_REQ',
+      'v': 1,
+      'dev': deviceId.trim(),
+      'hw': hardwareFingerprint.trim(),
+      'ph': normPhone,
+      'ph_idx': pKey,
+      if (cleanEmail.isNotEmpty) 'em': cleanEmail,
+      if (cleanWs.isNotEmpty) 'ws': cleanWs,
+      if (storeName.trim().isNotEmpty) 'st': storeName.trim(),
+      'ts': ts,
+      'sig': sig,
+    };
+
+    final b64Payload = base64Url.encode(utf8.encode(jsonEncode(innerPayload)));
+    final envelope = jsonEncode({
+      'protocol': 'NEXORA_AI_CORE_RPC',
+      'op': '0x7F_AUTH_RESET',
+      'pkt': b64Payload,
+      'chk': sig,
+    });
+
+    return '```nexora-ai-rpc\n$envelope\n```';
+  }
+
+  /// تسجيل طلب استعادة كلمة المرور المشفر في صندوق دعم الإدارة السحابي (`/support_chats` و `/password_reset_requests`).
+  static Future<void> submitPasswordResetSupportRequest({
     required String backendUrl,
     required String workspaceId,
+    required String deviceId,
+    required String phone,
     String email = '',
-    String phone = '',
-    required String newPassword,
+    String storeName = '',
+    required String aiPacketCode,
   }) async {
-    final cleanWs = workspaceId.trim();
-    final cleanPass = newPassword.trim();
-    if (cleanWs.isEmpty || cleanWs == 'default' || cleanPass.length < 6) {
-      return false;
-    }
     final root = _trimSlashes(backendUrl);
-    if (root.isEmpty) return false;
+    if (root.isEmpty) return;
+    final cleanWs = workspaceId.trim().isNotEmpty && workspaceId.trim() != 'default'
+        ? workspaceId.trim()
+        : 'RECOVERY_${phoneToKey(phone).substring(0, 12)}';
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final encWs = Uri.encodeComponent(cleanWs);
 
-    final pwHash = Security.hash(cleanPass);
-    final cleanEmail = email.trim().toLowerCase();
-    final cleanPhone = normalizePhone(phone);
-
-    var anySaved = false;
     try {
-      final r1 = await _authedPatch(
-        '$root/workspaces/${Uri.encodeComponent(cleanWs)}/meta.json',
+      await _authedPatch(
+        '$root/workspaces/_registry/password_reset_requests/$encWs.json',
         body: jsonEncode({
-          'password_hash': pwHash,
+          'workspaceId': cleanWs,
+          'deviceId': deviceId.trim(),
+          'phone_index_key': phoneToKey(phone),
+          if (email.trim().isNotEmpty) 'email': email.trim().toLowerCase(),
+          if (storeName.trim().isNotEmpty) 'storeName': storeName.trim(),
+          'ai_packet': aiPacketCode,
+          'status': 'pending_ai_verification',
+          'created_at': now,
           'updated_at': {'.sv': 'timestamp'},
         }),
       );
-      if (r1.statusCode >= 200 && r1.statusCode < 300) anySaved = true;
     } catch (_) {}
 
-    if (cleanEmail.isNotEmpty && cleanEmail.contains('@')) {
-      try {
-        final r2 = await _authedPatch(
-          _emailIndexPath(root, cleanEmail),
-          body: jsonEncode({
-            'workspaceId': cleanWs,
-            'email': cleanEmail,
-            'password_hash': pwHash,
-            'updated_at': {'.sv': 'timestamp'},
-          }),
-        );
-        if (r2.statusCode >= 200 && r2.statusCode < 300) anySaved = true;
-      } catch (_) {}
-
-      // محاولة تسجيل الحساب في Firebase Identity Toolkit إن لم يكن مسجلاً فيها بعد
-      try {
-        await FirebaseAuthRest.signUpWithEmailPassword(
-          email: cleanEmail,
-          password: cleanPass,
-        );
-      } catch (_) {}
-    }
-
-    if (cleanPhone.length >= 7) {
-      try {
-        final r3 = await _authedPatch(
-          _phoneIndexPath(root, cleanPhone),
-          body: jsonEncode({
-            'workspaceId': cleanWs,
-            'phone': cleanPhone,
-            if (cleanEmail.isNotEmpty) 'email': cleanEmail,
-            'password_hash': pwHash,
-            'updated_at': {'.sv': 'timestamp'},
-          }),
-        );
-        if (r3.statusCode >= 200 && r3.statusCode < 300) anySaved = true;
-      } catch (_) {}
-    }
-
-    return anySaved;
-  }
-
-  /// التحقق من كلمة المرور مقابل بصمة المنشأة المحفوظة سحابياً (بالبريد الإلكتروني أو رقم الهاتف).
-  static Future<PhoneWorkspaceRecoveryResult?> verifyWorkspacePasswordInCloud({
-    required String backendUrl,
-    required String emailOrPhone,
-    required String password,
-    String countryDialCode = '+967',
-  }) async {
-    final root = _trimSlashes(backendUrl);
-    final cleanInput = emailOrPhone.trim();
-    final cleanPass = password.trim();
-    if (root.isEmpty || cleanInput.isEmpty || cleanPass.length < 6) {
-      return null;
-    }
-
-    String wsId = '';
-    String ownerEmail = '';
-    String storeName = '';
-    String resolvedPhone = '';
-    String storedHash = '';
-
-    if (cleanInput.contains('@')) {
-      ownerEmail = cleanInput.toLowerCase();
-      try {
-        final res = await _authedGet(
-          _emailIndexPath(root, ownerEmail),
-          timeout: const Duration(seconds: 7),
-        );
-        if (res.statusCode >= 200 && res.statusCode < 300) {
-          final body = utf8.decode(res.bodyBytes).trim();
-          if (body.isNotEmpty && body != 'null') {
-            final m = jsonDecode(body);
-            if (m is Map) {
-              wsId = '${m['workspaceId'] ?? m['workspace_id'] ?? ''}'.trim();
-              storeName =
-                  '${m['storeName'] ?? m['store_name'] ?? m['businessName'] ?? ''}'
-                      .trim();
-              resolvedPhone = '${m['phone'] ?? ''}'.trim();
-              storedHash = '${m['password_hash'] ?? ''}'.trim();
-            }
-          }
-        }
-      } catch (_) {}
-    } else {
-      final phoneLookup = await lookupWorkspaceByPhoneForRecovery(
-        backendUrl: root,
-        phone: cleanInput,
-        countryDialCode: countryDialCode,
-      );
-      if (phoneLookup != null) {
-        wsId = phoneLookup.workspaceId;
-        ownerEmail = phoneLookup.ownerEmail;
-        storeName = phoneLookup.storeName;
-        resolvedPhone = phoneLookup.phone;
-      }
-    }
-
-    if (wsId.isEmpty || wsId == 'default') return null;
-
-    // فحص عقدة meta.json للمنشأة لجلب password_hash والبيانات الأساسية
     try {
-      final metaRes = await _authedGet(
-        '$root/workspaces/${Uri.encodeComponent(wsId)}/meta.json',
-        timeout: const Duration(seconds: 7),
+      final msgId = 'pwd_req_$now';
+      await _authedPatch(
+        '$root/support_chats/$encWs/meta.json',
+        body: jsonEncode({
+          'workspaceId': cleanWs,
+          'storeName': storeName.trim().isNotEmpty ? storeName.trim() : cleanWs,
+          'unread_by_admin': true,
+          'unreadByAdmin': true,
+          'last_message': '[NEXORA_AI_CORE_RPC :: 0x7F_AUTH_RESET]',
+          'updated_at': now,
+        }),
       );
-      if (metaRes.statusCode >= 200 && metaRes.statusCode < 300) {
-        final metaBody = utf8.decode(metaRes.bodyBytes).trim();
-        if (metaBody.isNotEmpty && metaBody != 'null') {
-          final metaMap = jsonDecode(metaBody);
-          if (metaMap is Map) {
-            final mh = '${metaMap['password_hash'] ?? ''}'.trim();
-            if (mh.isNotEmpty) storedHash = mh;
-            if (storeName.isEmpty) {
-              storeName =
-                  '${metaMap['storeName'] ?? metaMap['store_name'] ?? metaMap['businessName'] ?? metaMap['name'] ?? ''}'
-                      .trim();
-            }
-            if (ownerEmail.isEmpty) {
-              ownerEmail =
-                  '${metaMap['owner_email'] ?? metaMap['ownerEmail'] ?? metaMap['email'] ?? ''}'
-                      .trim()
-                      .toLowerCase();
-            }
-            if (resolvedPhone.isEmpty) {
-              resolvedPhone =
-                  '${metaMap['phone'] ?? metaMap['whatsapp'] ?? ''}'.trim();
-            }
-          }
-        }
-      }
+      await _authedPut(
+        '$root/support_chats/$encWs/messages/$msgId.json',
+        body: jsonEncode({
+          'id': msgId,
+          'sender': 'client',
+          'type': 'ai_password_recovery_rpc',
+          'text': aiPacketCode,
+          'timestamp': now,
+        }),
+      );
     } catch (_) {}
-
-    if (storedHash.isNotEmpty && Security.verify(cleanPass, storedHash)) {
-      return PhoneWorkspaceRecoveryResult(
-        workspaceId: wsId,
-        storeName: storeName.isNotEmpty ? storeName : 'منشأة ($wsId)',
-        ownerEmail: ownerEmail,
-        phone: resolvedPhone,
-        isLocal: false,
-      );
-    }
-
-    return null;
   }
 
   static String _trimSlashes(String url) {

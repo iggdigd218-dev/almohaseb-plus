@@ -696,84 +696,33 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     );
   }
 
-  /// استعادة وفتح منشأة تم التحقق منها عبر رقم الهاتف أو بصمة كلمة المرور السحابية.
-  Future<void> _restoreVerifiedRecoveryWorkspace(
-    PhoneWorkspaceRecoveryResult rec,
-  ) async {
-    final email = rec.ownerEmail.trim().toLowerCase();
-    final effectiveEmail =
-        email.isNotEmpty ? email : 'phone.${rec.workspaceId.toLowerCase()}@nexora.local';
-    final account = FirebaseAccount(
-      uid: 'email:${AccountWorkspace.emailToKey(effectiveEmail)}',
-      email: effectiveEmail,
-      displayName: rec.storeName,
-    );
-
-    if (rec.isLocal) {
-      await _openSavedDeviceWorkspace(
-        WorkspaceInfo(
-          workspaceId: rec.workspaceId,
-          storeName: rec.storeName,
-          phone: rec.phone,
-          ownerEmail: rec.ownerEmail,
-        ),
-      );
-      return;
-    }
-
-    await _resolveWorkspaceOrRedirectToRegister(
-      account: account,
-      isLoginFlow: true,
-    );
-  }
-
-  /// فتح نافذة استعادة الحساب وكلمة المرور والمنشأة (عبر رقم الهاتف والواتساب أو عبر البريد الإلكتروني).
-  Future<void> _openForgotPasswordDialog() async {
+  /// فتح صفحة استعادة كلمة السر الموثقة (عبر رمز من الإدارة/مساعد الذكاء الاصطناعي أو رابط البريد الرسمي).
+  Future<void> _openForgotPasswordScreen() async {
     if (_busy) return;
     Sfx.click();
     final raw = _emailCtrl.text.trim();
     final initialEmail = raw.contains('@') ? raw : '';
     final initialPhone = !raw.contains('@') ? raw : '';
 
-    final restoredResult = await showDialog<PhoneWorkspaceRecoveryResult>(
-      context: context,
-      builder: (ctx) => _ForgotPasswordDialog(
-        initialEmail: initialEmail,
-        initialPhone: initialPhone,
+    await Navigator.of(context, rootNavigator: true).push(
+      MaterialPageRoute<void>(
+        builder: (_) => ForgotPasswordRecoveryScreen(
+          initialEmail: initialEmail,
+          initialPhone: initialPhone,
+        ),
       ),
     );
-
-    if (restoredResult != null && mounted) {
-      setState(() {
-        _busy = true;
-        _authError = null;
-      });
-      try {
-        await _restoreVerifiedRecoveryWorkspace(restoredResult);
-      } catch (e) {
-        if (mounted) {
-          setState(() => _authError = AppErrorMapper.toUserFriendlyMessage(e));
-        }
-      } finally {
-        if (mounted) setState(() => _busy = false);
-      }
-    }
   }
 
-  /// تسجيل الدخول عبر البريد الإلكتروني أو رقم الهاتف وكلمة المرور مع الفحص المحلي والسحابي.
+  /// تسجيل الدخول عبر البريد الإلكتروني وكلمة المرور حصراً عبر Firebase Auth الرسمي أو المنشأة المحلية الموثقة.
   Future<void> _handleEmailLogin() async {
     if (_busy) return;
-    final rawInput = _emailCtrl.text.trim();
-    final isEmail = rawInput.contains('@');
-    final email = isEmail ? rawInput.toLowerCase() : '';
-    final phoneDigits = rawInput.replaceAll(RegExp(r'[^\d]'), '');
+    final email = _emailCtrl.text.trim().toLowerCase();
     final password = _passwordCtrl.text;
 
-    if (rawInput.isEmpty ||
-        (isEmail && !email.contains('.')) ||
-        (!isEmail && phoneDigits.length < 7)) {
+    if (email.isEmpty || !email.contains('@') || !email.contains('.')) {
       setState(() => _authError =
-          'يرجى إدخال البريد الإلكتروني أو رقم الهاتف مع كلمة المرور، أو الدخول عبر حساب Google');
+          'يرجى إدخال البريد الإلكتروني وكلمة المرور أو التسجيل عبر حساب Google');
       Sfx.error();
       return;
     }
@@ -790,78 +739,18 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       _authError = null;
     });
 
-    final repo = ref.read(repoProvider);
-    final st = await repo.settings();
-    final url = effectiveBackendUrl(st['cloudBackendUrl']);
-
-    // 1) فحص فوري للمنشآت المحفوظة محلياً على الجهاز لنفس البريد أو رقم الهاتف:
+    // 1) فحص فوري للمنشآت المحفوظة محلياً على الجهاز لنفس البريد الإلكتروني
     try {
-      if (isEmail) {
-        final localMatches = await AccountWorkspace.findLocalWorkspacesOnDevice(
-          filterEmail: email,
-        );
-        if (localMatches.isNotEmpty) {
-          await _openSavedDeviceWorkspace(localMatches.first);
-          return;
-        }
-      } else {
-        final localLookup =
-            await AccountWorkspace.lookupWorkspaceByPhoneForRecovery(
-          backendUrl: '',
-          phone: rawInput,
-        );
-        if (localLookup != null && localLookup.isLocal) {
-          await _restoreVerifiedRecoveryWorkspace(localLookup);
-          return;
-        }
+      final localMatches = await AccountWorkspace.findLocalWorkspacesOnDevice(
+        filterEmail: email,
+      );
+      if (localMatches.isNotEmpty) {
+        await _openSavedDeviceWorkspace(localMatches.first);
+        return;
       }
     } catch (_) {}
 
-    // 2) إذا أدخل المستخدم رقم هاتفه بدلاً من البريد الإلكتروني:
-    if (!isEmail) {
-      try {
-        final verified =
-            await AccountWorkspace.verifyWorkspacePasswordInCloud(
-          backendUrl: url,
-          emailOrPhone: rawInput,
-          password: password,
-        );
-        if (verified != null) {
-          await _restoreVerifiedRecoveryWorkspace(verified);
-          return;
-        }
-        final phoneLookup =
-            await AccountWorkspace.lookupWorkspaceByPhoneForRecovery(
-          backendUrl: url,
-          phone: rawInput,
-        );
-        if (phoneLookup != null && phoneLookup.ownerEmail.contains('@')) {
-          final account = await FirebaseAuthRest.signInWithEmailPassword(
-            email: phoneLookup.ownerEmail,
-            password: password,
-          );
-          await _resolveWorkspaceOrRedirectToRegister(
-            account: account,
-            isLoginFlow: true,
-          );
-          return;
-        }
-        if (!mounted) return;
-        setState(() => _authError =
-            'بيانات الدخول غير صحيحة أو لم يُعثر على منشأة لهذا الرقم.\nيمكنك الضغط على «نسيت كلمة المرور؟» لاستعادة المنشأة عبر الواتساب.');
-        Sfx.error();
-        return;
-      } catch (_) {
-        if (!mounted) return;
-        setState(() => _authError =
-            'كلمة المرور غير صحيحة لهذا الرقم.\nاضغط على «نسيت كلمة المرور؟» بالأسفل لاستعادتها عبر الواتساب.');
-        Sfx.error();
-        return;
-      } finally {
-        if (mounted) setState(() => _busy = false);
-      }
-    }
-
+    // 2) المصادقة الرسمية الصارمة عبر Firebase Auth فقط
     try {
       final account = await FirebaseAuthRest.signInWithEmailPassword(
         email: email,
@@ -874,28 +763,13 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       );
     } on StateError catch (se) {
       final msg = se.message;
-      // فحص احتياطي لبصمة كلمة المرور السحابية (في حال تم تعيينها أو استرجاعها عبر الهاتف/الواتساب)
-      if (url.isNotEmpty) {
-        try {
-          final verified =
-              await AccountWorkspace.verifyWorkspacePasswordInCloud(
-            backendUrl: url,
-            emailOrPhone: email,
-            password: password,
-          );
-          if (verified != null) {
-            await _restoreVerifiedRecoveryWorkspace(verified);
-            return;
-          }
-        } catch (_) {}
-      }
       if (!mounted) return;
       if (msg.contains('USER_NOT_FOUND') ||
           msg.contains('INVALID_CREDENTIALS_OR_NOT_FOUND') ||
           msg.contains('INVALID_PASSWORD') ||
           msg.contains('EMAIL_NOT_FOUND')) {
         setState(() => _authError =
-            'بيانات الدخول غير صحيحة أو الحساب غير مسجل.\nإذا نسيت كلمة المرور اضغط على «نسيت كلمة المرور؟» بالأسفل لاستعادتها عبر الواتساب أو البريد، أو سجل الدخول عبر (حساب Google).');
+            'بيانات الدخول غير صحيحة أو الحساب غير مسجل.\nإذا نسيت كلمة السر اضغط على «نسيت كلمة السر؟» بالأسفل، أو سجل الدخول عبر (حساب Google).');
       } else {
         setState(() => _authError = msg);
       }
@@ -1357,8 +1231,8 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                         textDirection: TextDirection.ltr,
                         textInputAction: TextInputAction.next,
                         decoration: const InputDecoration(
-                          labelText: 'البريد الإلكتروني أو رقم الهاتف',
-                          hintText: 'name@example.com أو 77xxxxxxx',
+                          labelText: 'البريد الإلكتروني',
+                          hintText: 'name@example.com',
                           border: OutlineInputBorder(),
                         ),
                       ),
@@ -1389,7 +1263,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                       Align(
                         alignment: AlignmentDirectional.centerStart,
                         child: TextButton.icon(
-                          onPressed: _busy ? null : _openForgotPasswordDialog,
+                          onPressed: _busy ? null : _openForgotPasswordScreen,
                           style: TextButton.styleFrom(
                             padding: const EdgeInsets.symmetric(
                                 horizontal: 6, vertical: 4),
@@ -1398,14 +1272,12 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                           icon: const Icon(
                             Icons.lock_reset_rounded,
                             size: 18,
-                            color: Color(0xFF16A34A),
                           ),
                           label: const Text(
-                            'نسيت كلمة المرور؟ استعادة المنشأة عبر الواتساب أو البريد',
+                            'نسيت كلمة السر؟',
                             style: TextStyle(
-                              fontSize: 12.5,
+                              fontSize: 13,
                               fontWeight: FontWeight.w700,
-                              color: Color(0xFF16A34A),
                             ),
                           ),
                         ),
@@ -1967,22 +1839,25 @@ class _LocalStandaloneDialogState extends State<_LocalStandaloneDialog> {
   }
 }
 
-/// نافذة استعادة كلمة المرور والمنشأة عبر رقم الهاتف (رسالة واتساب) أو البريد الإلكتروني.
-class _ForgotPasswordDialog extends ConsumerStatefulWidget {
+/// صفحة استعادة كلمة السر الموثقة (عبر طلب مشفر لمساعد الإدارة الذكي أو رابط البريد الرسمي).
+/// يُمنع منعاً باتاً تعيين كلمة مرور جديدة من طرف العميل مباشرة دون تحقق ملكية حقيقي.
+class ForgotPasswordRecoveryScreen extends ConsumerStatefulWidget {
   final String initialEmail;
   final String initialPhone;
 
-  const _ForgotPasswordDialog({
+  const ForgotPasswordRecoveryScreen({
+    super.key,
     this.initialEmail = '',
     this.initialPhone = '',
   });
 
   @override
-  ConsumerState<_ForgotPasswordDialog> createState() =>
-      _ForgotPasswordDialogState();
+  ConsumerState<ForgotPasswordRecoveryScreen> createState() =>
+      _ForgotPasswordRecoveryScreenState();
 }
 
-class _ForgotPasswordDialogState extends ConsumerState<_ForgotPasswordDialog> {
+class _ForgotPasswordRecoveryScreenState
+    extends ConsumerState<ForgotPasswordRecoveryScreen> {
   static const _dialCodes = <(String, String)>[
     ('+967', 'اليمن (+967)'),
     ('+966', 'السعودية (+966)'),
@@ -1996,30 +1871,44 @@ class _ForgotPasswordDialogState extends ConsumerState<_ForgotPasswordDialog> {
     ('+964', 'العراق (+964)'),
   ];
 
-  // 'whatsapp' | 'email'
-  String _mode = 'whatsapp';
+  // 'admin_whatsapp' | 'email_link'
+  String _mode = 'admin_whatsapp';
   String _countryDialCode = '+967';
   late final TextEditingController _phoneCtrl;
-  late final TextEditingController _newPassCtrl;
   late final TextEditingController _emailCtrl;
-  bool _obscureNewPass = true;
+  String _deviceId = '';
+  String _hwFingerprint = '';
+  String? _generatedAiPacket;
   bool _busy = false;
   String? _errorMsg;
   String? _successMsg;
-  PhoneWorkspaceRecoveryResult? _foundWorkspace;
 
   @override
   void initState() {
     super.initState();
     _phoneCtrl = TextEditingController(text: widget.initialPhone);
-    _newPassCtrl = TextEditingController();
     _emailCtrl = TextEditingController(text: widget.initialEmail);
+    _loadDeviceIdentity();
+  }
+
+  Future<void> _loadDeviceIdentity() async {
+    try {
+      final repo = ref.read(repoProvider);
+      final devId = await ensureDeviceId(repo);
+      final rawFp =
+          await SubscriptionGuard.hardwareFingerprintRaw() ?? 'fallback:$devId';
+      final hwFp = SubscriptionGuard.fingerprintHash(rawFp);
+      if (!mounted) return;
+      setState(() {
+        _deviceId = devId;
+        _hwFingerprint = hwFp;
+      });
+    } catch (_) {}
   }
 
   @override
   void dispose() {
     _phoneCtrl.dispose();
-    _newPassCtrl.dispose();
     _emailCtrl.dispose();
     super.dispose();
   }
@@ -2044,24 +1933,17 @@ class _ForgotPasswordDialogState extends ConsumerState<_ForgotPasswordDialog> {
     } catch (_) {}
   }
 
-  Future<void> _recoverViaWhatsApp() async {
+  /// إرسال طلب استعادة مشفر برمجياً (`nexora-ai-rpc`) إلى الإدارة ومساعد خدمة العملاء الذكي عبر واتساب.
+  Future<void> _requestRecoveryFromAdminSmartSupport() async {
     if (_busy) return;
     final rawPhone = _phoneCtrl.text.trim();
     final digits = rawPhone.replaceAll(RegExp(r'[^\d]'), '');
-    final newPass = _newPassCtrl.text.trim();
+    final rawEmail = _emailCtrl.text.trim().toLowerCase();
 
-    if (digits.length < 7) {
-      setState(() {
-        _errorMsg = 'يرجى إدخال رقم الهاتف المسجل في المنشأة بشكل صحيح';
-        _successMsg = null;
-      });
-      Sfx.error();
-      return;
-    }
-    if (newPass.length < 6) {
+    if (digits.length < 7 && (rawEmail.isEmpty || !rawEmail.contains('@'))) {
       setState(() {
         _errorMsg =
-            'يرجى إدخال كلمة مرور جديدة لا تقل عن 6 أحرف لتعيينها وإرسالها عبر الواتساب';
+            'يرجى إدخال رقم الهاتف المسجل للمنشأة (أو البريد الإلكتروني) لإصدار كود التحقق للإدارة';
         _successMsg = null;
       });
       Sfx.error();
@@ -2079,65 +1961,90 @@ class _ForgotPasswordDialogState extends ConsumerState<_ForgotPasswordDialog> {
       final st = await repo.settings();
       final url = effectiveBackendUrl(st['cloudBackendUrl']);
 
-      final found = await AccountWorkspace.lookupWorkspaceByPhoneForRecovery(
-        backendUrl: url,
-        phone: rawPhone,
-        countryDialCode: _countryDialCode,
-      );
-
-      if (found == null) {
-        if (!mounted) return;
-        setState(() {
-          _busy = false;
-          _errorMsg =
-              'لم يتم العثور على منشأة مرتبطة بهذا الرقم ($rawPhone).\nتأكد من مفتاح الدولة ورقم الهاتف، أو تواصل مع الدعم الفني عبر الواتساب أدناه.';
-        });
-        Sfx.error();
-        return;
-      }
-
-      // حفظ كلمة المرور الجديدة في بيانات المنشأة وفهرس الهاتف والبريد في السحابة
-      if (url.isNotEmpty) {
-        await AccountWorkspace.saveWorkspacePasswordHash(
-          backendUrl: url,
-          workspaceId: found.workspaceId,
-          email: found.ownerEmail,
-          phone: found.phone,
-          newPassword: newPass,
-        );
-      }
+      final devId = _deviceId.isNotEmpty ? _deviceId : await ensureDeviceId(repo);
+      final rawFp =
+          await SubscriptionGuard.hardwareFingerprintRaw() ?? 'fallback:$devId';
+      final hwFp = _hwFingerprint.isNotEmpty
+          ? _hwFingerprint
+          : SubscriptionGuard.fingerprintHash(rawFp);
 
       final dialDigits = _countryDialCode.replaceAll(RegExp(r'[^\d]'), '');
       final localDigits =
           digits.startsWith('0') ? digits.substring(1) : digits;
-      final fullPhoneDigits = digits.startsWith(dialDigits)
-          ? digits
-          : '$dialDigits$localDigits';
+      final fullPhone = digits.isNotEmpty
+          ? (digits.startsWith(dialDigits)
+              ? '+$digits'
+              : '$_countryDialCode$localDigits')
+          : '';
 
-      final waMsg = StringBuffer()
-        ..writeln('*استعادة بيانات المنشأة وكلمة المرور — المحاسب بلس*')
-        ..writeln('━━━━━━━━━━━━━━━━━━')
-        ..writeln('🏢 *اسم المنشأة:* ${found.storeName}')
-        ..writeln('🔑 *معرف المنشأة:* ${found.workspaceId}')
-        ..writeln(
-            '📧 *البريد المسجل:* ${found.ownerEmail.isNotEmpty ? found.ownerEmail : "مرتبط برقم الهاتف"}')
-        ..writeln('📱 *رقم الهاتف:* +$fullPhoneDigits')
-        ..writeln('🔒 *كلمة المرور الجديدة:* $newPass')
-        ..writeln('━━━━━━━━━━━━━━━━━━')
-        ..write('تم تحديث كلمة المرور بنجاح، يمكنك الآن الدخول لمنشأتك فوراً.');
+      String resolvedWsId = '';
+      String resolvedStoreName = '';
+      String resolvedEmail = rawEmail;
+
+      if (digits.length >= 7) {
+        final found = await AccountWorkspace.lookupWorkspaceByPhoneForRecovery(
+          backendUrl: url,
+          phone: rawPhone,
+          countryDialCode: _countryDialCode,
+        );
+        if (found != null) {
+          resolvedWsId = found.workspaceId;
+          resolvedStoreName = found.storeName;
+          if (resolvedEmail.isEmpty && found.ownerEmail.isNotEmpty) {
+            resolvedEmail = found.ownerEmail;
+          }
+        }
+      }
+
+      if (resolvedWsId.isEmpty && rawEmail.contains('@') && url.isNotEmpty) {
+        final cloudRes = await AccountWorkspace.resolveWorkspaceInCloud(
+          backendUrl: url,
+          email: rawEmail,
+          deviceId: devId,
+          deviceFingerprint: hwFp,
+        );
+        if (cloudRes.found) {
+          resolvedWsId = cloudRes.workspaceId;
+          resolvedStoreName =
+              '${cloudRes.meta?['storeName'] ?? cloudRes.meta?['store_name'] ?? ''}'
+                  .trim();
+        }
+      }
+
+      // بناء الكود البرمجي المشفر والموقع (nexora-ai-rpc) الذي لا يفهمه إلا الذكاء الاصطناعي ونظام الإدارة
+      final aiPacket = AccountWorkspace.buildEncryptedAiRecoveryPacket(
+        deviceId: devId,
+        hardwareFingerprint: hwFp,
+        phone: fullPhone,
+        email: resolvedEmail,
+        workspaceId: resolvedWsId,
+        storeName: resolvedStoreName,
+      );
+
+      if (url.isNotEmpty) {
+        await AccountWorkspace.submitPasswordResetSupportRequest(
+          backendUrl: url,
+          workspaceId: resolvedWsId,
+          deviceId: devId,
+          phone: fullPhone,
+          email: resolvedEmail,
+          storeName: resolvedStoreName,
+          aiPacketCode: aiPacket,
+        );
+      }
 
       await _launchWhatsAppMessage(
-        targetPhone: fullPhoneDigits,
-        message: waMsg.toString(),
+        targetPhone: '967774190040',
+        message: aiPacket,
       );
 
       if (!mounted) return;
       Sfx.success();
       setState(() {
         _busy = false;
-        _foundWorkspace = found;
+        _generatedAiPacket = aiPacket;
         _successMsg =
-            'تم العثور على منشأتك «${found.storeName}» وتعيين كلمة المرور الجديدة وإرسال تفاصيل الحساب إلى رقمك عبر الواتساب بنجاح!';
+            'تم توليد كود التحقق المشفر وإرساله إلى الإدارة ومساعد الدعم الذكي عبر الواتساب.\nسيقوم النظام بالتحقق من ملكية الرقم وإرسال كلمة المرور الجديدة إليك من الإدارة.';
       });
     } catch (e) {
       if (!mounted) return;
@@ -2149,21 +2056,8 @@ class _ForgotPasswordDialogState extends ConsumerState<_ForgotPasswordDialog> {
     }
   }
 
-  Future<void> _contactSupportWhatsApp() async {
-    final rawPhone = _phoneCtrl.text.trim();
-    final email = _emailCtrl.text.trim();
-    final msg = StringBuffer()
-      ..writeln('السلام عليكم ورحمة الله،')
-      ..writeln('أرغب في استعادة كلمة المرور ومنشأتي في تطبيق المحاسب بلس:')
-      ..writeln('• رقم الهاتف: $_countryDialCode $rawPhone')
-      ..write(email.isNotEmpty ? '• البريد الإلكتروني: $email' : '');
-    await _launchWhatsAppMessage(
-      targetPhone: '967774190040',
-      message: msg.toString(),
-    );
-  }
-
-  Future<void> _recoverViaEmail() async {
+  /// إرسال رابط إعادة تعيين كلمة المرور الرسمي عبر البريد الإلكتروني (Firebase Auth).
+  Future<void> _sendOfficialEmailResetLink() async {
     if (_busy) return;
     final email = _emailCtrl.text.trim().toLowerCase();
     if (email.isEmpty || !email.contains('@') || !email.contains('.')) {
@@ -2188,7 +2082,7 @@ class _ForgotPasswordDialogState extends ConsumerState<_ForgotPasswordDialog> {
       setState(() {
         _busy = false;
         _successMsg =
-            'تم إرسال رابط إعادة تعيين كلمة المرور إلى بريدك الإلكتروني ($email).\nافتح الرسالة في بريدك لتعيين كلمة مرور جديدة ثم سجل الدخول لاستعادة منشأتك.';
+            'تم إرسال رابط إعادة تعيين كلمة السر الرسمي إلى بريدك الإلكتروني ($email).\nافتح الرسالة الواردة في بريدك لتعيين كلمة السر الجديدة ثم عد لتسجيل الدخول.';
       });
     } on StateError catch (se) {
       if (!mounted) return;
@@ -2196,7 +2090,7 @@ class _ForgotPasswordDialogState extends ConsumerState<_ForgotPasswordDialog> {
         _busy = false;
         if (se.message.contains('EMAIL_NOT_FOUND')) {
           _errorMsg =
-              'هذا البريد الإلكتروني غير مسجل بكلمة مرور في السحابة.\nيمكنك استعادة منشأتك وتعيين كلمة مرور جديدة عبر تبويب «عبر رقم الهاتف والواتساب» بالأعلى، أو الدخول عبر زر (حساب Google).';
+              'هذا البريد الإلكتروني غير مسجل بكلمة مرور في السحابة.\nيمكنك طلب رمز وكلمة مرور جديدة من الإدارة عبر خيار «طلب الرمز الجديد من الإدارة (واتساب)» بالأعلى.';
         } else {
           _errorMsg = 'يرجى التحقق من صحة البريد الإلكتروني المدخل.';
         }
@@ -2216,436 +2110,454 @@ class _ForgotPasswordDialogState extends ConsumerState<_ForgotPasswordDialog> {
   Widget build(BuildContext context) {
     const waGreen = Color(0xFF16A34A);
     final primary = AppColors.primaryOf(context);
+    final surface = Theme.of(context).colorScheme.surface;
     final divider = Theme.of(context).dividerColor;
 
-    return Dialog(
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 500),
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                children: [
-                  Container(
-                    width: 44,
-                    height: 44,
-                    decoration: BoxDecoration(
-                      color: waGreen.withValues(alpha: 0.14),
-                      borderRadius: BorderRadius.circular(12),
-                    ),
-                    child: const Icon(
-                      Icons.lock_reset_rounded,
-                      color: waGreen,
-                      size: 26,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  const Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text(
-                          'استعادة كلمة المرور والمنشأة',
-                          style: TextStyle(
-                            fontSize: 16.5,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                        SizedBox(height: 2),
-                        Text(
-                          'استرجع حسابك ومنشأتك عبر رقم الهاتف (واتساب) أو البريد',
-                          style: TextStyle(fontSize: 12, color: Colors.grey),
-                        ),
-                      ],
-                    ),
-                  ),
-                  IconButton(
-                    onPressed:
-                        _busy ? null : () => Navigator.of(context).pop(),
-                    icon: const Icon(Icons.close_rounded),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 16),
-
-              // تبويب اختيار طريقة الاسترجاع: واتساب (افتراضي) أو بريد إلكتروني
-              Container(
-                padding: const EdgeInsets.all(4),
-                decoration: BoxDecoration(
-                  color: Theme.of(context)
-                      .colorScheme
-                      .surfaceContainerHighest
-                      .withValues(alpha: 0.5),
-                  borderRadius: BorderRadius.circular(12),
-                  border: Border.all(color: divider),
-                ),
-                child: Row(
-                  children: [
-                    Expanded(
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(9),
-                        onTap: _busy
-                            ? null
-                            : () => setState(() {
-                                  _mode = 'whatsapp';
-                                  _errorMsg = null;
-                                  _successMsg = null;
-                                }),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(vertical: 10),
-                          decoration: BoxDecoration(
-                            color: _mode == 'whatsapp'
-                                ? waGreen
-                                : Colors.transparent,
-                            borderRadius: BorderRadius.circular(9),
-                          ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(
-                                Icons.chat_rounded,
-                                size: 17,
-                                color: _mode == 'whatsapp'
-                                    ? Colors.white
-                                    : AppColors.text2Of(context),
-                              ),
-                              const SizedBox(width: 6),
-                              Text(
-                                'عبر الهاتف والواتساب',
-                                style: TextStyle(
-                                  fontSize: 12.5,
-                                  fontWeight: FontWeight.w800,
-                                  color: _mode == 'whatsapp'
-                                      ? Colors.white
-                                      : AppColors.text2Of(context),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 4),
-                    Expanded(
-                      child: InkWell(
-                        borderRadius: BorderRadius.circular(9),
-                        onTap: _busy
-                            ? null
-                            : () => setState(() {
-                                  _mode = 'email';
-                                  _errorMsg = null;
-                                  _successMsg = null;
-                                }),
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(vertical: 10),
-                          decoration: BoxDecoration(
-                            color: _mode == 'email'
-                                ? primary
-                                : Colors.transparent,
-                            borderRadius: BorderRadius.circular(9),
-                          ),
-                          child: Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(
-                                Icons.mark_email_read_outlined,
-                                size: 17,
-                                color: _mode == 'email'
-                                    ? Colors.white
-                                    : AppColors.text2Of(context),
-                              ),
-                              const SizedBox(width: 6),
-                              Text(
-                                'عبر البريد الإلكتروني',
-                                style: TextStyle(
-                                  fontSize: 12.5,
-                                  fontWeight: FontWeight.w800,
-                                  color: _mode == 'email'
-                                      ? Colors.white
-                                      : AppColors.text2Of(context),
-                                ),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const SizedBox(height: 16),
-
-              if (_errorMsg != null) ...[
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('استعادة كلمة السر وحماية المنشأة'),
+      ),
+      body: SafeArea(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 520),
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(20, 20, 20, 32),
+              children: [
                 Container(
-                  padding: const EdgeInsets.all(12),
+                  padding: const EdgeInsets.all(16),
                   decoration: BoxDecoration(
-                    color: Colors.red.withValues(alpha: 0.08),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(
-                        color: Colors.redAccent.withValues(alpha: 0.5)),
+                    color: primary.withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: primary.withValues(alpha: 0.25)),
                   ),
-                  child: Text(
-                    _errorMsg!,
-                    style: const TextStyle(
-                      color: Colors.redAccent,
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w600,
-                      height: 1.5,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 14),
-              ],
-
-              if (_successMsg != null) ...[
-                Container(
-                  padding: const EdgeInsets.all(12),
-                  decoration: BoxDecoration(
-                    color: waGreen.withValues(alpha: 0.1),
-                    borderRadius: BorderRadius.circular(10),
-                    border: Border.all(color: waGreen.withValues(alpha: 0.5)),
-                  ),
-                  child: Text(
-                    _successMsg!,
-                    style: const TextStyle(
-                      color: waGreen,
-                      fontSize: 12.5,
-                      fontWeight: FontWeight.w700,
-                      height: 1.5,
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 14),
-              ],
-
-              if (_mode == 'whatsapp') ...[
-                Text(
-                  'أدخل رقم الهاتف المرتبط بمنشأتك وكلمة المرور الجديدة التي ترغب بتعيينها، وسيتم البحث عن منشأتك وتحديث كلمة المرور وإرسال بيانات الحساب عبر رسالة واتساب:',
-                  style: TextStyle(
-                    fontSize: 12.5,
-                    height: 1.5,
-                    color: AppColors.text2Of(context),
-                  ),
-                ),
-                const SizedBox(height: 14),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    SizedBox(
-                      width: 145,
-                      child: DropdownButtonFormField<String>(
-                        value: _countryDialCode,
-                        isExpanded: true,
-                        decoration: const InputDecoration(
-                          labelText: 'مفتاح الدولة',
-                          border: OutlineInputBorder(),
-                          contentPadding: EdgeInsets.symmetric(
-                              horizontal: 10, vertical: 14),
-                        ),
-                        items: [
-                          for (final c in _dialCodes)
-                            DropdownMenuItem(
-                              value: c.$1,
-                              child: Text(
-                                c.$2,
-                                style: const TextStyle(fontSize: 12),
-                                overflow: TextOverflow.ellipsis,
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          Icon(Icons.shield_rounded, color: primary, size: 26),
+                          const SizedBox(width: 10),
+                          const Expanded(
+                            child: Text(
+                              'نظام التحقق الأمني الصارم لاستعادة الحساب',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w800,
+                                fontSize: 15,
                               ),
                             ),
+                          ),
                         ],
-                        onChanged: _busy
-                            ? null
-                            : (v) {
-                                if (v != null) {
-                                  setState(() => _countryDialCode = v);
-                                }
-                              },
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: TextField(
-                        controller: _phoneCtrl,
-                        enabled: !_busy,
-                        keyboardType: TextInputType.phone,
-                        textDirection: TextDirection.ltr,
-                        decoration: const InputDecoration(
-                          labelText: 'رقم هاتف المالك المسجل *',
-                          hintText: '77xxxxxxx',
-                          prefixIcon: Icon(Icons.phone_iphone_rounded),
-                          border: OutlineInputBorder(),
+                      const SizedBox(height: 8),
+                      Text(
+                        'لحماية بيانات منشأتك المالية من أي وصول غير مصرح به، لا يُسمح بتغيير كلمة السر محلياً بدون تحقق. '
+                        'يتم إصدار الرمز وكلمة السر الجديدة حصرياً من الإدارة ومساعد الذكاء الاصطناعي بعد مطابقة رقم الهاتف وبصمة الجهاز، أو عبر رابط التحقق الرسمي في بريدك الإلكتروني.',
+                        style: TextStyle(
+                          fontSize: 12.5,
+                          height: 1.55,
+                          color: AppColors.text2Of(context),
                         ),
                       ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 12),
-                TextField(
-                  controller: _newPassCtrl,
-                  enabled: !_busy,
-                  obscureText: _obscureNewPass,
-                  textDirection: TextDirection.ltr,
-                  decoration: InputDecoration(
-                    labelText: 'كلمة المرور الجديدة * (6 أحرف على الأقل)',
-                    hintText: 'أدخل كلمة مرور جديدة لحسابك',
-                    prefixIcon: const Icon(Icons.lock_outline_rounded),
-                    border: const OutlineInputBorder(),
-                    suffixIcon: IconButton(
-                      onPressed: () =>
-                          setState(() => _obscureNewPass = !_obscureNewPass),
-                      icon: Icon(
-                        _obscureNewPass
-                            ? Icons.visibility_outlined
-                            : Icons.visibility_off_outlined,
-                        size: 20,
-                      ),
-                    ),
+                    ],
                   ),
                 ),
-                const SizedBox(height: 14),
-                if (_foundWorkspace != null) ...[
+                const SizedBox(height: 18),
+
+                // شريط التبويب بين مساري الاستعادة الموثقة
+                Container(
+                  padding: const EdgeInsets.all(4),
+                  decoration: BoxDecoration(
+                    color: surface,
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: divider),
+                  ),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(9),
+                          onTap: _busy
+                              ? null
+                              : () => setState(() {
+                                    _mode = 'admin_whatsapp';
+                                    _errorMsg = null;
+                                    _successMsg = null;
+                                  }),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(vertical: 11),
+                            decoration: BoxDecoration(
+                              color: _mode == 'admin_whatsapp'
+                                  ? waGreen
+                                  : Colors.transparent,
+                              borderRadius: BorderRadius.circular(9),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.smart_toy_outlined,
+                                  size: 17,
+                                  color: _mode == 'admin_whatsapp'
+                                      ? Colors.white
+                                      : AppColors.text2Of(context),
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  'طلب الرمز من الإدارة (واتساب)',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w800,
+                                    color: _mode == 'admin_whatsapp'
+                                        ? Colors.white
+                                        : AppColors.text2Of(context),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 4),
+                      Expanded(
+                        child: InkWell(
+                          borderRadius: BorderRadius.circular(9),
+                          onTap: _busy
+                              ? null
+                              : () => setState(() {
+                                    _mode = 'email_link';
+                                    _errorMsg = null;
+                                    _successMsg = null;
+                                  }),
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(vertical: 11),
+                            decoration: BoxDecoration(
+                              color: _mode == 'email_link'
+                                  ? primary
+                                  : Colors.transparent,
+                              borderRadius: BorderRadius.circular(9),
+                            ),
+                            child: Row(
+                              mainAxisAlignment: MainAxisAlignment.center,
+                              children: [
+                                Icon(
+                                  Icons.mark_email_read_outlined,
+                                  size: 17,
+                                  color: _mode == 'email_link'
+                                      ? Colors.white
+                                      : AppColors.text2Of(context),
+                                ),
+                                const SizedBox(width: 6),
+                                Text(
+                                  'رابط البريد الإلكتروني',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    fontWeight: FontWeight.w800,
+                                    color: _mode == 'email_link'
+                                        ? Colors.white
+                                        : AppColors.text2Of(context),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 18),
+
+                if (_errorMsg != null) ...[
                   Container(
                     padding: const EdgeInsets.all(12),
                     decoration: BoxDecoration(
-                      color: waGreen.withValues(alpha: 0.07),
+                      color: Colors.red.withValues(alpha: 0.08),
                       borderRadius: BorderRadius.circular(12),
-                      border:
-                          Border.all(color: waGreen.withValues(alpha: 0.35)),
+                      border: Border.all(
+                          color: Colors.redAccent.withValues(alpha: 0.5)),
                     ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.stretch,
-                      children: [
-                        Row(
+                    child: Text(
+                      _errorMsg!,
+                      style: const TextStyle(
+                        color: Colors.redAccent,
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w600,
+                        height: 1.5,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                ],
+
+                if (_successMsg != null) ...[
+                  Container(
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: waGreen.withValues(alpha: 0.1),
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: waGreen.withValues(alpha: 0.5)),
+                    ),
+                    child: Text(
+                      _successMsg!,
+                      style: const TextStyle(
+                        color: waGreen,
+                        fontSize: 12.5,
+                        fontWeight: FontWeight.w700,
+                        height: 1.5,
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                ],
+
+                Container(
+                  padding: const EdgeInsets.all(18),
+                  decoration: BoxDecoration(
+                    color: surface,
+                    borderRadius: BorderRadius.circular(16),
+                    border: Border.all(color: divider),
+                  ),
+                  child: _mode == 'admin_whatsapp'
+                      ? Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
-                            const Icon(Icons.verified_rounded,
-                                color: waGreen, size: 20),
-                            const SizedBox(width: 8),
-                            Expanded(
-                              child: Text(
-                                'المنشأة: ${_foundWorkspace!.storeName}',
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w800,
-                                  fontSize: 13.5,
+                            const Text(
+                              'إرسال كود التحقق المشفر لاستلام كلمة السر من الإدارة',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w800,
+                                fontSize: 14.5,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              'أدخل رقم الهاتف المسجل لمنشأتك (أو بريدك الإلكتروني). سيقوم التطبيق بتوليد حزمة برمجية مشفرة تتضمن بصمة جهازك وإرسالها لمحادثة الدعم الذكي في الواتساب للتحقق وإرسال الرمز الجديد إليك:',
+                              style: TextStyle(
+                                fontSize: 12.5,
+                                height: 1.5,
+                                color: AppColors.text2Of(context),
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                SizedBox(
+                                  width: 145,
+                                  child: DropdownButtonFormField<String>(
+                                    value: _countryDialCode,
+                                    isExpanded: true,
+                                    decoration: const InputDecoration(
+                                      labelText: 'مفتاح الدولة',
+                                      border: OutlineInputBorder(),
+                                      contentPadding: EdgeInsets.symmetric(
+                                          horizontal: 10, vertical: 14),
+                                    ),
+                                    items: [
+                                      for (final c in _dialCodes)
+                                        DropdownMenuItem(
+                                          value: c.$1,
+                                          child: Text(
+                                            c.$2,
+                                            style:
+                                                const TextStyle(fontSize: 12),
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                    ],
+                                    onChanged: _busy
+                                        ? null
+                                        : (v) {
+                                            if (v != null) {
+                                              setState(
+                                                  () => _countryDialCode = v);
+                                            }
+                                          },
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: TextField(
+                                    controller: _phoneCtrl,
+                                    enabled: !_busy,
+                                    keyboardType: TextInputType.phone,
+                                    textDirection: TextDirection.ltr,
+                                    decoration: const InputDecoration(
+                                      labelText: 'رقم الهاتف المسجل للمنشأة *',
+                                      hintText: '77xxxxxxx',
+                                      prefixIcon:
+                                          Icon(Icons.phone_iphone_rounded),
+                                      border: OutlineInputBorder(),
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+                            const SizedBox(height: 12),
+                            TextField(
+                              controller: _emailCtrl,
+                              enabled: !_busy,
+                              keyboardType: TextInputType.emailAddress,
+                              textDirection: TextDirection.ltr,
+                              decoration: const InputDecoration(
+                                labelText: 'البريد الإلكتروني للمنشأة (اختياري)',
+                                hintText: 'name@example.com',
+                                prefixIcon: Icon(Icons.email_outlined),
+                                border: OutlineInputBorder(),
+                              ),
+                            ),
+                            if (_generatedAiPacket != null) ...[
+                              const SizedBox(height: 14),
+                              Container(
+                                padding: const EdgeInsets.all(10),
+                                decoration: BoxDecoration(
+                                  color: Colors.black.withValues(alpha: 0.05),
+                                  borderRadius: BorderRadius.circular(10),
+                                  border: Border.all(color: divider),
+                                ),
+                                child: Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment.stretch,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        const Icon(Icons.code_rounded,
+                                            size: 16, color: waGreen),
+                                        const SizedBox(width: 6),
+                                        const Expanded(
+                                          child: Text(
+                                            'حزمة التحقق البرمجية المشفرة (NEXORA_AI_CORE_RPC)',
+                                            style: TextStyle(
+                                              fontSize: 11.5,
+                                              fontWeight: FontWeight.w800,
+                                            ),
+                                          ),
+                                        ),
+                                        IconButton(
+                                          tooltip: 'نسخ الكود المشفر',
+                                          visualDensity: VisualDensity.compact,
+                                          icon: const Icon(Icons.copy_rounded,
+                                              size: 16),
+                                          onPressed: () {
+                                            Clipboard.setData(ClipboardData(
+                                                text: _generatedAiPacket!));
+                                            ScaffoldMessenger.of(context)
+                                                .showSnackBar(
+                                              const SnackBar(
+                                                content: Text(
+                                                    'تم نسخ كود التحقق المشفر ✓'),
+                                              ),
+                                            );
+                                          },
+                                        ),
+                                      ],
+                                    ),
+                                    Directionality(
+                                      textDirection: TextDirection.ltr,
+                                      child: SelectableText(
+                                        _generatedAiPacket!,
+                                        style: const TextStyle(
+                                          fontFamily: 'monospace',
+                                          fontSize: 11,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                            ],
+                            const SizedBox(height: 18),
+                            SizedBox(
+                              height: 48,
+                              child: FilledButton.icon(
+                                style: FilledButton.styleFrom(
+                                    backgroundColor: waGreen),
+                                onPressed: _busy
+                                    ? null
+                                    : _requestRecoveryFromAdminSmartSupport,
+                                icon: _busy
+                                    ? const SizedBox(
+                                        width: 20,
+                                        height: 20,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2.2,
+                                          color: Colors.white,
+                                        ),
+                                      )
+                                      : const Icon(Icons.send_to_mobile_rounded),
+                                label: const Text(
+                                  'إرسال كود التحقق المشفر للإدارة عبر الواتساب',
+                                  style: TextStyle(
+                                    fontSize: 13.5,
+                                    fontWeight: FontWeight.w800,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                        )
+                      : Column(
+                          crossAxisAlignment: CrossAxisAlignment.stretch,
+                          children: [
+                            const Text(
+                              'إرسال رابط إعادة تعيين كلمة السر للبريد الإلكتروني',
+                              style: TextStyle(
+                                fontWeight: FontWeight.w800,
+                                fontSize: 14.5,
+                              ),
+                            ),
+                            const SizedBox(height: 6),
+                            Text(
+                              'أدخل البريد الإلكتروني المسجل لمنشأتك ليصلك رابط رسمي آمن لإعادة تعيين كلمة السر:',
+                              style: TextStyle(
+                                fontSize: 12.5,
+                                height: 1.5,
+                                color: AppColors.text2Of(context),
+                              ),
+                            ),
+                            const SizedBox(height: 16),
+                            TextField(
+                              controller: _emailCtrl,
+                              enabled: !_busy,
+                              keyboardType: TextInputType.emailAddress,
+                              textDirection: TextDirection.ltr,
+                              decoration: const InputDecoration(
+                                labelText: 'البريد الإلكتروني المسجل *',
+                                hintText: 'name@example.com',
+                                prefixIcon: Icon(Icons.email_outlined),
+                                border: OutlineInputBorder(),
+                              ),
+                            ),
+                            const SizedBox(height: 18),
+                            SizedBox(
+                              height: 48,
+                              child: FilledButton.icon(
+                                onPressed:
+                                    _busy ? null : _sendOfficialEmailResetLink,
+                                icon: _busy
+                                    ? const SizedBox(
+                                        width: 20,
+                                        height: 20,
+                                        child: CircularProgressIndicator(
+                                          strokeWidth: 2.2,
+                                          color: Colors.white,
+                                        ),
+                                      )
+                                    : const Icon(Icons.mark_email_read_rounded),
+                                label: const Text(
+                                  'إرسال رابط إعادة تعيين كلمة السر للبريد',
+                                  style: TextStyle(
+                                    fontSize: 13.5,
+                                    fontWeight: FontWeight.w800,
+                                  ),
                                 ),
                               ),
                             ),
                           ],
                         ),
-                        if (_foundWorkspace!.ownerEmail.isNotEmpty) ...[
-                          const SizedBox(height: 4),
-                          Text(
-                            'البريد المسجل: ${_foundWorkspace!.ownerEmail}',
-                            style: TextStyle(
-                              fontSize: 12,
-                              color: AppColors.text2Of(context),
-                            ),
-                          ),
-                        ],
-                        const SizedBox(height: 10),
-                        FilledButton.icon(
-                          style: FilledButton.styleFrom(
-                            backgroundColor: primary,
-                          ),
-                          onPressed: _busy
-                              ? null
-                              : () => Navigator.of(context)
-                                  .pop(_foundWorkspace),
-                          icon: const Icon(Icons.login_rounded, size: 18),
-                          label: const Text(
-                            'استعادة وفتح المنشأة الآن',
-                            style: TextStyle(fontWeight: FontWeight.w800),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                ],
-                SizedBox(
-                  height: 48,
-                  child: FilledButton.icon(
-                    style: FilledButton.styleFrom(backgroundColor: waGreen),
-                    onPressed: _busy ? null : _recoverViaWhatsApp,
-                    icon: _busy
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2.2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : const Icon(Icons.chat_rounded),
-                    label: const Text(
-                      'تعيين كلمة المرور وإرسال عبر الواتساب',
-                      style: TextStyle(
-                        fontSize: 13.5,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(height: 10),
-                OutlinedButton.icon(
-                  onPressed: _busy ? null : _contactSupportWhatsApp,
-                  icon: const Icon(Icons.support_agent_rounded,
-                      size: 18, color: waGreen),
-                  label: const Text(
-                    'مساعدة الدعم الفني لاستعادة المنشأة عبر الواتساب',
-                    style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
-                  ),
-                ),
-              ] else ...[
-                Text(
-                  'أدخل البريد الإلكتروني المسجل لمنشأتك وسنرسل إليك رابط إعادة تعيين كلمة المرور فوراً:',
-                  style: TextStyle(
-                    fontSize: 12.5,
-                    height: 1.5,
-                    color: AppColors.text2Of(context),
-                  ),
-                ),
-                const SizedBox(height: 14),
-                TextField(
-                  controller: _emailCtrl,
-                  enabled: !_busy,
-                  keyboardType: TextInputType.emailAddress,
-                  textDirection: TextDirection.ltr,
-                  decoration: const InputDecoration(
-                    labelText: 'البريد الإلكتروني المسجل *',
-                    hintText: 'name@example.com',
-                    prefixIcon: Icon(Icons.email_outlined),
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                SizedBox(
-                  height: 48,
-                  child: FilledButton.icon(
-                    onPressed: _busy ? null : _recoverViaEmail,
-                    icon: _busy
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2.2,
-                              color: Colors.white,
-                            ),
-                          )
-                        : const Icon(Icons.send_rounded),
-                    label: const Text(
-                      'إرسال رابط استعادة كلمة المرور للبريد',
-                      style: TextStyle(
-                        fontSize: 13.5,
-                        fontWeight: FontWeight.w800,
-                      ),
-                    ),
-                  ),
                 ),
               ],
-            ],
+            ),
           ),
         ),
       ),

@@ -185,6 +185,11 @@ class _HomeScreenState extends State<HomeScreen> {
             style: TextStyle(fontWeight: FontWeight.w800)),
         actions: [
           IconButton(
+            tooltip: 'إدارة المنشآت والتبديل السريع',
+            icon: const Icon(Icons.storefront_rounded, color: Color(0xFF0284C7)),
+            onPressed: () => showAdminCompactWorkspacesDialog(context),
+          ),
+          IconButton(
             tooltip: 'تحديثات تطبيق التراخيص (v$adminFullVersion)',
             icon: Badge(
               isLabelVisible: hasUpdate,
@@ -2567,15 +2572,23 @@ class _SubscriberCardState extends State<SubscriberCard> {
                         onChanged: (_) => widget.onToggleSelect?.call(),
                       ),
                     ),
-                  Container(
-                    padding: const EdgeInsets.all(9),
-                    decoration: BoxDecoration(
-                      color: color.withValues(alpha: .12),
-                      borderRadius: BorderRadius.circular(12),
+                  InkWell(
+                    borderRadius: BorderRadius.circular(10),
+                    onTap: () => showAdminCompactWorkspacesDialog(
+                      context,
+                      initialSelected: s,
+                      onChanged: onRefresh,
                     ),
-                    child: Icon(Icons.storefront_rounded, size: 24, color: color),
+                    child: Container(
+                      padding: const EdgeInsets.all(7),
+                      decoration: BoxDecoration(
+                        color: color.withValues(alpha: .12),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(Icons.storefront_rounded, size: 22, color: color),
+                    ),
                   ),
-                const SizedBox(width: 10),
+                const SizedBox(width: 8),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -2587,18 +2600,18 @@ class _SubscriberCardState extends State<SubscriberCard> {
                                 ? s.workspaceId
                                 : 'منشأة غير مسمّاة'),
                         style: const TextStyle(
-                          fontSize: 16,
+                          fontSize: 15,
                           fontWeight: FontWeight.w900,
                           letterSpacing: -0.2,
                         ),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                       ),
-                      const SizedBox(height: 3),
+                      const SizedBox(height: 2),
                       Row(
                         children: [
                           const Icon(Icons.person_outline,
-                               size: 14, color: Colors.grey),
+                               size: 13.5, color: Colors.grey),
                           const SizedBox(width: 4),
                           Flexible(
                             child: Text(
@@ -2606,7 +2619,7 @@ class _SubscriberCardState extends State<SubscriberCard> {
                                   ? s.clientName
                                   : 'مسؤول غير محدد',
                               style: const TextStyle(
-                                fontSize: 12.5,
+                                fontSize: 12,
                                 fontWeight: FontWeight.w600,
                                 color: Colors.black87,
                               ),
@@ -2622,7 +2635,7 @@ class _SubscriberCardState extends State<SubscriberCard> {
                               child: Text(
                                 s.phone,
                                 style: const TextStyle(
-                                  fontSize: 12.5,
+                                  fontSize: 12,
                                   fontWeight: FontWeight.w700,
                                   color: Color(0xFF2563EB),
                                 ),
@@ -2632,11 +2645,11 @@ class _SubscriberCardState extends State<SubscriberCard> {
                         ],
                       ),
                       if (s.ownerEmail.isNotEmpty) ...[
-                        const SizedBox(height: 3),
+                        const SizedBox(height: 2),
                         Row(
                           children: [
                             const Icon(Icons.alternate_email_rounded,
-                                size: 13.5, color: Color(0xFF0284C7)),
+                                size: 13, color: Color(0xFF0284C7)),
                             const SizedBox(width: 4),
                             Flexible(
                               child: Directionality(
@@ -2644,7 +2657,7 @@ class _SubscriberCardState extends State<SubscriberCard> {
                                 child: Text(
                                   s.ownerEmail,
                                   style: const TextStyle(
-                                    fontSize: 12,
+                                    fontSize: 11.5,
                                     fontWeight: FontWeight.w700,
                                     color: Color(0xFF0369A1),
                                   ),
@@ -2656,7 +2669,7 @@ class _SubscriberCardState extends State<SubscriberCard> {
                             const SizedBox(width: 4),
                             InkWell(
                               onTap: () => copyText(
-                                  context, s.ownerEmail, 'البريد الإلكتروني'),
+                                  context, 'البريد الإلكتروني', s.ownerEmail),
                               borderRadius: BorderRadius.circular(6),
                               child: const Padding(
                                 padding: EdgeInsets.all(2),
@@ -2686,6 +2699,87 @@ class _SubscriberCardState extends State<SubscriberCard> {
                       color: color,
                     ),
                   ),
+                ),
+                PopupMenuButton<String>(
+                  tooltip: 'خيارات إدارة المنشأة',
+                  icon: const Icon(Icons.more_vert_rounded, size: 20),
+                  padding: EdgeInsets.zero,
+                  onSelected: (val) {
+                    if (val == 'change_password') {
+                      _showChangeWorkspacePasswordDialog(context);
+                    } else if (val == 'compact_workspaces') {
+                      showAdminCompactWorkspacesDialog(
+                        context,
+                        initialSelected: entry,
+                        onChanged: onRefresh,
+                      );
+                    } else if (val == 'devices') {
+                      _showConnectedDevicesDialog(context);
+                    } else if (val == 'remote_actions') {
+                      _openRemoteActionsMenu(context);
+                    }
+                  },
+                  itemBuilder: (ctx) => const [
+                    PopupMenuItem<String>(
+                      value: 'change_password',
+                      child: Row(
+                        children: [
+                          Icon(Icons.lock_reset_rounded,
+                              size: 19, color: Color(0xFF0284C7)),
+                          SizedBox(width: 8),
+                          Text(
+                            'تغيير كلمة المرور للمنشأة',
+                            style: TextStyle(
+                              fontSize: 13,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    PopupMenuItem<String>(
+                      value: 'compact_workspaces',
+                      child: Row(
+                        children: [
+                          Icon(Icons.storefront_rounded,
+                              size: 19, color: Color(0xFF0F766E)),
+                          SizedBox(width: 8),
+                          Text(
+                            'نافذة المنشآت والتبديل السريع',
+                            style: TextStyle(fontSize: 13),
+                          ),
+                        ],
+                      ),
+                    ),
+                    PopupMenuItem<String>(
+                      value: 'devices',
+                      child: Row(
+                        children: [
+                          Icon(Icons.devices_other_rounded,
+                              size: 19, color: Color(0xFF2563EB)),
+                          SizedBox(width: 8),
+                          Text(
+                            'استعراض أجهزة المنشأة',
+                            style: TextStyle(fontSize: 13),
+                          ),
+                        ],
+                      ),
+                    ),
+                    PopupMenuItem<String>(
+                      value: 'remote_actions',
+                      child: Row(
+                        children: [
+                          Icon(Icons.settings_remote_rounded,
+                              size: 19, color: Color(0xFF7C3AED)),
+                          SizedBox(width: 8),
+                          Text(
+                            'إجراءات التحكم عن بعد',
+                            style: TextStyle(fontSize: 13),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                 ),
               ],
             ),
@@ -3185,6 +3279,16 @@ class _SubscriberCardState extends State<SubscriberCard> {
                 },
               ),
               ListTile(
+                leading: const Icon(Icons.lock_reset_rounded, color: Color(0xFF0284C7)),
+                title: const Text('تغيير كلمة المرور للمنشأة',
+                    style: TextStyle(fontWeight: FontWeight.w800)),
+                subtitle: const Text('تحديث password_hash مباشرة في عقدة المنشأة وفهارسها بصلاحيات الأدمن'),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _showChangeWorkspacePasswordDialog(context);
+                },
+              ),
+              ListTile(
                 leading: const Icon(Icons.delete_forever_rounded, color: Colors.red),
                 title: const Text('حذف المساحة نهائياً من السحابة (Purge Workspace)',
                     style: TextStyle(color: Colors.red, fontWeight: FontWeight.w800)),
@@ -3198,6 +3302,14 @@ class _SubscriberCardState extends State<SubscriberCard> {
           ),
         ),
       ),
+    );
+  }
+
+  void _showChangeWorkspacePasswordDialog(BuildContext context) {
+    showChangeWorkspacePasswordDialogForEntry(
+      context,
+      entry,
+      onRefresh: onRefresh,
     );
   }
 
@@ -4515,6 +4627,42 @@ class _AdminSupportChatDetailScreenState
       return;
     }
 
+    // إذا كانت الرسالة تحتوي على حزمة استعادة كلمة المرور المشفرة (nexora-ai-rpc)،
+    // نتحقق منها آلياً عبر فهرس phones_index ونولّد كلمة مرور مؤقتة ونحدث المنشأة فوراً.
+    if (Rtdb.decodeAndVerifyAiRecoveryPacket(promptText) != null) {
+      setState(() => _aiStreaming = true);
+      try {
+        final result = await Rtdb.instance.processSmartSupportPasswordRecovery(
+          messageText: promptText,
+          workspaceIdHint: widget.workspaceId,
+        );
+        final replyMsg = '${result['reply_message'] ?? ''}'.trim();
+        if (replyMsg.isNotEmpty) {
+          await Rtdb.instance.sendSupportReply(
+            widget.workspaceId,
+            replyMsg,
+            isAutoSupport: true,
+            escalatedOverride: false,
+          );
+          await _fetch();
+        }
+      } catch (e) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('$e'), backgroundColor: Colors.red),
+          );
+        }
+      } finally {
+        if (mounted) {
+          setState(() {
+            _aiStreaming = false;
+            _streamingPreview = '';
+          });
+        }
+      }
+      return;
+    }
+
     final session =
         DualPersonaAiEngine.instance.supportSessionFor(widget.workspaceId);
     // تغذية الجلسة بسياق المحادثة السابقة إن كانت فارغة
@@ -4541,8 +4689,12 @@ class _AdminSupportChatDetailScreenState
 
     final buf = StringBuffer();
     try {
-      await for (final chunk
-          in session.sendMessageStream(promptText, apiKey: apiKey)) {
+      await for (final chunk in session.sendMessageStream(
+        promptText,
+        apiKey: apiKey,
+        includeLiveContext: true,
+        focusWorkspaceId: widget.workspaceId,
+      )) {
         buf.write(chunk);
         if (mounted) {
           setState(() {
@@ -4551,6 +4703,7 @@ class _AdminSupportChatDetailScreenState
           _scrollToBottom();
         }
       }
+      adminRefreshTick.value++;
 
       final finalReply = buf.toString().trim();
       if (finalReply.isNotEmpty) {
@@ -5148,6 +5301,7 @@ class _OwnerCompanionScreenState extends State<OwnerCompanionScreen> {
       await for (final chunk in session.sendMessageStream(
         text,
         existingMessageId: targetMsgId,
+        includeLiveContext: true,
       )) {
         if (!mounted || _requestToken != myToken) break;
         buf.write(chunk);
@@ -5156,6 +5310,7 @@ class _OwnerCompanionScreenState extends State<OwnerCompanionScreen> {
         });
         _scrollToBottom();
       }
+      adminRefreshTick.value++;
       if (mounted && _requestToken == myToken) {
         setState(() {
           _liveChunkBuffer = '';
@@ -6473,6 +6628,606 @@ class _SystemControlScreenState extends State<SystemControlScreen> {
               ],
             ),
           ),
+        ),
+      ],
+    );
+  }
+}
+
+// ==================== نافذة المنشآت المصغرة وتغيير كلمة المرور ====================
+
+void showChangeWorkspacePasswordDialogForEntry(
+  BuildContext context,
+  SubscriberEntry entry, {
+  VoidCallback? onRefresh,
+}) {
+  final passCtrl = TextEditingController();
+  final confirmCtrl = TextEditingController();
+  bool obscure1 = true;
+  bool obscure2 = true;
+  bool saving = false;
+  String? errMsg;
+
+  showDialog<void>(
+    context: context,
+    builder: (ctx) => StatefulBuilder(
+      builder: (ctx, setDState) => AlertDialog(
+        titlePadding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+        contentPadding: const EdgeInsets.fromLTRB(16, 6, 16, 12),
+        title: Row(
+          children: [
+            const Icon(Icons.lock_reset_rounded,
+                color: Color(0xFF0284C7), size: 21),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'تغيير كلمة المرور للمنشأة — ${entry.storeName.isNotEmpty ? entry.storeName : entry.workspaceId}',
+                style:
+                    const TextStyle(fontSize: 14, fontWeight: FontWeight.w800),
+              ),
+            ),
+          ],
+        ),
+        content: SizedBox(
+          width: 340,
+          child: SingleChildScrollView(
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text(
+                  'تحديث مباشر وآمن لحقل (/workspaces/${entry.workspaceId}/meta/password_hash) وفهارس الحسابات المرتبطة بصلاحيات الأدمن.',
+                  style: const TextStyle(
+                      fontSize: 11.5, color: Colors.black54, height: 1.4),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: passCtrl,
+                  obscureText: obscure1,
+                  enabled: !saving,
+                  textDirection: TextDirection.ltr,
+                  decoration: InputDecoration(
+                    labelText: 'كلمة المرور الجديدة *',
+                    prefixIcon:
+                        const Icon(Icons.lock_outline_rounded, size: 19),
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                        obscure1
+                            ? Icons.visibility_outlined
+                            : Icons.visibility_off_outlined,
+                        size: 19,
+                      ),
+                      onPressed: () => setDState(() => obscure1 = !obscure1),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: confirmCtrl,
+                  obscureText: obscure2,
+                  enabled: !saving,
+                  textDirection: TextDirection.ltr,
+                  decoration: InputDecoration(
+                    labelText: 'تأكيد كلمة المرور الجديدة *',
+                    prefixIcon:
+                        const Icon(Icons.verified_user_outlined, size: 19),
+                    suffixIcon: IconButton(
+                      icon: Icon(
+                        obscure2
+                            ? Icons.visibility_outlined
+                            : Icons.visibility_off_outlined,
+                        size: 19,
+                      ),
+                      onPressed: () => setDState(() => obscure2 = !obscure2),
+                    ),
+                  ),
+                ),
+                if (errMsg != null) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    errMsg!,
+                    style: const TextStyle(
+                      color: Color(0xFFDC2626),
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: saving ? null : () => Navigator.pop(ctx),
+            child: const Text('إلغاء'),
+          ),
+          FilledButton.icon(
+            onPressed: saving
+                ? null
+                : () async {
+                    final p1 = passCtrl.text.trim();
+                    final p2 = confirmCtrl.text.trim();
+                    if (p1.length < 4) {
+                      setDState(() => errMsg =
+                          'يرجى إدخال كلمة مرور لا تقل عن 4 محارف.');
+                      return;
+                    }
+                    if (p1 != p2) {
+                      setDState(() => errMsg =
+                          'كلمتا المرور غير متطابقتين. يرجى التأكد من التطابق.');
+                      return;
+                    }
+                    setDState(() {
+                      saving = true;
+                      errMsg = null;
+                    });
+                    try {
+                      await Rtdb.instance.adminUpdateWorkspacePassword(
+                        workspaceId: entry.workspaceId,
+                        newPassword: p1,
+                        ownerEmail: entry.ownerEmail,
+                        phone: entry.phone,
+                      );
+                      if (ctx.mounted) Navigator.pop(ctx);
+                      onRefresh?.call();
+                      adminRefreshTick.value++;
+                      if (context.mounted) {
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(
+                            content: const Text(
+                                'تم تحديث كلمة المرور للمنشأة في السحابة بنجاح ✓'),
+                            action: entry.phone.trim().isNotEmpty
+                                ? SnackBarAction(
+                                    label: 'إرسال للعميل واتساب',
+                                    textColor: Colors.amberAccent,
+                                    onPressed: () {
+                                      openWhatsApp(
+                                        context,
+                                        entry.phone,
+                                        msg:
+                                            'مرحباً بك، تم تحديث كلمة المرور الخاصة بمنشأتك (${entry.storeName.isNotEmpty ? entry.storeName : entry.workspaceId}) من قِبل الإدارة.\n'
+                                            'كلمة المرور الجديدة هي: $p1',
+                                      );
+                                    },
+                                  )
+                                : null,
+                          ),
+                        );
+                      }
+                    } catch (e) {
+                      setDState(() {
+                        saving = false;
+                        errMsg = '$e';
+                      });
+                    }
+                  },
+            icon: saving
+                ? const SizedBox(
+                    width: 15,
+                    height: 15,
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: Colors.white),
+                  )
+                : const Icon(Icons.save_rounded, size: 16),
+            label: const Text('حفظ وتحديث كلمة المرور'),
+          ),
+        ],
+      ),
+    ),
+  );
+}
+
+Future<void> showAdminCompactWorkspacesDialog(
+  BuildContext context, {
+  SubscriberEntry? initialSelected,
+  VoidCallback? onChanged,
+}) async {
+  await showDialog<void>(
+    context: context,
+    builder: (_) => _AdminCompactWorkspacesDialog(
+      initialSelected: initialSelected,
+      onChanged: onChanged,
+    ),
+  );
+}
+
+class _AdminCompactWorkspacesDialog extends StatefulWidget {
+  final SubscriberEntry? initialSelected;
+  final VoidCallback? onChanged;
+
+  const _AdminCompactWorkspacesDialog({
+    this.initialSelected,
+    this.onChanged,
+  });
+
+  @override
+  State<_AdminCompactWorkspacesDialog> createState() =>
+      _AdminCompactWorkspacesDialogState();
+}
+
+class _AdminCompactWorkspacesDialogState
+    extends State<_AdminCompactWorkspacesDialog> {
+  final TextEditingController _searchCtrl = TextEditingController();
+  List<SubscriberEntry> _all = const [];
+  SubscriberEntry? _selected;
+  bool _loading = true;
+
+  @override
+  void initState() {
+    super.initState();
+    _selected = widget.initialSelected;
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    setState(() => _loading = true);
+    try {
+      final list = Rtdb.instance.configured
+          ? await Rtdb.instance.recentSubscribers(includeAbandoned: false)
+          : const <SubscriberEntry>[];
+      if (!mounted) return;
+      setState(() {
+        _all = list;
+        if (_selected != null) {
+          _selected = list.firstWhere(
+            (e) => e.workspaceId == _selected!.workspaceId,
+            orElse: () => _selected!,
+          );
+        } else if (list.isNotEmpty) {
+          _selected = list.first;
+        }
+        _loading = false;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() => _loading = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final q = _searchCtrl.text.trim().toLowerCase();
+    final filtered = q.isEmpty
+        ? _all
+        : _all.where((s) {
+            return s.storeName.toLowerCase().contains(q) ||
+                s.clientName.toLowerCase().contains(q) ||
+                s.workspaceId.toLowerCase().contains(q) ||
+                s.phone.toLowerCase().contains(q) ||
+                s.ownerEmail.toLowerCase().contains(q);
+          }).toList();
+
+    final activeWs = _selected ?? (filtered.isNotEmpty ? filtered.first : null);
+
+    return AlertDialog(
+      insetPadding: const EdgeInsets.symmetric(horizontal: 18, vertical: 24),
+      titlePadding: const EdgeInsets.fromLTRB(12, 10, 8, 4),
+      contentPadding: const EdgeInsets.fromLTRB(12, 4, 12, 8),
+      actionsPadding: const EdgeInsets.fromLTRB(10, 0, 10, 8),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+      title: Row(
+        children: [
+          Container(
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(
+              color: const Color(0xFF0284C7).withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(9),
+            ),
+            child: const Icon(Icons.storefront_rounded,
+                color: Color(0xFF0284C7), size: 18),
+          ),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'المنشآت والتبديل السريع',
+                  style: TextStyle(fontSize: 13.5, fontWeight: FontWeight.w900),
+                ),
+                if (activeWs != null)
+                  Text(
+                    'المحددة: ${activeWs.storeName.isNotEmpty ? activeWs.storeName : activeWs.workspaceId}',
+                    style: const TextStyle(
+                        fontSize: 10.5,
+                        color: Color(0xFF0284C7),
+                        fontWeight: FontWeight.w700),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+              ],
+            ),
+          ),
+          IconButton(
+            tooltip: 'تحديث القائمة',
+            visualDensity: VisualDensity.compact,
+            icon: const Icon(Icons.refresh_rounded, size: 18),
+            onPressed: _loading ? null : _load,
+          ),
+          if (activeWs != null)
+            PopupMenuButton<String>(
+              tooltip: 'خيارات المساحة المحددة',
+              icon: const Icon(Icons.more_vert_rounded, size: 19),
+              padding: EdgeInsets.zero,
+              onSelected: (val) {
+                if (val == 'change_password') {
+                  showChangeWorkspacePasswordDialogForEntry(
+                    context,
+                    activeWs,
+                    onRefresh: () {
+                      _load();
+                      widget.onChanged?.call();
+                    },
+                  );
+                } else if (val == 'copy_id') {
+                  copyText(context, 'معرف المساحة', activeWs.workspaceId);
+                } else if (val == 'whatsapp' && activeWs.phone.isNotEmpty) {
+                  openWhatsApp(context, activeWs.phone);
+                }
+              },
+              itemBuilder: (_) => [
+                const PopupMenuItem<String>(
+                  value: 'change_password',
+                  child: Row(
+                    children: [
+                      Icon(Icons.lock_reset_rounded,
+                          size: 18, color: Color(0xFF0284C7)),
+                      SizedBox(width: 8),
+                      Text(
+                        'تغيير كلمة المرور للمنشأة',
+                        style: TextStyle(
+                            fontSize: 12.5, fontWeight: FontWeight.w800),
+                      ),
+                    ],
+                  ),
+                ),
+                const PopupMenuItem<String>(
+                  value: 'copy_id',
+                  child: Row(
+                    children: [
+                      Icon(Icons.copy_rounded,
+                          size: 17, color: Color(0xFF475569)),
+                      SizedBox(width: 8),
+                      Text('نسخ معرف المساحة',
+                          style: TextStyle(fontSize: 12.5)),
+                    ],
+                  ),
+                ),
+                if (activeWs.phone.isNotEmpty)
+                  const PopupMenuItem<String>(
+                    value: 'whatsapp',
+                    child: Row(
+                      children: [
+                        Icon(Icons.chat_bubble_outline_rounded,
+                            size: 17, color: Color(0xFF16A34A)),
+                        SizedBox(width: 8),
+                        Text('مراسلة عبر واتساب',
+                            style: TextStyle(fontSize: 12.5)),
+                      ],
+                    ),
+                  ),
+              ],
+            ),
+        ],
+      ),
+      content: SizedBox(
+        width: 340,
+        height: 310,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            TextField(
+              controller: _searchCtrl,
+              onChanged: (_) => setState(() {}),
+              style: const TextStyle(fontSize: 12),
+              decoration: InputDecoration(
+                hintText: 'بحث سريع (اسم المنشأة، المعرف، الهاتف)...',
+                hintStyle: const TextStyle(fontSize: 11.5),
+                prefixIcon: const Icon(Icons.search_rounded, size: 17),
+                contentPadding:
+                    const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                suffixIcon: _searchCtrl.text.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear_rounded, size: 15),
+                        onPressed: () {
+                          _searchCtrl.clear();
+                          setState(() {});
+                        },
+                      )
+                    : null,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Expanded(
+              child: _loading
+                  ? const Center(
+                      child: SizedBox(
+                        width: 24,
+                        height: 24,
+                        child: CircularProgressIndicator(strokeWidth: 2.2),
+                      ),
+                    )
+                  : filtered.isEmpty
+                      ? const Center(
+                          child: Text(
+                            'لا توجد منشآت مطابقة للبحث',
+                            style:
+                                TextStyle(fontSize: 12, color: Colors.black54),
+                          ),
+                        )
+                      : ListView.separated(
+                          itemCount: filtered.length,
+                          separatorBuilder: (_, __) =>
+                              const SizedBox(height: 4),
+                          itemBuilder: (ctx, i) {
+                            final ws = filtered[i];
+                            final isSel =
+                                activeWs?.workspaceId == ws.workspaceId;
+                            return Material(
+                              color: isSel
+                                  ? const Color(0xFF0284C7)
+                                      .withValues(alpha: 0.1)
+                                  : const Color(0xFFF8FAFC),
+                              shape: RoundedRectangleBorder(
+                                borderRadius: BorderRadius.circular(10),
+                                side: BorderSide(
+                                  color: isSel
+                                      ? const Color(0xFF0284C7)
+                                      : const Color(0xFFE2E8F0),
+                                  width: isSel ? 1.4 : 1.0,
+                                ),
+                              ),
+                              child: InkWell(
+                                borderRadius: BorderRadius.circular(10),
+                                onTap: () => setState(() => _selected = ws),
+                                child: Padding(
+                                  padding: const EdgeInsets.symmetric(
+                                      horizontal: 8, vertical: 6),
+                                  child: Row(
+                                    children: [
+                                      Icon(
+                                        isSel
+                                            ? Icons.check_circle_rounded
+                                            : Icons.storefront_rounded,
+                                        size: 17,
+                                        color: isSel
+                                            ? const Color(0xFF0284C7)
+                                            : Colors.blueGrey,
+                                      ),
+                                      const SizedBox(width: 7),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: [
+                                            Text(
+                                              ws.storeName.isNotEmpty
+                                                  ? ws.storeName
+                                                  : ws.workspaceId,
+                                              style: const TextStyle(
+                                                fontSize: 12.2,
+                                                fontWeight: FontWeight.w800,
+                                              ),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                            Text(
+                                              [
+                                                ws.workspaceId,
+                                                if (ws.phone.isNotEmpty)
+                                                  ws.phone,
+                                              ].join(' • '),
+                                              style: const TextStyle(
+                                                fontSize: 10.5,
+                                                color: Colors.black54,
+                                              ),
+                                              maxLines: 1,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                      PopupMenuButton<String>(
+                                        tooltip: 'خيارات المنشأة',
+                                        icon: const Icon(
+                                            Icons.more_vert_rounded,
+                                            size: 17),
+                                        padding: EdgeInsets.zero,
+                                        onSelected: (val) {
+                                          setState(() => _selected = ws);
+                                          if (val == 'change_password') {
+                                            showChangeWorkspacePasswordDialogForEntry(
+                                              context,
+                                              ws,
+                                              onRefresh: () {
+                                                _load();
+                                                widget.onChanged?.call();
+                                              },
+                                            );
+                                          } else if (val == 'copy_id') {
+                                            copyText(context, 'معرف المساحة',
+                                                ws.workspaceId);
+                                          }
+                                        },
+                                        itemBuilder: (_) => const [
+                                          PopupMenuItem<String>(
+                                            value: 'change_password',
+                                            child: Row(
+                                              children: [
+                                                Icon(Icons.lock_reset_rounded,
+                                                    size: 17,
+                                                    color: Color(0xFF0284C7)),
+                                                SizedBox(width: 7),
+                                                Text(
+                                                  'تغيير كلمة المرور للمنشأة',
+                                                  style: TextStyle(
+                                                    fontSize: 12,
+                                                    fontWeight: FontWeight.w800,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                          PopupMenuItem<String>(
+                                            value: 'copy_id',
+                                            child: Row(
+                                              children: [
+                                                Icon(Icons.copy_rounded,
+                                                    size: 16,
+                                                    color: Color(0xFF475569)),
+                                                SizedBox(width: 7),
+                                                Text('نسخ معرف المنشأة',
+                                                    style: TextStyle(
+                                                        fontSize: 12)),
+                                              ],
+                                            ),
+                                          ),
+                                        ],
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ),
+                            );
+                          },
+                        ),
+            ),
+          ],
+        ),
+      ),
+      actions: [
+        if (activeWs != null)
+          TextButton.icon(
+            style: TextButton.styleFrom(
+              visualDensity: VisualDensity.compact,
+              foregroundColor: const Color(0xFF0284C7),
+            ),
+            onPressed: () {
+              showChangeWorkspacePasswordDialogForEntry(
+                context,
+                activeWs,
+                onRefresh: () {
+                  _load();
+                  widget.onChanged?.call();
+                },
+              );
+            },
+            icon: const Icon(Icons.lock_reset_rounded, size: 16),
+            label: const Text('تغيير كلمة المرور',
+                style: TextStyle(fontSize: 11.5, fontWeight: FontWeight.w800)),
+          ),
+        TextButton(
+          style: TextButton.styleFrom(visualDensity: VisualDensity.compact),
+          onPressed: () => Navigator.pop(context),
+          child: const Text('إغلاق', style: TextStyle(fontSize: 12)),
         ),
       ],
     );
