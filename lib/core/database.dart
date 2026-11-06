@@ -2499,4 +2499,48 @@ class AppDatabase {
       );
     } catch (_) {}
   }
+
+  /// فحص مباشر في `sqlite_master` لتأكيد وجود جدولي `operations` و `sync_queue` فعلياً
+  static Future<bool> hasCoreSyncTables(Database db) async {
+    try {
+      final rows = await db.rawQuery(
+        "SELECT name FROM sqlite_master WHERE type = 'table' "
+        "AND name IN ('operations', 'sync_queue')",
+      );
+      final names = {for (final r in rows) '${r['name']}'};
+      return names.contains('operations') && names.contains('sync_queue');
+    } catch (_) {
+      return false;
+    }
+  }
+
+  /// (تعافي ذاتي) ينشئ جداول المزامنة الأساسية على أي منفّذ — `Database` أو
+  /// `Transaction`. يستدعيه `SyncRecorder` داخل المعاملة نفسها عند ظهور
+  /// «no such table»، فيُكمل الحفظ بدل إفشاله أمام المستخدم.
+  static Future<void> ensureSyncTablesForExecutor(DatabaseExecutor ex) async {
+    const ddlOps = '''CREATE TABLE IF NOT EXISTS operations (
+        id TEXT PRIMARY KEY, device_id TEXT NOT NULL, workspace_id TEXT NOT NULL,
+        user_id INTEGER, entity_type TEXT NOT NULL, entity_id TEXT NOT NULL,
+        op_type TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1,
+        parent_op_id TEXT DEFAULT '', payload TEXT NOT NULL,
+        device_time TEXT NOT NULL, server_time TEXT DEFAULT '',
+        timestamp TEXT NOT NULL, synced INTEGER NOT NULL DEFAULT 0,
+        is_synced INTEGER NOT NULL DEFAULT 0
+      )''';
+    const ddlSyncQ = '''CREATE TABLE IF NOT EXISTS sync_queue (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, operation_id TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending', target TEXT NOT NULL DEFAULT 'cloud',
+        attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT DEFAULT '',
+        next_try_at TEXT DEFAULT '', created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        UNIQUE(operation_id, target)
+      )''';
+    await ex.execute(ddlOps);
+    final cols = await ex.rawQuery('PRAGMA table_info(operations)');
+    if (!cols.any((c) => c['name'] == 'is_synced')) {
+      await ex.execute(
+        'ALTER TABLE operations ADD COLUMN is_synced INTEGER NOT NULL DEFAULT 0',
+      );
+    }
+    await ex.execute(ddlSyncQ);
+  }
 }
