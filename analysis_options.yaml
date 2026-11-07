@@ -16,8 +16,6 @@ analyzer:
     - build/**
     - linux/**
     - android/**
-    # مشروع مدير التراخيص مستقل بحزمه الخاصة — يُحلل داخل مجلده فقط.
-    - admin_app/**
     - web/**
 
 linter:
