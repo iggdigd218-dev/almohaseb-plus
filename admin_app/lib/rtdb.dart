@@ -43,6 +43,14 @@ const String kFirebaseApiKey = String.fromEnvironment(
 const int kMaxWorkspaceScan = 250;
 const int kMaxSubscriberScan = 250;
 
+/// فهرس الملخص الخفيف لبطاقات المشتركين، بديل سحب شجرة المساحات بالكامل.
+/// يحتوي الحقول النصية الأساسية فقط: الاسم، الهاتف، البريد، كود الترخيص،
+/// حالة الباقة، وعدد الأجهزة النشطة.
+const String kSubscribersSummaryPath = 'workspaces/_registry/subscribers_summary';
+
+/// أقصى عمر مقبول للفهرس قبل إعادة بنائه تلقائياً (10 دقائق).
+const int kSubscribersSummaryMaxAgeMs = 10 * 60 * 1000;
+
 const String kOfficialAdminUid = 'mTMmR6MDBMZH8nKEbvCntRemkq73';
 
 /// رمز التحديث الدائم لهوية المشرف (Owner) يُقرأ حصرياً من متغير البناء الآمن وقت التشغيل/البناء.
@@ -1535,16 +1543,12 @@ class Rtdb {
     int limit = 100,
     bool includeAbandoned = false,
   }) async {
-    dynamic rootData;
-    if (includeAbandoned) {
-      try {
-        rootData = await _get('workspaces');
-      } catch (_) {
-        rootData = await _get('workspaces', {'shallow': 'true'});
-      }
-    } else {
-      rootData = await _get('workspaces', {'shallow': 'true'});
-    }
+    // ممنوع سحب شجرة المساحات الكاملة (Full Tree Dump):
+    // قراءة `/workspaces` بلا قيود تُنزّل `/data` لكل منشأة (الفواتير، الأصناف،
+    // صور Base64، النسخ الاحتياطية) فتحوّل تحديث قائمة المشتركين إلى عشرات
+    // الميجابايتات. نقرأ مفاتيح المساحات فقط عبر shallow=true (كيلوبايتات)
+    // ثم نقرأ العقود الخفيفة (subscription / roster) لكل منشأة على حدة.
+    final rootData = await _get('workspaces', {'shallow': 'true'});
     if (rootData is! Map || rootData.isEmpty) return const [];
     final wsKeys = rootData.keys
         .map((k) => '$k')
@@ -1661,6 +1665,139 @@ class Rtdb {
     }
 
     return out.take(limit).toList();
+  }
+
+  // ==================== فهرس الملخص الخفيف (subscribers_summary) ====================
+
+  /// فتح شاشة المشتركين في أجزاء من الثانية: قراءة واحدة صغيرة من
+  /// [kSubscribersSummaryPath] بدل مسح كل المساحات.
+  /// الفهرس موجود وحديث: يُعاد فوراً. مفقود أو فارغ أو متقادم: يُعاد بناؤه.
+  Future<List<SubscriberEntry>> subscribersSummary({
+    bool forceRefresh = false,
+    int maxAgeMs = kSubscribersSummaryMaxAgeMs,
+  }) async {
+    if (!forceRefresh) {
+      try {
+        final node = await _get(kSubscribersSummaryPath);
+        final cached = _parseSubscribersSummary(node);
+        final cutoff = DateTime.now().millisecondsSinceEpoch - maxAgeMs;
+        if (cached.rows.isNotEmpty && cached.newestUpdatedAtMs >= cutoff) {
+          return cached.rows;
+        }
+      } catch (_) {}
+    }
+    return rebuildSubscribersSummary();
+  }
+
+  /// إعادة بناء الفهرس من قراءات خفيفة فقط: مفاتيح المساحات (shallow) مع عقود
+  /// الاشتراك والأجهزة، بلا أي بيانات محاسبية أو صور.
+  Future<List<SubscriberEntry>> rebuildSubscribersSummary() async {
+    final rows = await recentSubscribers(includeAbandoned: true, limit: 500);
+    if (rows.isEmpty) return rows;
+    final payload = <String, dynamic>{};
+    for (final e in rows) {
+      final key = e.workspaceId.trim().isNotEmpty
+          ? e.workspaceId.trim()
+          : e.deviceId.trim();
+      if (key.isEmpty) continue;
+      payload[key] = _subscriberSummaryJson(e);
+    }
+    try {
+      await _put(kSubscribersSummaryPath, payload);
+    } catch (_) {}
+    return rows;
+  }
+
+  /// تحديث صف واحد في الفهرس بعد أي إجراء إداري (تجميد/تفعيل/تمديد) دون إعادة
+  /// بناء كامل، فتبقى القائمة فورية ومطابقة للواقع.
+  Future<void> touchSubscriberSummary(
+    String wsId, {
+    Map<String, dynamic>? patch,
+  }) async {
+    final key = wsId.trim();
+    if (key.isEmpty) return;
+    try {
+      await _patch(
+        '$kSubscribersSummaryPath/${Uri.encodeComponent(key)}',
+        <String, dynamic>{
+          ...?patch,
+          'updatedAt': DateTime.now().millisecondsSinceEpoch,
+        },
+      );
+    } catch (_) {}
+  }
+
+  /// حذف صف من الفهرس بعد حذف المنشأة نهائياً.
+  Future<void> dropSubscriberSummary(String wsId) async {
+    final key = wsId.trim();
+    if (key.isEmpty) return;
+    try {
+      await _delete('$kSubscribersSummaryPath/${Uri.encodeComponent(key)}');
+    } catch (_) {}
+  }
+
+  Map<String, dynamic> _subscriberSummaryJson(SubscriberEntry e) => {
+        'workspaceId': e.workspaceId,
+        'storeName': e.storeName,
+        'clientName': e.clientName,
+        'phone': e.phone,
+        'ownerEmail': e.ownerEmail,
+        'licenseKey': e.licenseKey,
+        'planType': e.planType,
+        'status': e.status,
+        'isFrozen': e.isFrozen,
+        'maxDevices': e.maxDevices,
+        'activeDevices': e.activeDevices,
+        'expiresAtMs': e.expiresAtMs,
+        'activatedAtMs': e.activatedAtMs,
+        'lastSeenAtMs': e.lastSeenAtMs,
+        'deviceId': e.deviceId,
+        'deviceRef': e.deviceRef,
+        'hasSubscriptionNode': e.hasSubscriptionNode,
+        'updatedAt': DateTime.now().millisecondsSinceEpoch,
+      };
+
+  ({List<SubscriberEntry> rows, int newestUpdatedAtMs})
+      _parseSubscribersSummary(dynamic node) {
+    if (node is! Map) {
+      return (rows: const <SubscriberEntry>[], newestUpdatedAtMs: 0);
+    }
+    final rows = <SubscriberEntry>[];
+    var newest = 0;
+    for (final e in node.entries) {
+      final key = '${e.key}'.trim();
+      final m = e.value;
+      if (key.isEmpty || key.startsWith('_') || m is! Map) continue;
+      final updated = asInt(m['updatedAt'] ?? m['updated_at']);
+      if (updated > newest) newest = updated;
+      final wsFromNode = asStr(m['workspaceId']);
+      rows.add(SubscriberEntry(
+        workspaceId: wsFromNode.isNotEmpty ? wsFromNode : key,
+        planType: asStr(m['planType']),
+        status: asStr(m['status']),
+        maxDevices: asInt(m['maxDevices']),
+        activeDevices: asInt(m['activeDevices']),
+        expiresAtMs: asInt(m['expiresAtMs']),
+        activatedAtMs: asInt(m['activatedAtMs']),
+        lastSeenAtMs: asInt(m['lastSeenAtMs']),
+        deviceRef: asStr(m['deviceRef']),
+        clientName: asStr(m['clientName']),
+        storeName: asStr(m['storeName']),
+        phone: asStr(m['phone']),
+        deviceId: asStr(m['deviceId']),
+        licenseKey: asStr(m['licenseKey']),
+        isFrozen: m['isFrozen'] == true,
+        hasSubscriptionNode: m['hasSubscriptionNode'] != false,
+        ownerEmail: asStr(m['ownerEmail']),
+      ));
+    }
+    rows.sort((a, b) {
+      final at = a.activatedAtMs > 0 ? a.activatedAtMs : a.lastSeenAtMs;
+      final bt = b.activatedAtMs > 0 ? b.activatedAtMs : b.lastSeenAtMs;
+      final cmp = bt.compareTo(at);
+      return cmp != 0 ? cmp : b.expiresAtMs.compareTo(a.expiresAtMs);
+    });
+    return (rows: rows, newestUpdatedAtMs: newest);
   }
 
   Future<List<SubscriberEntry>> _readWorkspaceEntries(
@@ -2637,6 +2774,8 @@ class Rtdb {
         await _delete('workspaces/_registry/phones_index/$phoneKey');
       } catch (_) {}
     }
+    // إزالة صف المنشأة من فهرس الملخص كي لا تظهر في قائمة المشتركين.
+    await dropSubscriberSummary(cleanWs);
   }
 
   /// حذف دفعة من المنشآت المحددة بشكل متتابع ومتماثل مع مؤشر تقدم.
