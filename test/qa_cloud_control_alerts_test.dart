@@ -172,7 +172,7 @@ void main() {
 
     test('CTL-07 قواعد فايربيس محصنة وتحصر الحقول السيادية بالمدير حصراً', () {
       final mainRulesFile = File('firebase/database.rules.json');
-      final adminRulesFile = File('admin_app/rules.license-hardened.json');
+      final adminRulesFile = File('firebase/rules.license-hardened.json');
       expect(mainRulesFile.existsSync(), isTrue);
       expect(adminRulesFile.existsSync(), isTrue);
 
