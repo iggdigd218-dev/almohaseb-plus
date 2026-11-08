@@ -13,6 +13,7 @@ import 'package:http/http.dart' as http;
 
 import '../core/app_version.dart';
 import '../core/platform_info.dart';
+import 'sync/firebase_auth_service.dart';
 
 /// مفتاح معالج أندرويد الحالي، أو `null` إن لم نعرفه (منصّة أخرى).
 ///
@@ -206,6 +207,11 @@ class UpdateService {
   static const String kDefaultManifestUrl =
       'https://nexora-broker-default-rtdb.europe-west1.firebasedatabase.app/system/plus/version_manifest.json';
 
+  /// مسار بيان التحديث المحمي بتوكن المصادقة (`auth != null`) داخل قاعدة RTDB:
+  /// يعمل فوراً حتى قبل تحديث قواعد `/system/plus/version_manifest` يدوياً في لوحة Firebase.
+  static const String kAuthenticatedRtdbManifestUrl =
+      'https://nexora-broker-default-rtdb.europe-west1.firebasedatabase.app/_server_time_probe/plus_version_manifest.json';
+
   /// رابط احتياطي على GitHub Releases للمستودع العام.
   static const String kFallbackManifestUrl =
       'https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/version.json';
@@ -217,12 +223,18 @@ class UpdateService {
   static const String kMirrorManifestUrl =
       'https://iggdigd218-dev.github.io/almohaseb-plus/version.json';
 
+  /// مرآة سريعة مباشرة من فرع `releases` عبر CDN مستقل (`raw.githubusercontent.com`)
+  /// لا يمر عبر تحويلات 302 الخاصة بـ `github.com`.
+  static const String kRawManifestUrl =
+      'https://raw.githubusercontent.com/iggdigd218-dev/almohaseb-plus/releases/version.json';
+
   /// صفحة الإصدار الرسمية (احتياطي إذا لم يذكر البيان رابطًا).
   static const String kFallbackReleaseUrl =
       'https://github.com/iggdigd218-dev/almohaseb-plus/releases/latest';
 
   final String manifestUrl;
   final http.Client Function() _clientFactory;
+  final bool _hasCustomClient;
   final AppSemVer current;
   final UpdatePlatform platform;
   final Duration timeout;
@@ -232,8 +244,9 @@ class UpdateService {
     http.Client Function()? clientFactory,
     AppSemVer? current,
     UpdatePlatform? platform,
-    this.timeout = const Duration(seconds: 10),
+    this.timeout = const Duration(seconds: 20),
   })  : manifestUrl = manifestUrl ?? kDefaultManifestUrl,
+        _hasCustomClient = clientFactory != null,
         _clientFactory = clientFactory ?? (() => http.Client()),
         current = current ?? AppSemVer.current,
         platform = platform ?? detectPlatform();
@@ -250,18 +263,29 @@ class UpdateService {
     if (manifestUrl != kDefaultManifestUrl) {
       return _fetchFromUrl(manifestUrl);
     }
-    // (متانة القناة) للرابط الافتراضي حصريًا: نجلب المصادر الثلاثة **بالتوازي**
-    // — العقدة السيادية، مرآة GitHub Pages، ثم GitHub Releases — ونُعمل الأحدث
-    // إصدارًا منها. فتأخر أحدها أو حجبه لا يجمّد قناة التحديث، وزمن الفحص يبقى
-    // مهلة واحدة لا ثلاث (مهم على شبكات المحمول البطيئة).
-    final sources = <String>{
-      manifestUrl,
-      kMirrorManifestUrl,
+    String? authToken;
+    if (!_hasCustomClient) {
+      try {
+        authToken = await FirebaseAuthService.instance
+            .cloudIdToken()
+            .timeout(const Duration(seconds: 5));
+      } catch (_) {
+        authToken = null;
+      }
+    }
+    // (متانة القناة) للرابط الافتراضي حصريًا: نجلب كافة المصادر **بالتوازي**
+    // — العقدة السيادية، عقدة RTDB المصادق عليها، مرآة GitHub Pages، مرآة Raw،
+    // ثم GitHub Releases — ونُعمل الأحدث إصدارًا منها.
+    final futures = <Future<UpdateInfo>>[
+      _fetchFromUrl(manifestUrl, authToken: authToken),
+      _fetchFromUrl(kAuthenticatedRtdbManifestUrl, authToken: authToken),
+      _fetchFromUrl(kMirrorManifestUrl),
+      _fetchFromUrl(kRawManifestUrl),
       if (kFallbackManifestUrl != kDefaultManifestUrl &&
           kFallbackManifestUrl != kMirrorManifestUrl)
-        kFallbackManifestUrl,
-    }.toList();
-    final results = await Future.wait(sources.map(_fetchFromUrl));
+        _fetchFromUrl(kFallbackManifestUrl),
+    ];
+    final results = await Future.wait(futures);
     var info = results.first;
     for (final candidate in results.skip(1)) {
       info = _newerOf(info, candidate);
@@ -281,10 +305,17 @@ class UpdateService {
       final bp = b.publishedAt ?? DateTime.fromMillisecondsSinceEpoch(0);
       return !bp.isBefore(ap) && bp.isAfter(ap) ? b : a;
     }
+    if (!aOk && !bOk) {
+      final aErr = a.error ?? '';
+      final bErr = b.error ?? '';
+      final aIsAuthErr = aErr.contains('401') || aErr.contains('403');
+      final bIsAuthErr = bErr.contains('401') || bErr.contains('403');
+      if (aIsAuthErr && !bIsAuthErr && bErr.isNotEmpty) return b;
+    }
     return bOk ? b : a;
   }
 
-  Future<UpdateInfo> _fetchFromUrl(String targetUrl) async {
+  Future<UpdateInfo> _fetchFromUrl(String targetUrl, {String? authToken}) async {
     final uri = Uri.tryParse(targetUrl);
     if (uri == null || !uri.isScheme('https')) {
       return UpdateInfo(
@@ -297,6 +328,7 @@ class UpdateService {
     // لدقائق بعد النشر — معامل عشوائي لكل طلب يضمن قراءة أحدث بيان.
     final uriWithBuster = uri.replace(queryParameters: {
       ...uri.queryParameters,
+      if (authToken != null && authToken.isNotEmpty) 'auth': authToken,
       't': '${DateTime.now().millisecondsSinceEpoch}',
     });
     final client = _clientFactory();
