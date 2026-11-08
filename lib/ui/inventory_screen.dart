@@ -2954,6 +2954,36 @@ void _itemQuickMenu(BuildContext context, WidgetRef ref, Item item) {
                 );
               },
             ),
+            ListTile(
+              leading: Icon(
+                Icons.delete_outline,
+                color: AppColors.dangerOf(ctx),
+              ),
+              title: Text(
+                'حذف الصنف',
+                style: TextStyle(
+                  color: AppColors.dangerOf(ctx),
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              onTap: () async {
+                Navigator.pop(ctx);
+                final ok = await confirmDialog(
+                  context,
+                  title: 'حذف الصنف',
+                  message: 'سيُنقل «${item.name}» إلى سلة المهملات '
+                      'ويمكن استرجاعه.',
+                  confirmText: 'حذف الصنف',
+                  danger: true,
+                );
+                if (!ok || item.id == null) return;
+                await ref.read(repoProvider).deleteItem(item.id!);
+                bump(ref);
+                if (context.mounted) {
+                  showSnack(context, 'نُقل الصنف إلى سلة المهملات');
+                }
+              },
+            ),
             const SizedBox(height: 8),
           ],
         ),
