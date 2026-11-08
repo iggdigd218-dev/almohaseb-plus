@@ -66,7 +66,10 @@ void main() {
     test('UI-07 زر حفظ المنتج ثابت خارج منطقة التمرير', () {
       final s = read('lib/ui/inventory_screen.dart');
       expect(s, contains('SingleChildScrollView'));
-      expect(s, contains('MediaQuery.viewInsetsOf(context).bottom'));
+      // (3.98.35) حشو ثابت: showDialog يرفع النافذة فوق الكيبورد بنفسه،
+      // فإضافة viewInsets داخل البطاقة تُنتج فراغاً أبيض أسفل زر الحفظ.
+      expect(s, contains('EdgeInsets.fromLTRB(12, 8, 12, 10)'));
+      expect(s, isNot(contains('8 + MediaQuery.viewInsetsOf(context).bottom')));
     });
 
     test('UI-08 قائمة النواقص صفحة Scaffold مستقلة', () {
