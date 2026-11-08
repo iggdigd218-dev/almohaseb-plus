@@ -66,7 +66,6 @@ jobs:
           cmake --version
 
       - name: Build Windows Release
-        shell: bash
         env:
           # إضافة local_auth_windows تُترجم بـ /await القديم (STL1011 خطأ في VS 2026).
           # لا نستخدم البصمة على ويندوز؛ نكتم التحذير القاتل حتى تُترجم الإضافة.
