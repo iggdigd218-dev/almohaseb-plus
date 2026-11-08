@@ -4129,7 +4129,7 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
                       child: InkWell(
                         borderRadius: BorderRadius.circular(20),
                         onTap: () {
-                          Sfx.tap();
+                          HapticFeedback.selectionClick();
                           setState(
                             () => _includeInShortages = !_includeInShortages,
                           );

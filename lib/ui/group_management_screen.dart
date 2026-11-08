@@ -993,9 +993,8 @@ Future<void> showJoinApprovalSheet(
         ? workspaceId.trim()
         : repo.requireWorkspaceId;
     final deviceId = '${request['deviceId'] ?? ''}';
-    final deviceName = '${request['deviceName'] ?? 'جهاز جديد'}';
+    final deviceName = '${request['deviceName'] ?? 'مستخدم جديد'}';
     final fp = '${request['fingerprint'] ?? ''}';
-    final platform = '${request['platform'] ?? ''}';
     var role = UserRole.cashier;
     // (دفعة 65) قفل الموافقة: يمنع النقر المتكرر ويُظهر تقدماً واضحاً.
     var approving = false;
