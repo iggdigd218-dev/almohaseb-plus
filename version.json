@@ -1,10 +1,10 @@
 {
-  "version": "3.98.38+353",
+  "version": "3.98.39+354",
   "minSupported": "3.13.0",
-  "sha256": "cbadb36df53962d337f9db0f1f9493f8c35023b1928df3f0093334e0aba2675a",
+  "sha256": "957b1b5732bfc38e75944e27729a980b532b012db023bd813508ec41f6d6ecf0",
   "sha256Variants": {
-    "arm64": "cbadb36df53962d337f9db0f1f9493f8c35023b1928df3f0093334e0aba2675a",
-    "armv7": "b12773b577b7e218fa537c542f8ae26ed07a72d329afeda3371f8d6ded658c5c"
+    "arm64": "957b1b5732bfc38e75944e27729a980b532b012db023bd813508ec41f6d6ecf0",
+    "armv7": "164239907b704392e3356a35044870b631dd1fdfc27b50efaf4c1e27ed7aba33"
   },
   "releaseUrl": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/tag/latest",
   "download_url": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/Almohaseb-Plus-arm64.apk",
@@ -17,12 +17,12 @@
     "windows": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/NexoraSetup.exe"
   },
   "downloadsMirror": {
-    "android": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.38-353/Almohaseb-Plus-arm64.apk",
+    "android": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.39-354/Almohaseb-Plus-arm64.apk",
     "androidVariants": {
-      "arm64": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.38-353/Almohaseb-Plus-arm64.apk",
-      "armv7": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.38-353/nexora-armv7.apk"
+      "arm64": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.39-354/Almohaseb-Plus-arm64.apk",
+      "armv7": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.39-354/nexora-armv7.apk"
     },
-    "windows": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.38-353/NexoraSetup.exe"
+    "windows": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.39-354/NexoraSetup.exe"
   },
   "downloadsFallbackGithub": {
     "android": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/Almohaseb-Plus-arm64.apk",
@@ -32,6 +32,6 @@
     },
     "windows": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/NexoraSetup.exe"
   },
-  "publishedAt": "2026-11-08T15:51:55Z",
+  "publishedAt": "2026-11-08T20:27:07Z",
   "notes": "• نظام التحديثات: معالجة خطأ 401 في التحقق من التحديثات عبر قناة RTDB المصادق عليها ومرايا GitHub المتعددة وإتاحة زر التثبيت المباشر دائماً.\n• إدارة المنتجات: دعم التفرع المتداخل (قسم ← فئة رئيسية ← فئة فرعية) مع شريط مسار تفاعلي ونقل مرن وخيار حذف الصنف من قائمة البطاقة.\n• دائرة المزامنة والشريط السفلي: قوسان متناظران بألوان زاهية وحركات تفاعلية، مع زر «+ عملية» الوسطي ونقل المساعد الذكي للقائمة الجانبية."
 }
