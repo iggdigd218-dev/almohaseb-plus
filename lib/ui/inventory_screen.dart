@@ -2566,14 +2566,10 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
 
     return _BrandSheet(
       child: Padding(
-        // (3.98.34) نفس أبعاد النافذة الخارجية، لكن الزر السفلي يبقى ظاهراً
-        // فوق لوحة المفاتيح: الحقول تُمرَّر وحدها داخل المساحة المتاحة.
-        padding: EdgeInsets.fromLTRB(
-          12,
-          8,
-          12,
-          8 + MediaQuery.viewInsetsOf(context).bottom,
-        ),
+        // (3.98.35) showDialog يرفع النافذة تلقائياً فوق الكيبورد، فإضافة
+        // viewInsets هنا كانت تُنشئ فراغاً أبيض هائلاً أسفل زر الحفظ وتضغط
+        // منطقة الحقول. الحشو الآن ثابت بسيط، وزر الحفظ أسفل البطاقة مباشرة.
+        padding: const EdgeInsets.fromLTRB(12, 8, 12, 10),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2855,14 +2851,27 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
                   child: TextField(
                     controller: _sku,
                     decoration: InputDecoration(
-                      labelText: 'الباركود (5 خانات فأكثر)',
+                      // (3.98.35) تسمية قصيرة + خط أصغر + أيقونات أضيق حتى
+                      // لا تظهر «الباركود (5 خانات ...» مقطوعة بعلامة (...).
+                      labelText: 'الباركود',
+                      hintText: '5 خانات فأكثر',
                       errorText: _skuError,
                       isDense: true,
+                      labelStyle: const TextStyle(fontSize: 11.5),
+                      floatingLabelStyle: const TextStyle(fontSize: 11),
                       contentPadding: const EdgeInsets.symmetric(
-                        horizontal: 10,
+                        horizontal: 8,
                         vertical: 10,
                       ),
-                      prefixIcon: const Icon(Icons.qr_code, size: 18),
+                      prefixIcon: const Icon(Icons.qr_code, size: 16),
+                      prefixIconConstraints: const BoxConstraints(
+                        minWidth: 28,
+                        minHeight: 28,
+                      ),
+                      suffixIconConstraints: const BoxConstraints(
+                        minWidth: 52,
+                        minHeight: 28,
+                      ),
                       suffixIcon: Row(
                         mainAxisSize: MainAxisSize.min,
                         children: [
@@ -2870,13 +2879,13 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
                             visualDensity: VisualDensity.compact,
                             padding: EdgeInsets.zero,
                             constraints: const BoxConstraints(
-                              minWidth: 30,
-                              minHeight: 30,
+                              minWidth: 26,
+                              minHeight: 26,
                             ),
                             tooltip: 'توليد باركود تلقائي (+)',
                             icon: Icon(
                               Icons.add_circle_outline,
-                              size: 19,
+                              size: 17,
                               color: AppColors.primaryOf(context),
                             ),
                             onPressed: _generateAutoBarcode,
@@ -2885,11 +2894,11 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
                             visualDensity: VisualDensity.compact,
                             padding: EdgeInsets.zero,
                             constraints: const BoxConstraints(
-                              minWidth: 30,
-                              minHeight: 30,
+                              minWidth: 26,
+                              minHeight: 26,
                             ),
                             tooltip: 'مسح الباركود بالكاميرا',
-                            icon: const Icon(Icons.barcode_reader, size: 19),
+                            icon: const Icon(Icons.barcode_reader, size: 17),
                             onPressed: () async {
                               final code = await scanBarcode(context);
                               if (code != null && code.isNotEmpty) {
