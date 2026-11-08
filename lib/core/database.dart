@@ -929,6 +929,12 @@ class AppDatabase {
       // (2026-09-26) أعمدة حالة الحذف والنشاط للأصناف (is_deleted, is_active)
       await _addColumn(db, 'items', 'is_deleted', 'INTEGER NOT NULL DEFAULT 0');
       await _addColumn(db, 'items', 'is_active', 'INTEGER NOT NULL DEFAULT 1');
+      await _addColumn(
+        db,
+        'items',
+        'exclude_from_shortages',
+        'INTEGER NOT NULL DEFAULT 0',
+      );
       // عمود is_synced للمزامنة التراكمية الذكية (Delta-Sync)
       await _addColumn(db, 'operations', 'is_synced', 'INTEGER NOT NULL DEFAULT 0');
       try {
@@ -1339,6 +1345,7 @@ class AppDatabase {
         archived      INTEGER NOT NULL DEFAULT 0,
         is_deleted    INTEGER NOT NULL DEFAULT 0,
         is_active     INTEGER NOT NULL DEFAULT 1,
+        exclude_from_shortages INTEGER NOT NULL DEFAULT 0,
         deleted_at    TEXT DEFAULT '',
         deleted_by    INTEGER,
         restore_op_id TEXT DEFAULT '',

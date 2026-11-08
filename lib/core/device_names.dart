@@ -12,14 +12,17 @@ library;
 const Set<String> kPlaceholderDeviceNames = <String>{
   'المدير',
   'عضو',
+  'جهاز',
   'جهاز المحاسب',
   'جهاز مدير الحسابات',
   'جهاز عضو',
+  'مستخدم جديد',
+  'غير معيّن',
 };
 
 /// الاسم الافتراضي المستخدم عند غياب أي اسم.
-const String kDefaultMemberDeviceName = 'جهاز عضو';
-const String kDefaultOwnerDeviceName = 'جهاز مدير الحسابات';
+const String kDefaultMemberDeviceName = 'مستخدم جديد';
+const String kDefaultOwnerDeviceName = 'المدير';
 
 /// هل النص اسم مكان شاغر (فارغ أو ضمن القائمة)؟
 bool isPlaceholderDeviceName(String? raw) {
@@ -30,3 +33,18 @@ bool isPlaceholderDeviceName(String? raw) {
 
 /// هل النص اسم مخصّص حقيقي (غير مكان شاغر)؟
 bool isCustomDeviceName(String? raw) => !isPlaceholderDeviceName(raw);
+
+/// توحيد اسم العضو من سجل الجهاز والمستخدم المرتبط به دون إظهار أسماء افتراضية مثل «جهاز» أو «جهاز عضو».
+String resolveMemberUnifiedName({
+  String? deviceName,
+  String? userName,
+  bool isOwner = false,
+  String? fallback,
+}) {
+  final dev = (deviceName ?? '').trim();
+  final usr = (userName ?? '').trim();
+  if (isCustomDeviceName(dev)) return dev;
+  if (isCustomDeviceName(usr)) return usr;
+  if (fallback != null) return fallback;
+  return isOwner ? 'المدير' : 'مستخدم جديد';
+}

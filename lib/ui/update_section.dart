@@ -584,16 +584,12 @@ class _UpdateBody extends ConsumerWidget {
             UpdateStatus.unknown => info.error ?? 'سبب غير معروف.',
           },
         ),
-        if (info.hasUpdate || info.status == UpdateStatus.unknown) ...[
+        if (info.hasUpdate) ...[
           const SizedBox(height: 10),
           FilledButton.icon(
             onPressed: () => startOneClickUpdate(context, ref, info),
             icon: const Icon(Icons.download_outlined),
-            label: Text(
-              info.hasUpdate
-                  ? 'التنزيل والتثبيت داخل التطبيق'
-                  : 'تنزيل وتثبيت أحدث إصدار داخل التطبيق',
-            ),
+            label: const Text('التنزيل والتثبيت داخل التطبيق'),
           ),
           const SizedBox(height: 8),
           OutlinedButton.icon(

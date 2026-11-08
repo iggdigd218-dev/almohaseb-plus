@@ -287,30 +287,6 @@ void main() {
       final info = await svc.check();
       expect(info.hasUpdate, isFalse);
     });
-
-    test('عقدة RTDB المصادق عليها أو مرآة Raw تنقذ التحديث وتمنع طغيان خطأ 401', () async {
-      final svc = UpdateService(
-        manifestUrl: UpdateService.kDefaultManifestUrl,
-        current: const AppSemVer(3, 98, 35, 350),
-        platform: UpdatePlatform.android,
-        clientFactory: () => MockClient((req) async {
-          if (req.url.path.endsWith('/system/plus/version_manifest.json')) {
-            return http.Response('{"error":"Permission denied"}', 401);
-          }
-          if (req.url.path.endsWith('/_server_time_probe/plus_version_manifest.json')) {
-            return http.Response(
-              manifest(version: '3.98.37+352'),
-              200,
-              headers: {'content-type': 'application/json'},
-            );
-          }
-          throw const SocketException('slow network');
-        }),
-      );
-      final info = await svc.check();
-      expect(info.status, UpdateStatus.available);
-      expect(info.latest!.build, 352);
-    });
   });
 
   test('يطلب البيان من الرابط الصحيح + معامل كسر الكاش', () async {

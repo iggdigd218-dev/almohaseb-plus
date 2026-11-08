@@ -299,26 +299,16 @@ jobs:
               | python3 -c "import json,sys;print(json.load(sys.stdin).get('id_token',''))" 2>/dev/null || true)
             if [ -n "$IDTOK" ]; then AUTH_SUFFIX="?auth=$IDTOK"; fi
           fi
-          ANON_SUFFIX="$AUTH_SUFFIX"
-          if [ -z "$ANON_SUFFIX" ]; then
-            ANON_TOK=$(curl -s -X POST \
-              "https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=AIzaSyAh6_kGvoPvse3Mt3Yy06dmDaCpTKHp0F4" \
-              -H "Content-Type: application/json" \
-              -d '{"returnSecureToken":true}' \
-              | python3 -c "import json,sys;print(json.load(sys.stdin).get('idToken',''))" 2>/dev/null || true)
-            if [ -n "$ANON_TOK" ]; then ANON_SUFFIX="?auth=$ANON_TOK"; fi
+          if [ -z "$AUTH_SUFFIX" ]; then
+            echo "::warning::لا توكن مشرف متاح — تعذّر نشر بيان المرآة إلى RTDB (بيان GitHub يبقى الفعّال)."
+            exit 0
           fi
           publish() {
-            if ! curl -s -f -X "$1" -H "Content-Type: application/json; charset=utf-8" -d @manifest.json "$2$3"; then
+            if ! curl -s -f -X "$1" -H "Content-Type: application/json; charset=utf-8" -d @manifest.json "$2$AUTH_SUFFIX"; then
               echo "::warning::فشل نشر بيان المرآة إلى ${2##*/}"
             fi
           }
           # (2026-10-29) مسار بلاس المستقل — فصل بيان التحديث عن تطبيق v2.
-          if [ -n "$AUTH_SUFFIX" ]; then
-            publish PUT   "https://nexora-broker-default-rtdb.europe-west1.firebasedatabase.app/system/plus/version_manifest.json" "$AUTH_SUFFIX"
-            publish PATCH "https://nexora-broker-default-rtdb.europe-west1.firebasedatabase.app/system/plus/force_update.json" "$AUTH_SUFFIX"
-          fi
-          if [ -n "$ANON_SUFFIX" ]; then
-            publish PUT   "https://nexora-broker-default-rtdb.europe-west1.firebasedatabase.app/_server_time_probe/plus_version_manifest.json" "$ANON_SUFFIX"
-          fi
+          publish PUT   "https://nexora-broker-default-rtdb.europe-west1.firebasedatabase.app/system/plus/version_manifest.json"
+          publish PATCH "https://nexora-broker-default-rtdb.europe-west1.firebasedatabase.app/system/plus/force_update.json"
           echo "✔ نُشر بيان المرآة — روابط $MIRROR_PROVIDER فعّالة الآن."

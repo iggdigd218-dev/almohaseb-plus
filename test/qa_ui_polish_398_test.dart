@@ -120,5 +120,39 @@ void main() {
       expect(sync, contains('_triggerTapSpin'));
       expect(sync, contains('_triggerPulseSpin'));
     });
+
+    test('UI-14 بطاقة العضو موحدة الاسم بلا تكرار لقب الدور ولا الجهاز/المستخدم', () {
+      final dev = read('lib/ui/devices_screen.dart');
+      expect(dev, contains('resolveMemberUnifiedName'));
+      expect(dev, isNot(contains('roleDisplayName(')));
+      expect(dev, isNot(contains("_smallLabel('الجهاز'")));
+      expect(dev, isNot(contains("_smallLabel('المستخدم'")));
+    });
+
+    test('UI-15 نموذج الصنف يشترط الحقول الأساسية ويضم نقطة استبعاد النواقص', () {
+      final inv = read('lib/ui/inventory_screen.dart');
+      expect(inv, contains('name.length < 2'));
+      expect(inv, contains('_includeInShortages'));
+      expect(inv, contains('excludeFromShortages'));
+      expect(inv, contains('مفعّل في قائمة النواقص'));
+    });
+
+    test('UI-16 نافذة الحساب بطاقة منبثقة مدمجة من 3 صفوف وقائمة مشاركة علوية', () {
+      final acc = read('lib/ui/account_form.dart');
+      expect(acc, contains('showDialog<bool>'));
+      expect(acc, contains('_buildShareMenuButton'));
+      expect(acc, isNot(contains('showModalBottomSheet')));
+    });
+
+    test('UI-17 نافذة العملية بطاقة منبثقة مدمجة من 4 صفوف بلا تفاصيل زائدة', () {
+      final tx = read('lib/ui/tx_form.dart');
+      expect(tx, contains('showDialog<Object>'));
+      expect(tx, contains('_compactTypeBar'));
+      expect(tx, contains('_accountAndDateRow'));
+      expect(tx, contains('_descriptionWithImageField'));
+      expect(tx, isNot(contains('طبيعة العملية على الحساب')));
+      expect(tx, isNot(contains('إخفاء التفاصيل الإضافية')));
+      expect(tx, isNot(contains('رقم مرجعي')));
+    });
   });
 }

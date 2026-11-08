@@ -366,22 +366,12 @@ jobs:
               | python3 -c "import json,sys;print(json.load(sys.stdin).get('id_token',''))" 2>/dev/null || true)
             if [ -n "$IDTOK" ]; then AUTH_SUFFIX="?auth=$IDTOK"; fi
           fi
-          ANON_SUFFIX="$AUTH_SUFFIX"
-          if [ -z "$ANON_SUFFIX" ]; then
-            ANON_TOK=$(curl -s -X POST \
-              "https://identitytoolkit.googleapis.com/v1/accounts:signUp?key=AIzaSyAh6_kGvoPvse3Mt3Yy06dmDaCpTKHp0F4" \
-              -H "Content-Type: application/json" \
-              -d '{"returnSecureToken":true}' \
-              | python3 -c "import json,sys;print(json.load(sys.stdin).get('idToken',''))" 2>/dev/null || true)
-            if [ -n "$ANON_TOK" ]; then ANON_SUFFIX="?auth=$ANON_TOK"; fi
-          fi
           publish_manifest() {
-            if ! curl -s -f -X "$1" -H "Content-Type: application/json; charset=utf-8" -d @version.json "$2$3"; then
+            if ! curl -s -f -X "$1" -H "Content-Type: application/json; charset=utf-8" -d @version.json "$2$AUTH_SUFFIX"; then
               echo "::warning::فشل نشر بيان التحديث إلى ${2##*/} — راجع سر ADMIN_RTDB_REFRESH_TOKEN وقواعد القاعدة (يبقى بيان GitHub المصدر الاحتياطي للعملاء)"
             fi
           }
           # (2026-10-29) مسار بلاس المستقل — فصل بيان التحديث عن تطبيق v2.
-          publish_manifest PUT "https://nexora-broker-default-rtdb.europe-west1.firebasedatabase.app/system/plus/version_manifest.json" "$AUTH_SUFFIX"
-          publish_manifest PATCH "https://nexora-broker-default-rtdb.europe-west1.firebasedatabase.app/system/plus/force_update.json" "$AUTH_SUFFIX"
-          publish_manifest PUT "https://nexora-broker-default-rtdb.europe-west1.firebasedatabase.app/_server_time_probe/plus_version_manifest.json" "$ANON_SUFFIX"
+          publish_manifest PUT "https://nexora-broker-default-rtdb.europe-west1.firebasedatabase.app/system/plus/version_manifest.json"
+          publish_manifest PATCH "https://nexora-broker-default-rtdb.europe-west1.firebasedatabase.app/system/plus/force_update.json"
           echo "✔ تم نشر بيان التحديث إلى RTDB بعد اكتمال رفع الحزم وجهوزية مرآة Fastly."

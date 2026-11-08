@@ -4499,19 +4499,84 @@ class Repo {
         'name': n,
         'updated_at': now,
       }, where: 'id = ?', whereArgs: [myUser.id]);
+      final urow = await db.query('users',
+          where: 'id = ?', whereArgs: [myUser.id], limit: 1);
+      if (urow.isNotEmpty) {
+        try {
+          await queueOperation(
+            entityType: EntityKind.user,
+            entityId: '${myUser.id}',
+            opType: OpKind.update,
+            payload: Map<String, Object?>.from(urow.first),
+          );
+        } catch (_) {}
+      }
     }
+    try {
+      final stCloud = await settings();
+      final cUrl = effectiveBackendUrl(stCloud['cloudBackendUrl']);
+      final cWs = requireWorkspaceId;
+      if (cUrl.isNotEmpty && cWs.isNotEmpty && cWs != 'default') {
+        unawaited(
+            CloudJoin.syncRoster(this, db, backendUrl: cUrl, workspaceId: cWs));
+      }
+    } catch (_) {}
   }
 
-  /// تحديث اسم جهاز (ليتعرّف المدير عليه).
+  /// تحديث اسم عضو/جهاز موحّد في جدولَي devices وusers ومزامنته.
   Future<void> renameDevice(String deviceId, String name) async {
     await _ensureCan('manage_users');
+    final n = name.trim();
+    if (n.isEmpty) return;
+    if (_deviceId != null && deviceId == _deviceId) {
+      await renameSelfDevice(n);
+      return;
+    }
     final db = await _db;
+    final now = DateTime.now().toIso8601String();
     await db.update(
       'devices',
-      {'name': name.trim(), 'updated_at': DateTime.now().toIso8601String()},
+      {'name': n, 'updated_at': now},
       where: 'id = ?',
       whereArgs: [deviceId],
     );
+    final devRows = await db.query(
+      'devices',
+      columns: ['user_id'],
+      where: 'id = ?',
+      whereArgs: [deviceId],
+      limit: 1,
+    );
+    final uid = devRows.isNotEmpty ? devRows.first['user_id'] as int? : null;
+    if (uid != null) {
+      await db.update(
+        'users',
+        {'name': n, 'updated_at': now},
+        where: 'id = ? AND COALESCE(is_me, 0) = 0',
+        whereArgs: [uid],
+      );
+      final urow =
+          await db.query('users', where: 'id = ?', whereArgs: [uid], limit: 1);
+      if (urow.isNotEmpty) {
+        try {
+          await queueOperation(
+            entityType: EntityKind.user,
+            entityId: '$uid',
+            opType: OpKind.update,
+            payload: Map<String, Object?>.from(urow.first),
+          );
+        } catch (_) {}
+      }
+    }
+    try {
+      final stCloud = await settings();
+      final cUrl = effectiveBackendUrl(stCloud['cloudBackendUrl']);
+      final cWs = requireWorkspaceId;
+      if (cUrl.isNotEmpty && cWs.isNotEmpty && cWs != 'default') {
+        unawaited(
+            CloudJoin.syncRoster(this, db, backendUrl: cUrl, workspaceId: cWs));
+      }
+    } catch (_) {}
   }
 
   /// إلغاء اقتران/حظر جهاز — يمنعه من المزامنة حتى يُعاد اقترانه.
@@ -6518,6 +6583,7 @@ class Repo {
     'buyPrice': 'buy_price',
     'sellPrice': 'sell_price',
     'minQuantity': 'min_quantity',
+    'excludeFromShortages': 'exclude_from_shortages',
     'categoryId': 'category_id',
     'conversationId': 'conversation_id',
     'createdAt': 'created_at',
@@ -8228,7 +8294,9 @@ class Repo {
         'stock',
         '$id',
       );
-      if (it.minQuantity > 0 && resultingQty <= it.minQuantity) {
+      if (!it.excludeFromShortages &&
+          it.minQuantity > 0 &&
+          resultingQty <= it.minQuantity) {
         lowStock = (
           itemId: m.itemId,
           name: it.name,

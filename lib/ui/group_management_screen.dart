@@ -10,6 +10,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../core/device_names.dart';
 import '../core/models.dart';
 import '../core/theme.dart';
 import '../core/sfx.dart';
@@ -642,28 +643,36 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                           }
                         },
                         onRename: () async {
+                          final currentUnified = resolveMemberUnifiedName(
+                            deviceName: d['name'] as String?,
+                            userName: d['user_name'] as String?,
+                            isOwner: d['id'] == hostId,
+                            fallback: '',
+                          );
                           final name = await promptDialog(
                             context,
-                            title: 'إعادة تسمية الجهاز',
-                            initial: (d['name'] ?? '') as String,
-                            label: 'اسم الجهاز',
+                            title: 'تعديل اسم العضو',
+                            initial: currentUnified,
+                            label: 'اسم العضو',
                           );
                           if (name == null || name.trim().isEmpty) return;
                           try {
-                            await repo.renameDevice(
-                                d['id'] as String, name.trim());
+                            final trimmed = name.trim();
+                            if (d['id'] == ownId) {
+                              await repo.renameSelfDevice(trimmed);
+                            } else {
+                              await repo.renameDevice(
+                                  d['id'] as String, trimmed);
+                            }
                             await engine.broadcastRosterChange();
-                            // (PR-6) دفع الاسم إلى عقدة جهاز العضو في فهرس
-                            // الأجهزة السحابي — ليستقبله المستمع اللحظي
-                            // على جهازه خلال دورة النبض (30 ثانية).
                             await engine.pushMemberDeviceName(
-                                d['id'] as String, name.trim());
+                                d['id'] as String, trimmed);
                             Sfx.success();
                             safeBump();
                             if (context.mounted) {
                               showSnack(
                                 context,
-                                '✅ تم تحديث اسم الجهاز وبث التغيير.',
+                                '✅ تم تحديث اسم العضو ومزامنته.',
                               );
                             }
                           } catch (e) {
@@ -672,7 +681,7 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                             if (context.mounted) {
                               showSnack(
                                 context,
-                                'تعذّر إعادة تسمية الجهاز: $e',
+                                'تعذّر تعديل اسم العضو: $e',
                                 error: true,
                               );
                             }
@@ -1035,19 +1044,12 @@ Future<void> showJoinApprovalSheet(
                   ],
                 ),
                 const SizedBox(height: 10),
-                Text(
-                  // (دفعة 56) وسم منصة نظيف بدل القيمة الخام.
-                  'الجهاز: ${switch (platform) {
-                    'android' => 'Android',
-                    'ios' => 'iPhone',
-                    'windows' => 'Windows',
-                    'linux' => 'Linux',
-                    'macos' => 'Mac',
-                    _ => 'جهاز',
-                  }}${fp.isEmpty ? '' : '  ·  بصمة العتاد: $fp'}',
-                  style:
-                      TextStyle(fontSize: 11.5, color: AppColors.text3Of(ctx)),
-                ),
+                if (fp.isNotEmpty)
+                  Text(
+                    'البصمة: $fp',
+                    style: TextStyle(
+                        fontSize: 11.5, color: AppColors.text3Of(ctx)),
+                  ),
                 const SizedBox(height: 14),
                 DropdownButtonFormField<UserRole>(
                   initialValue: role,

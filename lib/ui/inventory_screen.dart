@@ -31,7 +31,10 @@ final inventoryShortagesModeProvider = StateProvider<bool>((ref) => false);
 
 /// هل الصنف ضمن النواقص (وصل أو نزل تحت حد التنبيه أو نفدت كميته)؟
 bool isShortageItem(Item it) =>
-    !it.isDeleted && !it.archived && (it.low || it.out);
+    !it.isDeleted &&
+    !it.archived &&
+    !it.excludeFromShortages &&
+    (it.low || it.out);
 
 
 /// شاشة بيانات الأصناف والفئات فقط.
@@ -3401,6 +3404,7 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
   int? _sectionId;
   String? _image;
   int? _nextPlu;
+  bool _includeInShortages = true;
   bool _saving = false;
   String? _error;
   String? _skuError;
@@ -3413,6 +3417,7 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
     _categoryId = widget.presetCategoryId ?? i?.categoryId;
     _sectionId = widget.presetSectionId ?? i?.sectionId;
     _image = i?.image ?? '';
+    _includeInShortages = !(i?.excludeFromShortages ?? false);
     _name = TextEditingController(text: i?.name ?? '');
     _sku = TextEditingController(text: i?.sku ?? '');
     _unit = TextEditingController(text: i?.unit ?? 'حبة');
@@ -3492,8 +3497,40 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
 
   Future<void> _save() async {
     final name = _name.text.trim();
-    if (name.isEmpty) {
-      setState(() => _error = 'اسم الصنف مطلوب');
+    if (name.length < 2) {
+      setState(() => _error = 'اسم الصنف مطلوب (حرفين على الأقل)');
+      showSnack(
+        context,
+        'يرجى إدخال اسم الصنف (حرفين على الأقل) واستكمال الحقول الأساسية قبل الحفظ',
+        error: true,
+      );
+      return;
+    }
+    if (_sell.text.trim().isEmpty || _sellV <= 0) {
+      showSnack(
+        context,
+        'يرجى إدخال سعر البيع الأساسي للصنف قبل الحفظ',
+        error: true,
+      );
+      return;
+    }
+    if (_buy.text.trim().isEmpty ||
+        Fmt.parseAmount(_buy.text) == null ||
+        _buyV < 0) {
+      showSnack(
+        context,
+        'يرجى إدخال سعر الشراء أو التكلفة للصنف قبل الحفظ',
+        error: true,
+      );
+      return;
+    }
+    final parsedQty = Fmt.parseAmount(_qty.text);
+    if (_qty.text.trim().isEmpty || parsedQty == null) {
+      showSnack(
+        context,
+        'يرجى إدخال كمية الصنف قبل الحفظ',
+        error: true,
+      );
       return;
     }
 
@@ -3538,8 +3575,9 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
       unit: _unit.text.trim().isEmpty ? 'حبة' : _unit.text.trim(),
       buyPrice: _buyV,
       sellPrice: _sellV,
-      quantity: Fmt.parseAmount(_qty.text) ?? 0,
+      quantity: parsedQty,
       minQuantity: Fmt.parseAmount(_min.text) ?? 0,
+      excludeFromShortages: !_includeInShortages,
       category: category?.name ?? 'عام',
       notes: _notes.text.trim(),
     );
@@ -4084,6 +4122,40 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
                     label: 'حد التنبيه',
                     icon: Icons.warning_amber_outlined,
                     compact: true,
+                    leadingWidget: Tooltip(
+                      message: _includeInShortages
+                          ? 'مفعّل في قائمة النواقص (اضغط للاستبعاد)'
+                          : 'مستبعد نهائياً من قائمة النواقص (اضغط للتفعيل)',
+                      child: InkWell(
+                        borderRadius: BorderRadius.circular(20),
+                        onTap: () {
+                          Sfx.tap();
+                          setState(
+                            () => _includeInShortages = !_includeInShortages,
+                          );
+                        },
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 6),
+                          child: AnimatedContainer(
+                            duration: const Duration(milliseconds: 180),
+                            width: 13,
+                            height: 13,
+                            decoration: BoxDecoration(
+                              shape: BoxShape.circle,
+                              color: _includeInShortages
+                                  ? const Color(0xFF10B981)
+                                  : Colors.transparent,
+                              border: Border.all(
+                                color: _includeInShortages
+                                    ? const Color(0xFF10B981)
+                                    : Colors.grey.shade500,
+                                width: 1.6,
+                              ),
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
                   ),
                 ),
                 const SizedBox(width: 6),
@@ -4140,6 +4212,7 @@ class _AmountField extends StatelessWidget {
   final bool words;
   final bool thousandsSeparator;
   final bool compact;
+  final Widget? leadingWidget;
   const _AmountField({
     required this.controller,
     required this.label,
@@ -4147,6 +4220,7 @@ class _AmountField extends StatelessWidget {
     this.words = false,
     this.thousandsSeparator = false,
     this.compact = false,
+    this.leadingWidget,
   });
 
   @override
@@ -4167,7 +4241,10 @@ class _AmountField extends StatelessWidget {
               contentPadding: compact
                   ? const EdgeInsets.symmetric(horizontal: 8, vertical: 10)
                   : null,
-              prefixIcon: compact ? null : Icon(icon),
+              prefixIcon: leadingWidget ?? (compact ? null : Icon(icon)),
+              prefixIconConstraints: leadingWidget != null
+                  ? const BoxConstraints(minWidth: 26, minHeight: 26)
+                  : null,
               suffixIcon: IconButton(
                 visualDensity: VisualDensity.compact,
                 padding: EdgeInsets.zero,
