@@ -7702,6 +7702,15 @@ class Repo {
     return id;
   }
 
+  /// جلب فئة واحدة بمعرّفها (رئيسية أو فرعية).
+  Future<ItemCategory?> itemCategory(int id) async {
+    final all = await itemCategories();
+    for (final c in all) {
+      if (c.id == id) return c;
+    }
+    return null;
+  }
+
   /// نقل فئة رئيسية إلى قسم آخر، أو نقل فئة فرعية إلى فئة رئيسية أخرى،
   /// أو ترقية فئة فرعية إلى فئة رئيسية، أو تحويل فئة رئيسية إلى فئة فرعية.
   Future<void> moveCategory({
@@ -7713,7 +7722,7 @@ class Repo {
   }) async {
     final existing = await itemCategory(categoryId);
     if (existing == null) return;
-    final nextParentId =
+    final int? nextParentId =
         clearParent ? null : (targetParentId ?? existing.parentId);
     int? nextSectionId =
         clearSection ? null : (targetSectionId ?? existing.sectionId);

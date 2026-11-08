@@ -3174,7 +3174,7 @@ class _Drawer extends ConsumerWidget {
                     dark,
                     onSelect,
                   ),
-                  if (!isEmployee)
+                  if (isMasterAdmin)
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 3),
                       child: Material(

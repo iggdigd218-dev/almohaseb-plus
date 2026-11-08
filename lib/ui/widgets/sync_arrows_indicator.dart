@@ -5,12 +5,11 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../core/sfx.dart';
-import '../../core/theme.dart';
 import '../../data/providers.dart';
-import '../../data/sync/cloud_sync_engine.dart';
-import '../../data/sync/realtime_Waiter.dart';
-import '../../data/sync/sync_activity_bus.dart';
-import '../../data/sync/sync_Audit_page.dart';
+import '../../data/sync/sync_activity.dart';
+import '../../data/sync/sync_diagnostics.dart';
+import '../dialogs/sync_resolution_dialog.dart';
+import '../widgets.dart' show showSnack;
 
 /// مؤشر المزامنة السحابية في الشريط العلوي:
 /// - دائرة مكونة من قوسين متناظرين برأسين متعاكسين في الموقع يتبعان بعضهما
@@ -30,7 +29,7 @@ class SyncArrowsIndicator extends ConsumerStatefulWidget {
 class _SyncArrowsIndicatorState extends ConsumerState<SyncArrowsIndicator>
     with SingleTickerProviderStateMixin {
   late final AnimationController _animCtrl;
-  StreamSubscription<SyncActivityItem>? _busSub;
+  StreamSubscription<int>? _busSub;
   DateTime? _lastObservedPullAt;
   DateTime? _lastObservedPushAt;
   bool _wasSyncing = false;
@@ -76,14 +75,14 @@ class _SyncArrowsIndicatorState extends ConsumerState<SyncArrowsIndicator>
     _animCtrl.forward(from: 0);
   }
 
-  void _checkStateTransitions(CloudSyncState s) {
+  void _checkStateTransitions(SyncDiagnosticsSnapshot s) {
     final nowSyncing = s.pushing || s.pulling;
     final newPull = s.lastPullAt != null &&
         s.lastPullAt != _lastObservedPullAt &&
         s.lastPullApplied > 0;
     final newPush = s.lastPushAt != null &&
         s.lastPushAt != _lastObservedPushAt &&
-        s.lastPushCount > 0;
+        s.lastPushOk;
 
     if ((nowSyncing && !_wasSyncing) || newPull || newPush) {
       WidgetsBinding.instance.addPostFrameCallback((_) {
@@ -99,52 +98,99 @@ class _SyncArrowsIndicatorState extends ConsumerState<SyncArrowsIndicator>
 
   @override
   Widget build(BuildContext context) {
-    final ws = ref.watch(workspaceProvider);
-    final engine = ref.watch(cloudSyncEngineProvider);
-
-    if (!ws.linked) {
+    final modeAsync = ref.watch(workspaceModeProvider);
+    final mode = modeAsync.value ?? modeAsync.asData?.value;
+    final st = ref.watch(settingsProvider).value ?? const <String, String>{};
+    final googleLinked = ref.watch(googleLinkedProvider).value ?? false;
+    final wsId = (st['sync.workspaceId'] ?? '').trim();
+    final cloudProv = (st['cloudWorkspaceProvisioned'] ?? '0').trim();
+    final isLocalIndividual = (st['account.type'] ?? '') == 'individual' ||
+        cloudProv != '1' ||
+        wsId == 'default' ||
+        ((st['account.email'] ?? st['email'] ?? '').trim().isEmpty &&
+            !googleLinked);
+    if (mode == 'standalone' ||
+        isLocalIndividual ||
+        (mode == null && !modeAsync.isLoading)) {
       return const SizedBox.shrink();
     }
 
-    return ValueListenableBuilder<CloudSyncState>(
-      valueListenable: engine.state,
+    return ValueListenableBuilder<SyncDiagnosticsSnapshot>(
+      valueListenable: SyncDiagnostics.instance.notifier,
       builder: (context, s, _) {
         _checkStateTransitions(s);
-        final hasFault = s.hasFault;
+        final hydrated = s.lastPullAt != null || s.lastPullApplied > 0;
+
+        // درجات لونية فاتحة، زاهية، ومبهجة وواضحة للعين
         final Color upColor;
-        final Color downColor;
-        if (hasFault) {
+        if (s.uploadFaulted) {
           upColor = const Color(0xFFFF5252);
-          downColor = const Color(0xFFFF5252);
-        } else if (!s.hydrated || !s.running) {
-          upColor = const Color(0xFFFFB300);
-          downColor = const Color(0xFFFFCA28);
+        } else if (s.pushing) {
+          upColor = const Color(0xFF00E676);
+        } else if (hydrated &&
+            (s.lastPushOk || (!s.uploadFaulted && s.failedCount == 0))) {
+          upColor = const Color(0xFF10B981);
         } else {
-          // درجات لونية فاتحة وزاهية ومبهجة وواضحة للعين
-          upColor = s.pushing
-              ? const Color(0xFF00E676)
-              : const Color(0xFF10B981);
-          downColor = s.pulling
-              ? const Color(0xFF38BDF8)
-              : const Color(0xFF0EA5E9);
+          upColor = const Color(0xFFFFB300);
         }
 
-        final tip = _tooltipFor(s);
+        final Color downColor;
+        if (s.downloadFaulted) {
+          downColor = const Color(0xFFFF5252);
+        } else if (s.pulling) {
+          downColor = const Color(0xFF38BDF8);
+        } else if (hydrated && (s.lastPullOk || !s.downloadFaulted)) {
+          downColor = const Color(0xFF0EA5E9);
+        } else {
+          downColor = const Color(0xFF38BDF8);
+        }
+
+        final tooltipMsg = s.catalogMismatch
+            ? (s.catalogMismatchDetails ??
+                '⚠️ تحذير: عدم تطابق في الحسابات أو الأصناف أو الأقسام بين الأجهزة')
+            : (!hydrated
+                ? 'بانتظار استكمال الجلب الأولي للبيانات...'
+                : 'مؤشر المزامنة اللحظية');
+
         return Tooltip(
-          message: tip,
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: () {
+          message: tooltipMsg,
+          child: InkWell(
+            borderRadius: BorderRadius.circular(10),
+            onTap: () async {
               Sfx.tap();
               _triggerTapSpin();
-              unawaited(engine.reconcileAndSyncNow());
-            },
-            onLongPress: () {
-              Sfx.tap();
-              _showSyncDetailsSheet(context, engine, s);
+              try {
+                await ref.read(syncEngineProvider).reconcileAndSyncNow();
+              } catch (_) {}
+              if (!context.mounted) return;
+              final diag = SyncDiagnostics.instance.snapshot;
+              final diagHydrated =
+                  diag.lastPullAt != null || diag.lastPullApplied > 0;
+              final isNetworkFaultOnly =
+                  (diag.lastPushFault == SyncFaultSource.network ||
+                          diag.lastPullFault == SyncFaultSource.network) &&
+                      diag.lastLocalizedError == null &&
+                      !diag.catalogMismatch &&
+                      diag.failedCount == 0;
+              if (diag.catalogMismatch ||
+                  (diag.uploadFaulted && !isNetworkFaultOnly) ||
+                  (diag.downloadFaulted && !isNetworkFaultOnly) ||
+                  diag.failedCount > 0 ||
+                  diag.lastLocalizedError != null) {
+                SyncResolutionDialog.show(context);
+              } else if (diag.pushing || diag.pulling || !diagHydrated) {
+                showSnack(context, 'المزامنة السحابية جارية الآن...');
+              } else if (isNetworkFaultOnly) {
+                showSnack(
+                  context,
+                  'تعذر الوصول للخادم السحابي مؤقتاً — ستتم المزامنة تلقائياً',
+                );
+              } else {
+                showSnack(context, 'المزامنة السحابية متصلة ومستقرة ✅');
+              }
             },
             child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
               child: AnimatedBuilder(
                 animation: _animCtrl,
                 builder: (context, child) {
@@ -152,7 +198,7 @@ class _SyncArrowsIndicatorState extends ConsumerState<SyncArrowsIndicator>
                   final angle = t * 2 * math.pi * _turnsPerRun;
                   double scale = 1.0;
                   if (_pulseActive && _animCtrl.isAnimating) {
-                    // نبضة ناعمة: 1.0 -> 1.22 -> 1.0 عبر منحنى جيبي سلس
+                    // نبضة ناعمة: 1.0 -> 1.22 -> 1.0
                     scale = 1.0 + 0.22 * math.sin(_animCtrl.value * math.pi);
                   }
                   return Transform.scale(
@@ -173,137 +219,6 @@ class _SyncArrowsIndicatorState extends ConsumerState<SyncArrowsIndicator>
         );
       },
     );
-  }
-
-  String _tooltipFor(CloudSyncState s) {
-    if (s.hasFault) {
-      return 'تنبيه مزامنة — اضغط للمزامنة الفورية أو مطولاً للتفاصيل';
-    }
-    if (!s.hydrated) return 'جارٍ تهيئة المزامنة السحابية…';
-    if (s.pushing && s.pulling) return 'يرسل ويستقبل التحديثات…';
-    if (s.pushing) return 'يرسل التعديلات إلى السحابة…';
-    if (s.pulling) return 'يستقبل تحديثات الفروع…';
-    return 'متصل بالسحابة — اضغط لفحص المزامنة الآن (ومطولاً للسجل)';
-  }
-
-  void _showSyncDetailsSheet(
-    BuildContext context,
-    CloudSyncEngine engine,
-    CloudSyncState s,
-  ) {
-    showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      backgroundColor: AppColors.surfaceOf(context),
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
-      builder: (ctx) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(18, 4, 18, 18),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                Row(
-                  children: [
-                    Icon(
-                      s.hasFault
-                          ? Icons.error_outline_rounded
-                          : Icons.cloud_done_rounded,
-                      color: s.hasFault
-                          ? AppColors.dangerOf(ctx)
-                          : AppColors.greenOf(ctx),
-                    ),
-                    const SizedBox(width: 8),
-                    Expanded(
-                      child: Text(
-                        s.hasFault
-                            ? 'تنبيه في المزامنة السحابية'
-                            : 'المزامنة السحابية نشطة',
-                        style: const TextStyle(
-                          fontWeight: FontWeight.w800,
-                          fontSize: 15,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 10),
-                _kv('آخر إرسال', _fmtTime(s.lastPushAt)),
-                _kv('آخر استقبال', _fmtTime(s.lastPullAt)),
-                if (s.lastError != null && s.lastError!.isNotEmpty) ...[
-                  const SizedBox(height: 8),
-                  Text(
-                    s.lastError!,
-                    style: TextStyle(
-                      fontSize: 12,
-                      color: AppColors.dangerOf(ctx),
-                      fontWeight: FontWeight.w700,
-                    ),
-                  ),
-                ],
-                const SizedBox(height: 14),
-                Row(
-                  children: [
-                    Expanded(
-                      child: OutlinedButton.icon(
-                        onPressed: () {
-                          Navigator.pop(ctx);
-                          openSyncAuditPage(context);
-                        },
-                        icon: const Icon(Icons.history_rounded, size: 18),
-                        label: const Text('سجل المزامنة'),
-                      ),
-                    ),
-                    const SizedBox(width: 10),
-                    Expanded(
-                      child: FilledButton.icon(
-                        onPressed: () async {
-                          Navigator.pop(ctx);
-                          RealtimeWaiter.instance.poke();
-                          await engine.reconcileAndSyncNow();
-                        },
-                        icon: const Icon(Icons.sync_rounded, size: 18),
-                        label: const Text('مزامنة الآن'),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
-
-  Widget _kv(String k, String v) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 2),
-      child: Row(
-        children: [
-          Text(
-            '$k: ',
-            style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w700),
-          ),
-          Expanded(
-            child: Text(
-              v,
-              style: const TextStyle(fontSize: 12),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  String _fmtTime(DateTime? dt) {
-    if (dt == null) return 'لم يتم بعد';
-    final l = dt.toLocal();
-    String two(int n) => n.toString().padLeft(2, '0');
-    return '${two(l.hour)}:${two(l.minute)}:${two(l.second)}';
   }
 }
 
@@ -403,8 +318,6 @@ class _ThinSyncCirclePainter extends CustomPainter {
       center.dx + radius * math.cos(tipAngle),
       center.dy + radius * math.sin(tipAngle),
     );
-    // متجه المماس مع عقارب الساعة عند tipAngle هو tipAngle + pi/2،
-    // لذا يعود جناحا السهم للخلف بزاوية tipAngle - pi/2 ± جناح.
     final backAngle = tipAngle - (math.pi / 2) - 0.14;
     const headLen = 3.6;
     const wingSpread = 0.56;
