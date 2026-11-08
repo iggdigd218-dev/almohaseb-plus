@@ -18,6 +18,7 @@ import '../core/media_paths.dart';
 import '../core/models.dart';
 import '../core/rbac.dart';
 import '../core/workspace_mode.dart';
+import 'sync/account_workspace.dart';
 import 'sync/cloud_join.dart';
 import 'sync/device_id.dart';
 import 'sync/device_registry.dart';
@@ -4475,8 +4476,24 @@ class Repo {
     } catch (_) {}
   }
 
+  /// هل جهازنا الحالي هو جهاز مالك المساحة (`devices.is_owner = 1`)؟
+  Future<bool> _isOwnerDevice(DatabaseExecutor db) async {
+    try {
+      final id = requireDeviceId;
+      final rows = await db.query('devices',
+          columns: ['is_owner'], where: 'id = ?', whereArgs: [id], limit: 1);
+      return rows.isNotEmpty &&
+          ((rows.first['is_owner'] as num?)?.toInt() ?? 0) == 1;
+    } catch (_) {
+      return false;
+    }
+  }
+
   /// إعادة تسمية هذا الجهاز نفسه — متاحة للمستخدم دائماً بلا صلاحيات
   /// (يحدد اسمه الظاهر أعلى القائمة الجانبية والرئيسية).
+  /// (3.98.39 / الملاحظة 1) إن كان جهاز المالك: يُرفع الاسم فوراً إلى
+  /// هوية المنشأة السحابية (`owner_name`) وطابور مزامنة `profile.owner_name`
+  /// حتى لا يعود الاسم القديم من السحابة.
   Future<void> renameSelfDevice(String name) async {
     final n = name.trim();
     if (n.isEmpty) return;
@@ -4491,6 +4508,16 @@ class Repo {
     );
     // نحفظه أيضاً في الإعدادات ليبقى الاسم بعد إعادة التسجيل الذاتي.
     await setSetting('sync.deviceName', n);
+
+    // (3.98.39 / الملاحظة 1) مزامنة اسم المالك/المدير مع هوية المنشأة:
+    // الاسم المخصّص لم يكن يُرفع سحابياً عند تعديله من أيقونة ✎ في الدرج
+    // (كان يُرفع من ملف التعريف فقط)، فيعود «المدير 🫡» من ميتاداتا
+    // المنشأة عند أول مزامنة. الآن: حفظ محلي + طابور مزامنة + رفع فوري.
+    final isOwnerDevice = await _isOwnerDevice(db);
+    try {
+      await setSyncedSetting('profile.owner_name', n);
+      await setSyncedSetting('account.name', n);
+    } catch (_) {}
 
     // تحديث اسم المستخدم الفعلي في جدول users
     final myUser = await currentUser();
@@ -4517,6 +4544,16 @@ class Repo {
       final cUrl = effectiveBackendUrl(stCloud['cloudBackendUrl']);
       final cWs = requireWorkspaceId;
       if (cUrl.isNotEmpty && cWs.isNotEmpty && cWs != 'default') {
+        if (isOwnerDevice) {
+          // رفع ميتاداتا المنشأة (owner_name) فوراً — وإلا بقيت النسخة
+          // السحابية القديمة تُعيد الاسم السابق عند أي استرجاع/مزامنة.
+          unawaited(() async {
+            try {
+              await AccountWorkspace.syncWorkspaceMetaToCloud(this,
+                  backendUrl: cUrl);
+            } catch (_) {}
+          }());
+        }
         unawaited(
             CloudJoin.syncRoster(this, db, backendUrl: cUrl, workspaceId: cWs));
       }
@@ -7574,24 +7611,29 @@ class Repo {
     if (name.isEmpty) throw ArgumentError('اسم الفئة مطلوب');
 
     final db = await _db;
+    // (3.98.39 / D4) الفرادة داخل نطاق الأب نفسه فقط: يمكن أن تحمل فئتان
+    // فرعيتان تحت أبوين مختلفين الاسم ذاته («أخرى» مثلاً) بلا تعارض.
+    final parentScope = category.parentId ?? 0;
     final duplicate = await db.query(
       'item_categories',
       columns: ['id'],
-      where:
-          "name = ? COLLATE NOCASE AND id != ? AND (deleted_at IS NULL OR deleted_at = '')",
-      whereArgs: [name, category.id ?? -1],
+      where: 'name = ? COLLATE NOCASE AND id != ? AND COALESCE(parent_id, 0) = ? '
+          "AND (deleted_at IS NULL OR deleted_at = '')",
+      whereArgs: [name, category.id ?? -1, parentScope],
       limit: 1,
     );
     if (duplicate.isNotEmpty) {
-      throw StateError('توجد فئة بهذا الاسم مسبقًا');
+      throw StateError(category.parentId == null
+          ? 'توجد فئة رئيسية بهذا الاسم مسبقًا'
+          : 'توجد فئة فرعية بهذا الاسم مسبقًا تحت نفس الفئة الأب');
     }
 
-    // تنظيف أي فئات محذوفة سابقة بنفس الاسم
+    // تنظيف أي فئات محذوفة سابقة بنفس الاسم داخل نفس نطاق الأب
     await db.delete(
       'item_categories',
-      where:
-          "name = ? COLLATE NOCASE AND id != ? AND deleted_at IS NOT NULL AND deleted_at != ''",
-      whereArgs: [name, category.id ?? -1],
+      where: 'name = ? COLLATE NOCASE AND id != ? AND COALESCE(parent_id, 0) = ? '
+          "AND deleted_at IS NOT NULL AND deleted_at != ''",
+      whereArgs: [name, category.id ?? -1, parentScope],
     );
 
     // إذا كانت الفئة فرعية (لها parentId)، ترث تلقائياً قسم الفئة الأب لضمان اتساق الشجرة.
@@ -7948,10 +7990,45 @@ class Repo {
       where.add(
           "(i.deleted_at IS NULL OR TRIM(i.deleted_at) = '' OR TRIM(i.deleted_at) = 'null')");
     }
+    // (3.98.39 / الملاحظة 4) البحث يشمل الملاحظات مع أولوية درجتين:
+    //   الدرجة 1: تطابق الاسم/الباركود/SKU/PLU/رقم الصنف (#id)/الفئة.
+    //   الدرجة 2: تطابق الملاحظات فقط (تأتي بعد كل نتائج الدرجة الأولى).
+    // كل كلمة مفتاحية يجب أن تتحقق (AND بين الكلمات، OR داخل الحقول).
+    final primaryOrder = StringBuffer();
     if (q.trim().isNotEmpty) {
-      where.add('(i.name LIKE ? OR i.sku LIKE ? OR COALESCE(c.name, i.category) LIKE ? OR i.notes LIKE ?)');
-      final like = '%${q.trim()}%';
-      args.addAll([like, like, like, like]);
+      final tokens = q
+          .trim()
+          .split(RegExp(r'\s+'))
+          .where((w) => w.isNotEmpty)
+          .toList();
+      final primaryConds = <String>[];
+      final primaryArgs = <Object?>[];
+      final allConds = <String>[];
+      final allArgs = <Object?>[];
+      for (final tok in tokens) {
+        final bare = tok.startsWith('#') ? tok.substring(1) : tok;
+        final like = '%$tok%';
+        final likeBare = '%$bare%';
+        // الباركود محفوظ في العمود sku (لا يوجد عمود barcode في items).
+        const primary =
+            '(i.name LIKE ? OR i.sku LIKE ? OR CAST(i.plu AS TEXT) LIKE ? '
+            'OR CAST(i.id AS TEXT) LIKE ? '
+            'OR COALESCE(c.name, i.category, \'\') LIKE ?)';
+        final prim = [like, like, likeBare, likeBare, like];
+        primaryConds.add(primary);
+        primaryArgs.addAll(prim);
+        allConds.add('($primary OR COALESCE(i.notes, \'\') LIKE ?)');
+        allArgs.addAll(prim);
+        allArgs.add(like);
+      }
+      where.add('(${allConds.join(' AND ')})');
+      args.addAll(allArgs);
+      primaryOrder
+        ..write('CASE WHEN (')
+        ..write(primaryConds.join(' AND '))
+        ..write(') THEN 0 ELSE 1 END, ');
+      // وسائط الترتيب تُضاف بعد وسائط WHERE (نفس الترتيب في الاستعلام).
+      args.addAll(primaryArgs);
     }
     final whereClause = where.isEmpty ? '' : 'WHERE ${where.join(' AND ')}';
     final sql = '''
@@ -7959,7 +8036,7 @@ class Repo {
       FROM items i
       LEFT JOIN item_categories c ON i.category_id = c.id
       $whereClause
-      ORDER BY i.name COLLATE NOCASE
+      ORDER BY ${primaryOrder}i.name COLLATE NOCASE
     ''';
     final rows = await db.rawQuery(sql, args.isEmpty ? null : args);
     return rows.map(Item.fromMap).toList();

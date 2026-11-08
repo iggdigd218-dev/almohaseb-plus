@@ -2822,12 +2822,27 @@ class _Drawer extends ConsumerWidget {
                                     (wsMode == 'member' && rawUserName == 'المدير')
                                         ? ''
                                         : rawUserName;
+                                // (3.98.39 / الملاحظة 1) اسم المالك المخصّص
+                                // (profile.owner_name) مصدر ثالث موثوق: لا
+                                // يعود الدرج إلى «المدير 🫡» أو «المحاسب» بعد
+                                // إعادة المزامنة.
+                                final ownerName = rref
+                                    .watch(ownerDisplayNameProvider)
+                                    .valueOrNull
+                                    ?.trim();
+                                final customOwner =
+                                    (ownerName != null &&
+                                            ownerName.isNotEmpty &&
+                                            ownerName != 'المدير')
+                                        ? ownerName
+                                        : null;
                                 final label =
                                     (devName != null && devName.isNotEmpty)
                                         ? devName
-                                        : (safeUserName.isNotEmpty
-                                            ? safeUserName
-                                            : 'المحاسب');
+                                        : (customOwner ??
+                                            (safeUserName.isNotEmpty
+                                                ? safeUserName
+                                                : 'المحاسب'));
                                 return Row(
                                   children: [
                                     Flexible(

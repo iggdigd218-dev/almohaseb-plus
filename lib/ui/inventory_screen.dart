@@ -20,6 +20,7 @@ import '../core/pdf_fonts.dart';
 import '../core/theme.dart';
 import '../data/pos_cart.dart';
 import '../data/providers.dart';
+import '../core/item_search.dart';
 import '../data/sync/sync_activity.dart';
 import 'barcode_scanner.dart';
 import 'hierarchy_filter.dart';
@@ -233,7 +234,7 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
 
   List<Item> _visibleItems(List<ItemCategory> roots, List<Item> items) {
     final ids = _selectedIds(roots);
-    final q = ref.read(itemQueryProvider).trim().toLowerCase();
+    final q = ref.read(itemQueryProvider).trim();
     final out = items.where((it) {
       // استثناء صريح للأصناف المحذوفة
       if (it.isDeleted) return false;
@@ -256,14 +257,34 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
         }
       }
       if (q.isEmpty) return true;
-      return it.name.toLowerCase().contains(q) ||
-          it.sku.toLowerCase().contains(q) ||
-          it.category.toLowerCase().contains(q) ||
-          it.notes.toLowerCase().contains(q);
-    }).toList()
-      ..sort((a, b) => _compareItems(a, b, _sort));
-    return out;
+      // (3.98.39 / الملاحظة 4) الملاحظات تُبحث لكن بدرجة أدنى: تظهر نتائج
+      // الدرجة الأولى أولاً ثم نتائج الملاحظات وحدها.
+      return _tierOf(it, q) > ItemSearchTier.none;
+    }).toList();
+    if (q.isEmpty) {
+      out.sort((a, b) => _compareItems(a, b, _sort));
+      return out;
+    }
+    // ترتيب مستقر يحافظ على الفرز المختار داخل كل درجة.
+    final tiered = <MapEntry<int, Item>>[
+      for (final it in out) MapEntry(_tierOf(it, q), it),
+    ]..sort((a, b) {
+        final byTier = b.key.compareTo(a.key);
+        return byTier != 0 ? byTier : _compareItems(a.value, b.value, _sort);
+      });
+    return [for (final e in tiered) e.value];
   }
+
+  /// درجة مطابقة الصنف للبحث (الملاحظة 4) — تُستخدم للتصفية والترتيب معاً.
+  int _tierOf(Item it, String query) => itemSearchTier(
+        query: query,
+        name: it.name,
+        sku: it.sku,
+        category: it.category,
+        notes: it.notes,
+        plu: it.plu,
+        id: it.id,
+      );
 
   /// شارة التصنيف: «اسم القسم • الفئة الرئيسية › الفئة الفرعية».
   String _badgeOf(
@@ -3496,41 +3517,62 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
   }
 
   Future<void> _save() async {
+    // (3.98.39) الحقول الإجبارية أربعة فقط: الاسم، سعر الشراء، سعر البيع،
+    // الكمية. الباركود/الفئة/الوحدة/حد التنبيه/الملاحظات اختيارية تماماً
+    // ولا يجوز أن تمنع الحفظ أو تُنتج «تعارض بيانات» عند تركها فارغة.
     final name = _name.text.trim();
     if (name.length < 2) {
       setState(() => _error = 'اسم الصنف مطلوب (حرفين على الأقل)');
       showSnack(
         context,
-        'يرجى إدخال اسم الصنف (حرفين على الأقل) واستكمال الحقول الأساسية قبل الحفظ',
+        'يرجى إدخال اسم الصنف (حرفين على الأقل)',
         error: true,
       );
       return;
     }
-    if (_sell.text.trim().isEmpty || _sellV <= 0) {
+    // سعر البيع: مطلوب كتابته، ويُقبل الصفر صراحةً (أصناف مجانية/عيّنات).
+    if (_sell.text.trim().isEmpty || Fmt.parseAmount(_sell.text) == null) {
+      setState(() => _error = 'سعر البيع مطلوب (0 مسموح للأصناف المجانية)');
       showSnack(
         context,
-        'يرجى إدخال سعر البيع الأساسي للصنف قبل الحفظ',
+        'يرجى إدخال سعر البيع (اكتب 0 إن كان الصنف مجانياً)',
         error: true,
       );
       return;
     }
-    if (_buy.text.trim().isEmpty ||
-        Fmt.parseAmount(_buy.text) == null ||
-        _buyV < 0) {
+    if (_sellV < 0) {
+      setState(() => _error = 'سعر البيع لا يمكن أن يكون سالباً');
+      showSnack(context, 'سعر البيع لا يمكن أن يكون سالباً', error: true);
+      return;
+    }
+    // سعر الشراء: مطلوب كتابته، ويُقبل الصفر (تكلفة غير معروفة/هدية).
+    if (_buy.text.trim().isEmpty || Fmt.parseAmount(_buy.text) == null) {
+      setState(() => _error = 'سعر الشراء مطلوب (اكتب 0 إن لم تكن هناك تكلفة)');
       showSnack(
         context,
-        'يرجى إدخال سعر الشراء أو التكلفة للصنف قبل الحفظ',
+        'يرجى إدخال سعر الشراء أو التكلفة (اكتب 0 إن لم تكن هناك تكلفة)',
         error: true,
       );
+      return;
+    }
+    if (_buyV < 0) {
+      setState(() => _error = 'سعر الشراء لا يمكن أن يكون سالباً');
+      showSnack(context, 'سعر الشراء لا يمكن أن يكون سالباً', error: true);
       return;
     }
     final parsedQty = Fmt.parseAmount(_qty.text);
     if (_qty.text.trim().isEmpty || parsedQty == null) {
+      setState(() => _error = 'الكمية مطلوبة');
       showSnack(
         context,
-        'يرجى إدخال كمية الصنف قبل الحفظ',
+        'يرجى إدخال كمية الصنف قبل الحفظ (اكتب 0 إن لم يكن لديك رصيد)',
         error: true,
       );
+      return;
+    }
+    if (parsedQty < 0) {
+      setState(() => _error = 'الكمية لا يمكن أن تكون سالبة');
+      showSnack(context, 'الكمية لا يمكن أن تكون سالبة', error: true);
       return;
     }
 
@@ -3585,7 +3627,11 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
       await repo.saveItem(it, enforceMinBarcodeLength: true);
       bump(ref);
       if (mounted) Navigator.pop(context);
-    } catch (e) {
+    } catch (e, st) {
+      // (3.98.39 / D7) تسجيل تقني كامل دائماً — يظهر في logcat فقط، ثم
+      // تُعرض رسالة عربية صريحة حسب نوع الخطأ بدل «تعارض في البيانات».
+      debugPrint('SAVE_ITEM_FAILED: $e');
+      debugPrintStack(stackTrace: st, maxFrames: 12);
       if (mounted) {
         showSnack(
           context,

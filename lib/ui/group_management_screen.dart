@@ -319,6 +319,9 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
     final canManageAsync = ref.watch(canManageGroupProvider);
     final currentUser = ref.watch(currentUserProvider).valueOrNull;
     final devRole = ref.watch(deviceRoleProvider).valueOrNull?.role;
+    // (3.98.39 / الملاحظة 1) الاسم المخصّص للمالك من هوية المنشأة —
+    // يظهر في بطاقة المالك ولا يرتد إلى «المدير 🫡».
+    final ownerNameAsync = ref.watch(ownerDisplayNameProvider);
 
     return devicesAsync.when(
       loading: () => const Center(child: CircularProgressIndicator()),
@@ -416,12 +419,21 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                               children: [
                                 LayoutBuilder(
                                   builder: (context, constraints) {
-                                    final name =
-                                        (own?['name'] as String?)?.isNotEmpty == true
-                                            ? own!['name'] as String
-                                            : (amITheOwner
-                                                ? 'جهاز المدير الأساسي'
-                                                : 'جهاز وكيل المدير');
+                                    final rawOwn =
+                                        (own?['name'] as String?)?.trim() ?? '';
+                                    final syncedOwner =
+                                        (ownerNameAsync.valueOrNull ?? '').trim();
+                                    final name = rawOwn.isNotEmpty &&
+                                            isCustomDeviceName(rawOwn)
+                                        ? rawOwn
+                                        : (amITheOwner &&
+                                                syncedOwner.isNotEmpty
+                                            ? syncedOwner
+                                            : (rawOwn.isNotEmpty
+                                                ? rawOwn
+                                                : (amITheOwner
+                                                    ? 'جهاز المدير الأساسي'
+                                                    : 'جهاز وكيل المدير')));
                                     final badge = Container(
                                       padding: const EdgeInsets.symmetric(
                                           horizontal: 8, vertical: 2),
