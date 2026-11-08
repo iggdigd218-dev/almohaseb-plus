@@ -600,19 +600,28 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
                           color: AppColors.primaryOf(context),
                         ),
                         const SizedBox(width: 6),
-                        Text(
-                          'المحدد: ${_selectedItemIds.length}',
-                          style: TextStyle(
-                            fontSize: 12.5,
-                            fontWeight: FontWeight.w800,
-                            color: AppColors.primaryOf(context),
+                        Flexible(
+                          child: Text(
+                            'المحدد: ${_selectedItemIds.length}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w800,
+                              color: AppColors.primaryOf(context),
+                            ),
                           ),
                         ),
-                        const SizedBox(width: 8),
+                        const SizedBox(width: 4),
                         TextButton(
                           style: TextButton.styleFrom(
                             visualDensity: VisualDensity.compact,
-                            padding: const EdgeInsets.symmetric(horizontal: 8),
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 6,
+                              vertical: 4,
+                            ),
                           ),
                           onPressed: () {
                             final allVisibleIds = visible
@@ -628,16 +637,18 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
                             });
                           },
                           child: const Text(
-                            'تحديد الكل',
-                            style: TextStyle(fontSize: 12),
+                            'الكل',
+                            style: TextStyle(fontSize: 11.5),
                           ),
                         ),
                         const Spacer(),
                         FilledButton.icon(
                           style: FilledButton.styleFrom(
                             visualDensity: VisualDensity.compact,
+                            minimumSize: Size.zero,
+                            tapTargetSize: MaterialTapTargetSize.shrinkWrap,
                             padding: const EdgeInsets.symmetric(
-                              horizontal: 10,
+                              horizontal: 8,
                               vertical: 4,
                             ),
                           ),
@@ -663,18 +674,23 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
                                 },
                           icon: const Icon(
                             Icons.drive_file_move_outlined,
-                            size: 16,
+                            size: 15,
                           ),
                           label: const Text(
-                            'نقل لقسم/فئة',
-                            style: TextStyle(fontSize: 12),
+                            'نقل',
+                            style: TextStyle(fontSize: 11.5),
                           ),
                         ),
-                        const SizedBox(width: 4),
+                        const SizedBox(width: 2),
                         IconButton(
                           visualDensity: VisualDensity.compact,
+                          padding: const EdgeInsets.all(4),
+                          constraints: const BoxConstraints(
+                            minWidth: 28,
+                            minHeight: 28,
+                          ),
                           tooltip: 'إلغاء التحديد',
-                          icon: const Icon(Icons.close, size: 18),
+                          icon: const Icon(Icons.close, size: 17),
                           onPressed: () => setState(() {
                             _selectedItemIds.clear();
                             _selectionMode = false;
@@ -685,39 +701,59 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
                   )
                 : Row(
                     children: [
-                      Text(
-                        '${visible.length} من ${items.length} صنف',
-                        style: TextStyle(
-                          fontSize: 12.5,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.text2Of(context),
-                        ),
-                      ),
-                      const Spacer(),
-                      TextButton.icon(
-                        style: TextButton.styleFrom(
-                          visualDensity: VisualDensity.compact,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: 8,
-                            vertical: 2,
+                      Flexible(
+                        child: Text(
+                          '${visible.length} من ${items.length} صنف',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12.5,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.text2Of(context),
                           ),
-                        ),
-                        onPressed: () => setState(() => _selectionMode = true),
-                        icon: const Icon(
-                          Icons.drive_file_move_outlined,
-                          size: 16,
-                        ),
-                        label: const Text(
-                          'نقل أصناف',
-                          style: TextStyle(fontSize: 12),
                         ),
                       ),
                       const SizedBox(width: 6),
-                      Text(
-                        '${sections.length} قسم · ${roots.length} فئة',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: AppColors.text3Of(context),
+                      InkWell(
+                        borderRadius: BorderRadius.circular(8),
+                        onTap: () => setState(() => _selectionMode = true),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: 6,
+                            vertical: 2,
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(
+                                Icons.drive_file_move_outlined,
+                                size: 15,
+                                color: AppColors.primaryOf(context),
+                              ),
+                              const SizedBox(width: 3),
+                              Text(
+                                'نقل',
+                                style: TextStyle(
+                                  fontSize: 11.5,
+                                  fontWeight: FontWeight.w700,
+                                  color: AppColors.primaryOf(context),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: Text(
+                          '${sections.length} قسم · ${roots.length} فئة',
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.end,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: AppColors.text3Of(context),
+                          ),
                         ),
                       ),
                     ],
@@ -2593,16 +2629,16 @@ class _ItemTile extends ConsumerWidget {
                             (currentUser == null ||
                                 currentUser.role == UserRole.admin ||
                                 currentUser.role == UserRole.agent);
-                        return Row(
+                        return Wrap(
+                          spacing: 12,
+                          runSpacing: 2,
                           children: [
-                            if (canSeeCost) ...[
+                            if (canSeeCost)
                               _Price(
                                 label: 'شراء',
                                 value: Fmt.money(item.buyPrice, 0),
                                 color: AppColors.info,
                               ),
-                              const SizedBox(width: 14),
-                            ],
                             _Price(
                               label: 'بيع',
                               value: Fmt.money(item.sellPrice, 0),
@@ -2642,6 +2678,11 @@ class _ItemTile extends ConsumerWidget {
                     children: [
                       IconButton(
                         visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.all(3),
+                        constraints: const BoxConstraints(
+                          minWidth: 28,
+                          minHeight: 28,
+                        ),
                         tooltip: 'نقل إلى قسم / فئة',
                         onPressed: () => openMoveItemsSheet(
                           context,
@@ -2650,19 +2691,29 @@ class _ItemTile extends ConsumerWidget {
                         ),
                         icon: Icon(
                           Icons.drive_file_move_outlined,
-                          size: 19,
+                          size: 18,
                           color: AppColors.primaryOf(context),
                         ),
                       ),
                       IconButton(
                         visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.all(3),
+                        constraints: const BoxConstraints(
+                          minWidth: 28,
+                          minHeight: 28,
+                        ),
                         tooltip: 'تعديل الصنف',
                         onPressed: () => openItemForm(context, ref, item: item),
                         icon: Icon(Icons.edit_outlined,
-                            size: 19, color: AppColors.primaryOf(context)),
+                            size: 18, color: AppColors.primaryOf(context)),
                       ),
                       IconButton(
                         visualDensity: VisualDensity.compact,
+                        padding: const EdgeInsets.all(3),
+                        constraints: const BoxConstraints(
+                          minWidth: 28,
+                          minHeight: 28,
+                        ),
                         tooltip: 'حذف الصنف',
                         onPressed: () async {
                           final ok = await confirmDialog(
@@ -2679,7 +2730,7 @@ class _ItemTile extends ConsumerWidget {
                           }
                         },
                         icon: Icon(Icons.delete_outline,
-                            size: 19, color: AppColors.dangerOf(context)),
+                            size: 18, color: AppColors.dangerOf(context)),
                       ),
                     ],
                   ),
@@ -3006,14 +3057,18 @@ class _Meta extends StatelessWidget {
           const SizedBox(width: 3),
           // (2026-09-24) سقف عرض + علامة حذف: بطاقات المخزون الضيقة
           // (171px على هاتف 360) لم تعد تفيض بنصّ القسم/الوحدة الطويل.
-          ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 128),
-            child: Text(
-              text,
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style:
-                  TextStyle(fontSize: 11.5, color: AppColors.text2Of(context)),
+          Flexible(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(maxWidth: 112),
+              child: Text(
+                text,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 11.5,
+                  color: AppColors.text2Of(context),
+                ),
+              ),
             ),
           ),
         ],
