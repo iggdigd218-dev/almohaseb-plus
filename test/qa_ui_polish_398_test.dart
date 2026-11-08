@@ -100,5 +100,25 @@ void main() {
       expect(s, contains('insetPadding'));
       expect(s, contains('minWidth: 36'));
     });
+
+    test('UI-12 الشريط السفلي يتوسطه زر + عملية والمساعد الذكي منقول للقائمة والإعدادات', () {
+      final home = read('lib/ui/home_shell.dart');
+      final settings = read('lib/ui/settings_screen.dart');
+      expect(home, contains('class _CenterOperationButton'));
+      expect(home, contains("'عملية'"));
+      expect(home, isNot(contains('class _MarkedGearIcon')));
+      expect(home, contains('المساعد الذكي (Gemini)'));
+      expect(settings, contains('المساعد الذكي (Gemini)'));
+    });
+
+    test('UI-13 دائرة المزامنة بقوسين متناظرين وألوان فاتحة وحركات دوران ونبض', () {
+      final sync = read('lib/ui/widgets/sync_arrows_indicator.dart');
+      expect(sync, contains('_drawClockwiseArcArrow'));
+      expect(sync, contains('_kSweep = 2.68'));
+      expect(sync, contains('0xFF10B981'));
+      expect(sync, contains('0xFF0EA5E9'));
+      expect(sync, contains('_triggerTapSpin'));
+      expect(sync, contains('_triggerPulseSpin'));
+    });
   });
 }

@@ -7528,6 +7528,22 @@ class Repo {
       whereArgs: [name, category.id ?? -1],
     );
 
+    // إذا كانت الفئة فرعية (لها parentId)، ترث تلقائياً قسم الفئة الأب لضمان اتساق الشجرة.
+    int? effectiveSectionId = category.sectionId;
+    if (category.parentId != null) {
+      final parentRows = await db.query(
+        'item_categories',
+        columns: ['section_id'],
+        where: 'id = ?',
+        whereArgs: [category.parentId],
+        limit: 1,
+      );
+      if (parentRows.isNotEmpty) {
+        effectiveSectionId =
+            (parentRows.first['section_id'] as int?) ?? effectiveSectionId;
+      }
+    }
+
     late final int id;
     if (category.id == null) {
       final now = DateTime.now().toIso8601String();
@@ -7535,7 +7551,7 @@ class Repo {
         'id': newGlobalId(),
         'name': name,
         if (category.parentId != null) 'parent_id': category.parentId,
-        if (category.sectionId != null) 'section_id': category.sectionId,
+        if (effectiveSectionId != null) 'section_id': effectiveSectionId,
         'icon_key': category.iconKey,
         'color_hex': category.colorHex,
         'image_path': category.imagePath,
@@ -7550,7 +7566,7 @@ class Repo {
           'id': id,
           'name': name,
           if (category.parentId != null) 'parent_id': category.parentId,
-          if (category.sectionId != null) 'section_id': category.sectionId,
+          if (effectiveSectionId != null) 'section_id': effectiveSectionId,
           'icon_key': category.iconKey,
           'color_hex': category.colorHex,
           'image_path': category.imagePath,
@@ -7599,7 +7615,7 @@ class Repo {
         {
           'name': name,
           'parent_id': parentId,
-          'section_id': category.sectionId,
+          'section_id': effectiveSectionId,
           'icon_key': category.iconKey,
           'color_hex': category.colorHex,
           'image_path': category.imagePath,
@@ -7608,13 +7624,14 @@ class Repo {
         where: 'id = ?',
         whereArgs: [id],
       );
-      // (2026-09-24) نقل الفئة إلى قسم جديد ⇒ أصنافها تتبعها.
+      // (2026-09-24) نقل الفئة إلى قسم جديد ⇒ أصنافها وفئاتها الفرعية تتبعها.
       await txn.update(
         'items',
         <String, Object?>{
           'category': name,
           'updated_at': now,
-          if (prevSection != category.sectionId) 'section_id': category.sectionId,
+          if (prevSection != effectiveSectionId)
+            'section_id': effectiveSectionId,
         },
         where: 'category_id = ?',
         whereArgs: [id],
@@ -7628,16 +7645,177 @@ class Repo {
           'id': id,
           'name': name,
           'parent_id': parentId,
-          'section_id': category.sectionId,
+          'section_id': effectiveSectionId,
           'icon_key': category.iconKey,
           'color_hex': category.colorHex,
           'image_path': category.imagePath,
           'updated_at': now,
         },
       );
+
+      // إذا تغيّر قسم فئة رئيسية، تتبعها جميع فئاتها الفرعية وأصناف تلك الفئات الفرعية تلقائياً.
+      if (prevSection != effectiveSectionId) {
+        final childRows = await txn.query(
+          'item_categories',
+          where: "parent_id = ? AND (deleted_at IS NULL OR deleted_at = '')",
+          whereArgs: [id],
+        );
+        for (final child in childRows) {
+          final childId = child['id'] as int;
+          await txn.update(
+            'item_categories',
+            {
+              'section_id': effectiveSectionId,
+              'updated_at': now,
+            },
+            where: 'id = ?',
+            whereArgs: [childId],
+          );
+          await txn.update(
+            'items',
+            {
+              'section_id': effectiveSectionId,
+              'updated_at': now,
+            },
+            where: 'category_id = ?',
+            whereArgs: [childId],
+          );
+          await rec.record(
+            entityType: EntityKind.itemCategory,
+            entityId: '$childId',
+            opType: OpKind.update,
+            payload: {
+              'id': childId,
+              'name': child['name'],
+              'parent_id': id,
+              'section_id': effectiveSectionId,
+              'icon_key': child['icon_key'],
+              'color_hex': child['color_hex'],
+              'image_path': child['image_path'],
+              'updated_at': now,
+            },
+          );
+        }
+      }
     });
     await logActivity('تعديل فئة أصناف: $name', 'item_category', '$id');
     return id;
+  }
+
+  /// نقل فئة رئيسية إلى قسم آخر، أو نقل فئة فرعية إلى فئة رئيسية أخرى،
+  /// أو ترقية فئة فرعية إلى فئة رئيسية، أو تحويل فئة رئيسية إلى فئة فرعية.
+  Future<void> moveCategory({
+    required int categoryId,
+    int? targetSectionId,
+    int? targetParentId,
+    bool clearParent = false,
+    bool clearSection = false,
+  }) async {
+    final existing = await itemCategory(categoryId);
+    if (existing == null) return;
+    final nextParentId =
+        clearParent ? null : (targetParentId ?? existing.parentId);
+    int? nextSectionId =
+        clearSection ? null : (targetSectionId ?? existing.sectionId);
+    if (nextParentId != null) {
+      final parentCat = await itemCategory(nextParentId);
+      if (parentCat != null) {
+        nextSectionId = parentCat.sectionId;
+      }
+    }
+    await saveItemCategory(
+      existing.copyWith(
+        parentId: nextParentId,
+        clearParentId: nextParentId == null,
+        sectionId: nextSectionId,
+        clearSectionId: nextSectionId == null,
+      ),
+    );
+  }
+
+  /// نقل صنف واحد أو مجموعة أصناف دفعة واحدة إلى أي قسم أو فئة رئيسية أو فئة فرعية.
+  Future<int> moveItemsToHierarchy({
+    required List<int> itemIds,
+    int? sectionId,
+    int? categoryId,
+  }) async {
+    if (itemIds.isEmpty) return 0;
+    await _ensureCan('edit_tx');
+    final db = await _db;
+    int? effectiveSectionId = sectionId;
+    String categoryName = 'عام';
+    if (categoryId != null) {
+      final catRows = await db.query(
+        'item_categories',
+        where: 'id = ?',
+        whereArgs: [categoryId],
+        limit: 1,
+      );
+      if (catRows.isNotEmpty) {
+        categoryName = (catRows.first['name'] as String?) ?? 'عام';
+        effectiveSectionId =
+            (catRows.first['section_id'] as int?) ?? effectiveSectionId;
+        final pId = catRows.first['parent_id'] as int?;
+        if (effectiveSectionId == null && pId != null) {
+          final pRows = await db.query(
+            'item_categories',
+            columns: ['section_id'],
+            where: 'id = ?',
+            whereArgs: [pId],
+            limit: 1,
+          );
+          if (pRows.isNotEmpty) {
+            effectiveSectionId = pRows.first['section_id'] as int?;
+          }
+        }
+      }
+    }
+
+    final now = DateTime.now().toIso8601String();
+    var moved = 0;
+    await db.transaction((txn) async {
+      final rec = await newRecorder(txn);
+      for (final itemId in itemIds) {
+        final rows = await txn.query(
+          'items',
+          where: 'id = ?',
+          whereArgs: [itemId],
+          limit: 1,
+        );
+        if (rows.isEmpty) continue;
+        await txn.update(
+          'items',
+          {
+            'section_id': effectiveSectionId,
+            'category_id': categoryId,
+            'category': categoryName,
+            'updated_at': now,
+          },
+          where: 'id = ?',
+          whereArgs: [itemId],
+        );
+        final updatedRow = Map<String, Object?>.from(rows.first)
+          ..['section_id'] = effectiveSectionId
+          ..['category_id'] = categoryId
+          ..['category'] = categoryName
+          ..['updated_at'] = now;
+        await rec.record(
+          entityType: EntityKind.item,
+          entityId: '$itemId',
+          opType: OpKind.update,
+          payload: updatedRow,
+        );
+        moved++;
+      }
+    });
+    if (moved > 0) {
+      await logActivity(
+        'نقل $moved صنف إلى $categoryName',
+        'item',
+        itemIds.first.toString(),
+      );
+    }
+    return moved;
   }
 
   /// يحذف الفئة فقط، ويفك ربط أصنافها لتبقى بيانات الأصناف محفوظة.

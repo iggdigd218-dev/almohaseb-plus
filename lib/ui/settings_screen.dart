@@ -31,6 +31,7 @@ import 'package:url_launcher/url_launcher.dart';
 import 'logout_flow.dart' show showLogoutRequestsSheet, showSecuredLogout;
 import 'group_management_screen.dart';
 import 'support_chat_screen.dart';
+import 'gemini_assistant_sheet.dart';
 import 'widgets.dart';
 import '../core/cloud_config.dart';
 import '../core/platform_info.dart';
@@ -1368,7 +1369,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
 /// (3.98.34) الشاشة الرئيسية للإعدادات: قائمة بطاقات عمودية، كل بطاقة
 /// تفتح صفحة مستقلة (لا تبويبات أفقية ولا تكرار لبطاقات المظهر).
-class _SettingsHome extends StatelessWidget {
+class _SettingsHome extends ConsumerWidget {
   final List<Widget> pages;
   final VoidCallback? onSave;
   final bool saving;
@@ -1401,6 +1402,13 @@ class _SettingsHome extends StatelessWidget {
       -1,
     ),
     (
+      'المساعد الذكي (Gemini)',
+      'محادثة ذكية لإدارة الفواتير والأرصدة والأصناف والأوامر الصوتية',
+      Icons.smart_toy_rounded,
+      Color(0xFF10B981),
+      -2,
+    ),
+    (
       'الأمان',
       'قفل الشاشة والبصمة والنسخ الاحتياطي وإعادة الضبط',
       Icons.security_outlined,
@@ -1417,11 +1425,16 @@ class _SettingsHome extends StatelessWidget {
   ];
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final isOwner = ref.watch(isOwnerProvider).valueOrNull ?? false;
+    final curUser = ref.watch(currentUserProvider).valueOrNull;
+    final isAdmin = isOwner || curUser == null || curUser.role == UserRole.admin;
+    final visibleItems = _items.where((it) => it.$5 != -2 || isAdmin).toList();
+
     return ListView(
       padding: const EdgeInsets.fromLTRB(14, 14, 14, 40),
       children: [
-        for (final it in _items)
+        for (final it in visibleItems)
           Padding(
             padding: const EdgeInsets.only(bottom: 10),
             child: Material(
@@ -1430,6 +1443,10 @@ class _SettingsHome extends StatelessWidget {
               clipBehavior: Clip.antiAlias,
               child: InkWell(
                 onTap: () {
+                  if (it.$5 == -2) {
+                    openGeminiAssistantSheet(context, ref);
+                    return;
+                  }
                   if (it.$5 < 0) {
                     Navigator.of(context).push(
                       MaterialPageRoute(
