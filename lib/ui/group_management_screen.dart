@@ -111,7 +111,17 @@ class _State extends ConsumerState<GroupManagementScreen> {
         }
         final actionRow = [
           const Center(child: SeatUsageBadge()),
-          const SizedBox(width: 8),
+          // (3.98.34) «ربط جهاز جديد» انتقل من الزر العائم إلى شريط العنوان.
+          IconButton(
+            tooltip: 'ربط جهاز جديد',
+            icon: const Icon(Icons.qr_code_2),
+            onPressed: () async {
+              if (await _ensureGoogleLinked(context) && context.mounted) {
+                _showPairHub(context);
+              }
+            },
+          ),
+          const SizedBox(width: 4),
         ];
         return Scaffold(
           appBar: widget.embedded
@@ -157,15 +167,6 @@ class _State extends ConsumerState<GroupManagementScreen> {
                   ],
                 )
               : const _DevicesTab(),
-          floatingActionButton: FloatingActionButton.extended(
-            onPressed: () async {
-              if (await _ensureGoogleLinked(context) && context.mounted) {
-                _showPairHub(context);
-              }
-            },
-            icon: const Icon(Icons.qr_code_2),
-            label: const Text('ربط جهاز جديد'),
-          ),
         );
       },
     );

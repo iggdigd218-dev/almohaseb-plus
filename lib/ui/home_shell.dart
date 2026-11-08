@@ -20,6 +20,7 @@ import '../data/sync/cloud_join.dart';
 import '../data/update_service.dart';
 import 'update_section.dart';
 import 'profile_dialog.dart';
+import 'widgets/profile_completion_nudge.dart';
 import 'account_form.dart';
 import 'accounts_screen.dart';
 import 'backup_screen.dart';
@@ -218,6 +219,8 @@ class _HomeShellState extends ConsumerState<HomeShell>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _applyStartupRouting();
       _consumeNotifyTap();
+      // (3.98.34) إشعار دوري (كل يومين كحد أقصى) لإكمال هاتف/بريد الاسترداد.
+      _maybeNudgeProfileCompletion();
     });
     // (دفعة 58) المستمع العالمي لطلبات الانضمام — للمدير فقط.
     _startGlobalJoinWatcher();
@@ -1296,19 +1299,26 @@ class _HomeShellState extends ConsumerState<HomeShell>
       };
 
   /// زر العملية العائم المميّز بالتدرج الدائري كما في هوية التطبيق
-  Widget? _fab() {
-    final me = ref.watch(currentUserProvider).valueOrNull;
-    bool can(String p) => me != null && me.can(p);
-    final add = can('add_tx');
-    if (!add) return null;
 
-    // (2026-09-22) زر الإضافة السريعة (+) يظهر في الشاشة الرئيسية فقط —
-    // بقية الشاشات (بما فيها نقطة البيع التي تحتوي شريط السلة الموحد) بلا زر عائم إطلاقاً.
-    if (_screen != AppScreen.dashboard) return null;
-
-    // (قانون 2026-09-19) الزر العائم «إجراء سريع» كما كان: يفتح ورقة
-    // الخيارات (عملية، سند، حساب، نقطة بيع) بدل نموذج مباشر.
-    return _MarkedOperationFab(onPressed: _quickActionSheet);
+  /// (3.98.34) فحص بيانات الحساب الناقصة وإظهار الإشعار الدوري مرة واحدة
+  /// لكل جلسة، بفاصل يومين محفوظ محلياً (طابع زمني محلي).
+  Future<void> _maybeNudgeProfileCompletion() async {
+    try {
+      final st = ref.read(settingsProvider).valueOrNull ?? const {};
+      final phone = (st['phone'] ?? '').toString();
+      final email = (st['email'] ?? st['account.email'] ?? '').toString();
+      await ProfileCompletionNudge.maybeShow(
+        context,
+        phone: phone,
+        email: email,
+        onOpenSettings: () {
+          if (!mounted) return;
+          _go(AppScreen.settings);
+        },
+      );
+    } catch (_) {
+      // إشعار تجميلي: أي فشل هنا لا يجوز أن يعطّل الإقلاع.
+    }
   }
 
   /// ورقة الإجراء السريع من زر Omni على الرئيسية: أكثر 4 مهام تكراراً
@@ -1737,6 +1747,32 @@ class _HomeShellState extends ConsumerState<HomeShell>
             },
           ),
           actions: [
+            // (3.98.34) بديل الزر العائم المحذوف: إجراء سريع (+) في شريط العنوان
+            // يظهر في الرئيسية فقط للمصرّح لهم — بلا أي تراكب على أسفل الشاشة.
+            Consumer(
+              builder: (ctx, rref, _) {
+                final me = rref.watch(currentUserProvider).valueOrNull;
+                final canAdd = me != null && me.can('add_tx');
+                if (!canAdd || _screen != AppScreen.dashboard) {
+                  return const SizedBox.shrink();
+                }
+                return _appBarSquircleAction(
+                  tooltip: 'إجراء سريع',
+                  bg: AppColors.primaryOf(ctx).withValues(alpha: .12),
+                  fg: AppColors.primaryOf(ctx),
+                  border: Border.all(
+                    color: AppColors.primaryOf(ctx).withValues(alpha: .35),
+                    width: 1.1,
+                  ),
+                  icon: Icon(
+                    Icons.add_rounded,
+                    size: 20,
+                    color: AppColors.primaryOf(ctx),
+                  ),
+                  onTap: _quickActionSheet,
+                );
+              },
+            ),
             Consumer(
               builder: (ctx, rref, _) {
                 final wsMode =
@@ -1978,7 +2014,6 @@ class _HomeShellState extends ConsumerState<HomeShell>
             ),
           ],
         ),
-        floatingActionButton: _fab(),
         bottomNavigationBar: (desktop || _screen == AppScreen.pos)
             ? null
             : _MarkedBottomBar(
@@ -2296,62 +2331,6 @@ class _MarkedGearIcon extends StatelessWidget {
 }
 
 /// زر العملية العائم المميّز بالتدرج الدائري كما في الصورة
-class _MarkedOperationFab extends StatelessWidget {
-  final VoidCallback? onPressed;
-  const _MarkedOperationFab({required this.onPressed});
-
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      width: 58,
-      height: 58,
-      decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        gradient: const LinearGradient(
-          colors: [Color(0xFFFB923C), Color(0xFF0284C7)],
-          begin: Alignment.topLeft,
-          end: Alignment.bottomRight,
-        ),
-        boxShadow: [
-          BoxShadow(
-            color: const Color(0xFF0284C7).withValues(alpha: 0.4),
-            blurRadius: 12,
-            offset: const Offset(0, 4),
-          ),
-          BoxShadow(
-            color: const Color(0xFFFB923C).withValues(alpha: 0.25),
-            blurRadius: 8,
-            offset: const Offset(-2, -2),
-          ),
-        ],
-      ),
-      child: Material(
-        color: Colors.transparent,
-        child: InkWell(
-          customBorder: const CircleBorder(),
-          onTap: onPressed,
-          child: Column(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              const Icon(Icons.add_rounded, color: Colors.white, size: 22),
-              Text(
-                'عملية',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 10.5,
-                  fontWeight: FontWeight.w800,
-                  fontFamily: uiFontFamily,
-                  height: 1.0,
-                ),
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-}
 
 /// عنصر واحد في الشريط الجانبي المكتبي — hover ناعم + تمييز واضح للمحدد.
 class _RailTile extends StatelessWidget {

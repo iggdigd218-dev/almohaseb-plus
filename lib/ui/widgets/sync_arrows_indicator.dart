@@ -6,6 +6,8 @@
 //  - أحمر صريح عند وجود خلل في الإرسال أو الاستقبال
 //  - عند الضغط: يبدأ دورة تحديث فورية ويظهر رسالة واضحة بحالة المزامنة أو تفاصيل العطل (دون نوافذ منبثقة).
 //  - يختفي تلقائياً في الوضع الفردي المستقل (standalone).
+import 'dart:math' as math;
+
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
@@ -92,24 +94,10 @@ class SyncArrowsIndicator extends ConsumerWidget {
                 showSnack(context, 'المزامنة السحابية متصلة ومستقرة ✅');
               }
             },
-            child: Container(
-              width: 36,
-              height: 36,
-              margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 8),
-              padding: const EdgeInsets.all(4),
-              decoration: BoxDecoration(
-                color: isDark
-                    ? const Color(0xFF1E293B)
-                    : const Color(0xFFE2E8F0),
-                borderRadius: BorderRadius.circular(11),
-                border: Border.all(
-                  color: isDark
-                      ? const Color(0xFF475569)
-                      : const Color(0xFF94A3B8),
-                  width: 1.1,
-                ),
-              ),
-              child: _BoldAnimatedSyncArrows(
+            // (3.98.34) دائرة مزامنة نحيفة بلا إطار ولا خلفية — أيقونة صافية.
+            child: Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 6),
+              child: _ThinSyncCircle(
                 upColor: upColor,
                 downColor: downColor,
                 upActive: s.pushing && !s.uploadFaulted,
@@ -123,14 +111,15 @@ class SyncArrowsIndicator extends ConsumerWidget {
   }
 }
 
-/// أسهم مزامنة بارزة ومصمتة بخط عريض وبلا استنزاف للمعالج
-class _BoldAnimatedSyncArrows extends StatelessWidget {
+/// (3.98.34) دائرة مزامنة نحيفة: قوسان متقابلان بلا إطار يشكّلان معاً
+/// دائرة تزامن، وكل قوس ينتهي برأس سهم صغير — بألوان الحالة الخاصة بكل اتجاه.
+class _ThinSyncCircle extends StatelessWidget {
   final Color upColor;
   final Color downColor;
   final bool upActive;
   final bool downActive;
 
-  const _BoldAnimatedSyncArrows({
+  const _ThinSyncCircle({
     required this.upColor,
     required this.downColor,
     required this.upActive,
@@ -140,71 +129,106 @@ class _BoldAnimatedSyncArrows extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return CustomPaint(
-      size: const Size(30, 30),
-      painter: _BoldSyncArrowsPainter(
+      size: const Size(22, 22),
+      painter: _ThinSyncCirclePainter(
         upColor: upColor,
         downColor: downColor,
-        upOpacity: upActive ? 0.85 : 1.0,
-        downOpacity: downActive ? 0.85 : 1.0,
+        upOpacity: upActive ? 0.55 : 1.0,
+        downOpacity: downActive ? 0.55 : 1.0,
       ),
     );
   }
 }
 
-/// رسم الأسهم المتوازية العريضة والمقتربة
-class _BoldSyncArrowsPainter extends CustomPainter {
+/// يرسم قوسين متقابلين (كل منهما نصف دائرة تقريباً) برأس سهم في نهاية كل قوس.
+class _ThinSyncCirclePainter extends CustomPainter {
   final Color upColor;
   final Color downColor;
   final double upOpacity;
   final double downOpacity;
 
-  _BoldSyncArrowsPainter({
+  _ThinSyncCirclePainter({
     required this.upColor,
     required this.downColor,
     required this.upOpacity,
     required this.downOpacity,
   });
 
+  static const double _kStroke = 1.5;
+  static const double _kSweep = 2.42; // ≈ 139° لكل قوس
+  static const double _kGap = 0.18; // فجوة صغيرة بين القوسين
+
   @override
   void paint(Canvas canvas, Size size) {
-    final cx = size.width / 2;
-    final cy = size.height / 2;
+    final center = Offset(size.width / 2, size.height / 2);
+    final radius = (size.shortestSide / 2) - (_kStroke / 2) - 0.5;
 
-    // سهم صاعد عريض ومصمت مقترب تماماً
-    final upPaint = Paint()
-      ..color = upColor.withValues(alpha: upOpacity)
-      ..strokeWidth = 2.8
+    Paint stroke(Color c, double o) => Paint()
+      ..color = c.withValues(alpha: o)
+      ..strokeWidth = _kStroke
       ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round
       ..style = PaintingStyle.stroke;
 
-    final upX = cx - 4.0;
-    canvas.drawLine(Offset(upX, cy + 7), Offset(upX, cy - 6), upPaint);
-    final upHead = Path()
-      ..moveTo(upX - 4.0, cy - 2.0)
-      ..lineTo(upX, cy - 6.5)
-      ..lineTo(upX + 4.0, cy - 2.0);
-    canvas.drawPath(upHead, upPaint);
+    // القوس الأعلى (الإرسال ↑) — يمتد من اليسار العلوي إلى اليمين العلوي.
+    const upStart = -2.55;
+    _arcWithHead(
+      canvas: canvas,
+      center: center,
+      radius: radius,
+      startAngle: upStart,
+      sweep: _kSweep,
+      paint: stroke(upColor, upOpacity),
+    );
 
-    // سهم هابط عريض ومصمت مقترب تماماً
-    final downPaint = Paint()
-      ..color = downColor.withValues(alpha: downOpacity)
-      ..strokeWidth = 2.8
-      ..strokeCap = StrokeCap.round
-      ..strokeJoin = StrokeJoin.round
-      ..style = PaintingStyle.stroke;
-
-    final downX = cx + 4.0;
-    canvas.drawLine(Offset(downX, cy - 7), Offset(downX, cy + 6), downPaint);
-    final downHead = Path()
-      ..moveTo(downX - 4.0, cy + 2.0)
-      ..lineTo(downX, cy + 6.5)
-      ..lineTo(downX + 4.0, cy + 2.0);
-    canvas.drawPath(downHead, downPaint);
+    // القوس السفلي (الاستقبال ↓) — مقابل للأول ليكملا الدائرة.
+    const downStart = upStart + _kSweep + _kGap;
+    _arcWithHead(
+      canvas: canvas,
+      center: center,
+      radius: radius,
+      startAngle: downStart,
+      sweep: _kSweep,
+      paint: stroke(downColor, downOpacity),
+      headAtStart: true,
+    );
   }
 
+  /// يرسم القوس ثم رأس سهم صغير عند نهايته (أو بدايته) باتجاه المماس.
+  void _arcWithHead({
+    required Canvas canvas,
+    required Offset center,
+    required double radius,
+    required double startAngle,
+    required double sweep,
+    required Paint paint,
+    bool headAtStart = false,
+  }) {
+    final rect = Rect.fromCircle(center: center, radius: radius);
+    canvas.drawArc(rect, startAngle, sweep, false, paint);
+
+    final endAngle = headAtStart ? startAngle : startAngle + sweep;
+    final tangent = endAngle + (headAtStart ? -1.5708 : 1.5708);
+    final tip = center + Offset(radius * _cos(endAngle), radius * _sin(endAngle));
+    const wing = 3.0;
+    const spread = 0.85;
+
+    final p1 = tip -
+        Offset(wing * _cos(tangent - spread), wing * _sin(tangent - spread));
+    final p2 = tip -
+        Offset(wing * _cos(tangent + spread), wing * _sin(tangent + spread));
+
+    final head = Path()
+      ..moveTo(p1.dx, p1.dy)
+      ..lineTo(tip.dx, tip.dy)
+      ..lineTo(p2.dx, p2.dy);
+    canvas.drawPath(head, paint);
+  }
+
+  static double _cos(double a) => math.cos(a);
+  static double _sin(double a) => math.sin(a);
+
   @override
-  bool shouldRepaint(covariant _BoldSyncArrowsPainter old) =>
+  bool shouldRepaint(covariant _ThinSyncCirclePainter old) =>
       old.upColor != upColor ||
       old.downColor != downColor ||
       old.upOpacity != upOpacity ||

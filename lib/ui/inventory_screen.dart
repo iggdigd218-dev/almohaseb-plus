@@ -308,6 +308,8 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
               onSortChanged: (k) => setState(() => _sort = k),
               onAddCategory: () => openItemCategoryForm(context, ref),
               onOpenShortages: () => openShortagesListSheet(context, ref),
+              onAddItem: () => openItemForm(context, ref,
+                  categoryId: _subId ?? _rootId, sectionId: _sectionId),
             ),
             categoriesAsync.when(
               skipLoadingOnReload: true,
@@ -360,18 +362,6 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
             ),
           ],
         ),
-        // زر الإضافة العائم الذكي: نقرة = صنف جديد، ضغطة مطوّلة = قائمة.
-        PositionedDirectional(
-          bottom: 16,
-          end: 16,
-          child: _SmartInventoryFab(
-            onAddItem: () => openItemForm(context, ref,
-                categoryId: _subId ?? _rootId, sectionId: _sectionId),
-            onAddCategory: () => openItemCategoryForm(context, ref,
-                sectionId: _sectionId == kGeneralSectionId ? null : _sectionId),
-            onAddSection: () => openSectionForm(context, ref),
-          ),
-        ),
       ],
     );
   }
@@ -415,18 +405,18 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
       );
     }
     const pad = EdgeInsets.fromLTRB(12, 4, 12, 96);
-    // عدد الأعمدة حسب العرض: هاتف 2 · لوحي 3 · حاسوب 4.
+    // عدد الأعمدة حسب العرض: هاتف 3 (طلب 3.98.34) · لوحي 4 · حاسوب 5.
     final w = MediaQuery.sizeOf(context).width;
-    final cols = w >= 900 ? 4 : (w >= 600 ? 3 : 2);
+    final cols = w >= 900 ? 5 : (w >= 600 ? 4 : 3);
     final child = _mode == 'grid'
         ? GridView.builder(
             padding: pad,
             itemCount: visible.length,
             gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
               crossAxisCount: cols,
-              mainAxisSpacing: 10,
-              crossAxisSpacing: 10,
-              childAspectRatio: cols >= 4 ? .95 : .82,
+              mainAxisSpacing: 8,
+              crossAxisSpacing: 8,
+              childAspectRatio: cols >= 4 ? .82 : .70,
             ),
             itemBuilder: (_, i) => _ItemGridCard(
                   item: visible[i],
@@ -576,6 +566,7 @@ class _InventoryToolbar extends ConsumerStatefulWidget {
   final ValueChanged<_SortKey> onSortChanged;
   final VoidCallback onAddCategory;
   final VoidCallback onOpenShortages;
+  final VoidCallback onAddItem;
 
   const _InventoryToolbar({
     required this.mode,
@@ -585,6 +576,7 @@ class _InventoryToolbar extends ConsumerStatefulWidget {
     required this.onSortChanged,
     required this.onAddCategory,
     required this.onOpenShortages,
+    required this.onAddItem,
   });
 
   @override
@@ -756,6 +748,26 @@ class _InventoryToolbarState extends ConsumerState<_InventoryToolbar> {
                             ),
                           ),
                       ],
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  // (3.98.34) بديل الزر العائم المحذوف: إضافة صنف من الشريط.
+                  SizedBox(
+                    width: 46,
+                    height: 46,
+                    child: Material(
+                      color: Colors.white.withValues(alpha: .96),
+                      shape: const CircleBorder(),
+                      clipBehavior: Clip.antiAlias,
+                      child: IconButton(
+                        tooltip: 'إضافة صنف جديد',
+                        onPressed: widget.onAddItem,
+                        icon: Icon(
+                          Icons.add_rounded,
+                          color: AppColors.primaryOf(context),
+                          size: 24,
+                        ),
+                      ),
                     ),
                   ),
                   const SizedBox(width: 8),
@@ -1481,75 +1493,6 @@ class _CategoryManagerTile extends StatelessWidget {
   }
 }
 
-/// زر الإضافة العائم الذكي: نقرة = صنف جديد، ضغطة مطوّلة = قائمة خيارات.
-class _SmartInventoryFab extends StatelessWidget {
-  final VoidCallback onAddItem;
-  final VoidCallback onAddCategory;
-  final VoidCallback onAddSection;
-
-  const _SmartInventoryFab({
-    required this.onAddItem,
-    required this.onAddCategory,
-    required this.onAddSection,
-  });
-
-  Future<void> _menu(BuildContext context) async {
-    await HapticFeedback.mediumImpact();
-    if (!context.mounted) return;
-    await showModalBottomSheet<void>(
-      context: context,
-      showDragHandle: true,
-      builder: (ctx) => SafeArea(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            ListTile(
-              leading: const Icon(Icons.inventory_2_outlined),
-              title: const Text('إضافة صنف جديد'),
-              onTap: () {
-                Navigator.pop(ctx);
-                onAddItem();
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.folder_outlined),
-              title: const Text('إضافة فئة سريعة'),
-              onTap: () {
-                Navigator.pop(ctx);
-                onAddCategory();
-              },
-            ),
-            ListTile(
-              leading: const Icon(Icons.add_business_outlined),
-              title: const Text('إضافة قسم جديد'),
-              onTap: () {
-                Navigator.pop(ctx);
-                onAddSection();
-              },
-            ),
-            const SizedBox(height: 8),
-          ],
-        ),
-      ),
-    );
-  }
-
-  @override
-  Widget build(BuildContext context) => FloatingActionButton(
-        heroTag: 'inventoryFab',
-        backgroundColor: AppColors.primary,
-        foregroundColor: Colors.white,
-        tooltip: 'إضافة صنف (اضغط مطولاً للخيارات)',
-        onPressed: () async {
-          await HapticFeedback.lightImpact();
-          onAddItem();
-        },
-        child: GestureDetector(
-          onLongPress: () => _menu(context),
-          child: const Icon(Icons.add_rounded, size: 28),
-        ),
-      );
-}
 
 /// نموذج إضافة/تعديل قسم (نافذة حوار وسطية مدمجة).
 Future<int?> openSectionForm(
@@ -1896,10 +1839,10 @@ class _ItemGridCard extends ConsumerWidget {
                       child: InkWell(
                         onTap: () => _itemQuickMenu(context, ref, item),
                         child: const SizedBox(
-                          width: 30,
-                          height: 30,
+                          width: 25,
+                          height: 25,
                           child: Icon(Icons.more_vert,
-                              size: 17, color: Color(0xFF5B6B83)),
+                              size: 14, color: Color(0xFF5B6B83)),
                         ),
                       ),
                     ),
@@ -1909,7 +1852,7 @@ class _ItemGridCard extends ConsumerWidget {
                     end: 6,
                     child: Container(
                       padding: const EdgeInsets.symmetric(
-                          horizontal: 7, vertical: 3),
+                          horizontal: 5, vertical: 2),
                       decoration: BoxDecoration(
                         color: status.$2.withValues(alpha: .14),
                         borderRadius: BorderRadius.circular(AppRadius.pill),
@@ -1918,7 +1861,7 @@ class _ItemGridCard extends ConsumerWidget {
                         status.$1,
                         style: TextStyle(
                           color: status.$2,
-                          fontSize: 10,
+                          fontSize: 8.5,
                           fontWeight: FontWeight.w800,
                         ),
                       ),
@@ -1928,7 +1871,7 @@ class _ItemGridCard extends ConsumerWidget {
               ),
             ),
             Padding(
-              padding: const EdgeInsets.fromLTRB(9, 6, 9, 8),
+              padding: const EdgeInsets.fromLTRB(7, 4, 7, 6),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
@@ -1937,8 +1880,8 @@ class _ItemGridCard extends ConsumerWidget {
                     maxLines: 2,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
-                      fontSize: 13.0,
-                      height: 1.2,
+                      fontSize: 11.5,
+                      height: 1.15,
                       fontWeight: FontWeight.w700,
                     ),
                   ),
@@ -1946,7 +1889,7 @@ class _ItemGridCard extends ConsumerWidget {
                   Text(
                     '${Fmt.money(item.quantity)} ${item.unit}',
                     style: TextStyle(
-                      fontSize: 11.0,
+                      fontSize: 9.5,
                       color: AppColors.text3Of(context),
                     ),
                   ),
@@ -1960,7 +1903,7 @@ class _ItemGridCard extends ConsumerWidget {
                           child: Text(
                             Fmt.money(item.sellPrice, 0),
                             style: TextStyle(
-                              fontSize: 14,
+                              fontSize: 12,
                               fontWeight: FontWeight.w900,
                               color: isOut
                                   ? AppColors.dangerOf(context)
@@ -2622,9 +2565,15 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
         scopedCats.any((c) => c.id == _categoryId) ? _categoryId : null;
 
     return _BrandSheet(
-      scrollable: true,
       child: Padding(
-        padding: const EdgeInsets.fromLTRB(14, 10, 14, 14),
+        // (3.98.34) نفس أبعاد النافذة الخارجية، لكن الزر السفلي يبقى ظاهراً
+        // فوق لوحة المفاتيح: الحقول تُمرَّر وحدها داخل المساحة المتاحة.
+        padding: EdgeInsets.fromLTRB(
+          12,
+          8,
+          12,
+          8 + MediaQuery.viewInsetsOf(context).bottom,
+        ),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -2634,7 +2583,7 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
               children: [
                 Icon(
                   Icons.inventory_2_outlined,
-                  size: 20,
+                  size: 18,
                   color: AppColors.primaryOf(context),
                 ),
                 const SizedBox(width: 7),
@@ -2642,7 +2591,7 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
                   widget.item == null ? 'إضافة صنف جديد' : 'تعديل الصنف',
                   style: Theme.of(context).textTheme.titleMedium?.copyWith(
                         fontWeight: FontWeight.w800,
-                        fontSize: 15,
+                        fontSize: 13.5,
                       ),
                 ),
                 if (displayPlu != null) ...[
@@ -2676,8 +2625,15 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
                 ),
               ],
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 6),
 
+            Flexible(
+              child: SingleChildScrollView(
+                padding: EdgeInsets.zero,
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: [
             // ══ الصف 1: القسم والفئة جنباً إلى جنب مع زر (+) مدمج ══
             Row(
               crossAxisAlignment: CrossAxisAlignment.start,
@@ -2835,8 +2791,8 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
                     borderRadius: BorderRadius.circular(11),
                     onTap: _pickImage,
                     child: Container(
-                      width: 42,
-                      height: 42,
+                      width: 36,
+                      height: 36,
                       decoration: BoxDecoration(
                         color: AppColors.primarySoftOf(context),
                         borderRadius: BorderRadius.circular(11),
@@ -3095,14 +3051,18 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
                 ),
               ],
             ),
-            const SizedBox(height: 12),
+                  ],
+                ),
+              ),
+            ),
+            const SizedBox(height: 8),
 
             SizedBox(
               width: double.infinity,
-              height: 42,
+              height: 44,
               child: FilledButton.icon(
                 onPressed: _saving ? null : _save,
-                icon: const Icon(Icons.save_outlined, size: 18),
+                icon: const Icon(Icons.save_outlined, size: 17),
                 label: _saving
                     ? const SizedBox(
                         width: 18,
@@ -3401,18 +3361,22 @@ Future<void> openShortagesListSheet(
   BuildContext context,
   WidgetRef ref,
 ) async {
-  await showDialog<void>(
-    context: context,
-    builder: (ctx) => Dialog(
-      insetPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 18),
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-      clipBehavior: Clip.antiAlias,
-      child: ConstrainedBox(
-        constraints: BoxConstraints(
-          maxWidth: 520,
-          maxHeight: MediaQuery.sizeOf(ctx).height * 0.88,
+  // (3.98.34) صفحة كاملة مستقلة بدل النافذة المنبثقة.
+  await Navigator.of(context).push<void>(
+    MaterialPageRoute(
+      builder: (_) => Scaffold(
+        appBar: AppBar(
+          title: const Text(
+            'قائمة النواقص وطلب البضاعة',
+            style: TextStyle(fontWeight: FontWeight.w900, fontSize: 15),
+          ),
+          centerTitle: true,
+          leading: IconButton(
+            icon: const Icon(Icons.arrow_forward_rounded),
+            onPressed: () => Navigator.of(context).pop(),
+          ),
         ),
-        child: _ShortagesListSheet(parentContext: context),
+        body: SafeArea(child: _ShortagesListSheet(parentContext: context, fullPage: true)),
       ),
     ),
   );
@@ -3444,7 +3408,11 @@ class _ShortageGroupOption {
 
 class _ShortagesListSheet extends ConsumerStatefulWidget {
   final BuildContext parentContext;
-  const _ShortagesListSheet({required this.parentContext});
+  final bool fullPage;
+  const _ShortagesListSheet({
+    required this.parentContext,
+    this.fullPage = false,
+  });
 
   @override
   ConsumerState<_ShortagesListSheet> createState() =>
@@ -3873,7 +3841,8 @@ class _ShortagesListSheetState extends ConsumerState<_ShortagesListSheet> {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          // رأس النافذة
+          // رأس النافذة (يُخفى في الصفحة الكاملة لأن AppBar يغني عنه)
+          if (!widget.fullPage) ...[
           Row(
             children: [
               Container(
@@ -3918,6 +3887,8 @@ class _ShortagesListSheetState extends ConsumerState<_ShortagesListSheet> {
             ],
           ),
           const SizedBox(height: 8),
+          ] else
+            const SizedBox(height: 2),
 
           // شريط فلاتر الأقسام والفئات (متعدد الاختيار Multi-Select Category/Section Chips)
           if (groupOptions.isNotEmpty) ...[
@@ -4186,47 +4157,54 @@ class _ShortagesListSheetState extends ConsumerState<_ShortagesListSheet> {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
+                                  // (3.98.34) اسم الصنف يأخذ السطر بالكامل بلا شارة تزاحمه.
+                                  Text(
+                                    it.name,
+                                    maxLines: 2,
+                                    overflow: TextOverflow.ellipsis,
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w800,
+                                      fontSize: 13,
+                                      height: 1.2,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 2),
+                                  // (3.98.34) شارة الحالة مدمجة في السطر السفلي
+                                  // بجوار بيانات المتوفر وحد التنبيه.
                                   Row(
                                     children: [
                                       Expanded(
                                         child: Text(
-                                          it.name,
+                                          'المتوفر: ${Fmt.qty(it.quantity)} ${it.unit}  •  حد التنبيه: ${Fmt.qty(it.minQuantity)} ${it.unit}',
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
-                                          style: const TextStyle(
-                                            fontWeight: FontWeight.w800,
-                                            fontSize: 13.5,
+                                          style: TextStyle(
+                                            fontSize: 10.5,
+                                            fontWeight: FontWeight.w600,
+                                            color: AppColors.text2Of(context),
                                           ),
                                         ),
                                       ),
+                                      const SizedBox(width: 4),
                                       Container(
                                         padding: const EdgeInsets.symmetric(
-                                            horizontal: 6, vertical: 2),
+                                            horizontal: 5, vertical: 1.5),
                                         decoration: BoxDecoration(
                                           color: statusColor.withValues(
                                               alpha: 0.12),
                                           borderRadius:
-                                              BorderRadius.circular(6),
+                                              BorderRadius.circular(5),
                                         ),
                                         child: Text(
                                           statusLabel,
                                           style: TextStyle(
-                                            fontSize: 10,
+                                            fontSize: 9,
                                             fontWeight: FontWeight.w800,
                                             color: statusColor,
                                           ),
                                         ),
                                       ),
                                     ],
-                                  ),
-                                  const SizedBox(height: 3),
-                                  Text(
-                                    'المتوفر: ${Fmt.qty(it.quantity)} ${it.unit}  •  حد التنبيه: ${Fmt.qty(it.minQuantity)} ${it.unit}',
-                                    style: TextStyle(
-                                      fontSize: 11.5,
-                                      fontWeight: FontWeight.w600,
-                                      color: AppColors.text2Of(context),
-                                    ),
                                   ),
                                 ],
                               ),
@@ -4376,9 +4354,10 @@ Future<Uint8List> _buildShortagesPdf({
   final theme = await PdfFonts.theme();
   final doc = pw.Document(theme: theme);
   final dateStr = Fmt.dateTime(date);
+  final safeGroups = PdfFonts.sanitize(groupsLabel);
   final subtitleText = groupsLabel.trim().isEmpty
       ? 'قائمة النواقص وطلب البضاعة (الأصناف تحت حد التنبيه)'
-      : 'قائمة النواقص وطلب البضاعة — الأقسام: $groupsLabel';
+      : 'قائمة النواقص وطلب البضاعة — الأقسام: $safeGroups';
 
   doc.addPage(
     pw.MultiPage(
@@ -4496,7 +4475,8 @@ Future<Uint8List> _buildShortagesPdf({
                     ),
                     _pdfCell(Fmt.qty(rows[i].item.minQuantity)),
                     _pdfCell(Fmt.qty(rows[i].item.quantity)),
-                    _pdfCell(rows[i].item.name, bold: true, alignRight: true),
+                    _pdfCell(PdfFonts.sanitize(rows[i].item.name),
+                        bold: true, alignRight: true),
                     _pdfCell('${i + 1}'),
                   ],
                 ),
@@ -4655,7 +4635,7 @@ Future<Uint8List> _renderShortagesImage({
 
     final values = <String>[
       '${i + 1}',
-      r.item.name,
+      PdfFonts.sanitize(r.item.name),
       Fmt.qty(r.item.quantity),
       Fmt.qty(r.item.minQuantity),
       Fmt.qty(r.requiredQty),
@@ -4720,9 +4700,12 @@ void _drawCanvasText(
   required Color color,
   TextAlign align = TextAlign.right,
 }) {
+  // (3.98.34) تنظيف أي محارف تحكم/رموز غير مدعومة قبل الرسم على الصورة
+  // كي لا تظهر مربعات أو ⍰ في أسماء الأصناف والعناوين.
+  final safeText = PdfFonts.sanitize(text);
   final tp = TextPainter(
     text: TextSpan(
-      text: text,
+      text: safeText,
       style: TextStyle(
         fontSize: fontSize,
         fontWeight: fontWeight,
