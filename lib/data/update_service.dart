@@ -266,7 +266,7 @@ class UpdateService {
     String? authToken;
     if (!_hasCustomClient) {
       try {
-        authToken = await FirebaseAuthService.instance
+        authToken = await FirebaseAuthRest
             .cloudIdToken()
             .timeout(const Duration(seconds: 5));
       } catch (_) {
