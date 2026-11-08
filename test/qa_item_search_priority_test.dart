@@ -3,7 +3,11 @@
 // المطلوب من العميل: البحث يضمّ `notes` لكن بنظام درجتين — تطابق الاسم/
 // الباركود (sku)/PLU/رقم الصنف (#id)/الفئة أولاً، ثم الملاحظات وحدها.
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nexora_app/core/database.dart';
 import 'package:nexora_app/core/item_search.dart';
+import 'package:nexora_app/core/models.dart';
+import 'package:nexora_app/data/repository.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 void main() {
   group('درجات مطابقة البحث', () {
@@ -96,6 +100,61 @@ void main() {
       ];
       expect(sorted.first['name'], 'شاي أحمر');
       expect(sorted.last['name'], 'مشروب ساخن');
+    });
+  });
+
+  group('Repo.items على قاعدة حقيقية (SQL)', () {
+    sqfliteFfiInit();
+    databaseFactory = databaseFactoryFfi;
+    late Repo repo;
+
+    setUp(() async {
+      // singleInstance: false حتى تحصل كل حالة على قاعدة ذاكرة مستقلة.
+      final db = await databaseFactory.openDatabase(inMemoryDatabasePath,
+          options: OpenDatabaseOptions(singleInstance: false));
+      await AppDatabase.createSchema(db);
+      repo = Repo(databaseProvider: () async => db);
+      await repo.initSyncInfra();
+      final now = DateTime.now();
+      await repo.saveItem(Item(
+        name: 'شاي أحمر',
+        sellPrice: 100,
+        quantity: 1,
+        notes: '',
+        createdAt: now,
+        updatedAt: now,
+      ));
+      await repo.saveItem(Item(
+        name: 'مشروب ساخن',
+        sellPrice: 100,
+        quantity: 1,
+        notes: 'يخزّن بجوار الشاي',
+        createdAt: now,
+        updatedAt: now,
+      ));
+      await repo.saveItem(Item(
+        name: 'سكر',
+        sellPrice: 100,
+        quantity: 1,
+        notes: '',
+        createdAt: now,
+        updatedAt: now,
+      ));
+    });
+
+    test('SEARCH-11 repo.items يضم الملاحظات ويضع مطابقة الاسم أولاً', () async {
+      final results = await repo.items(q: 'شاي');
+      expect(results.map((i) => i.name).toList(), ['شاي أحمر', 'مشروب ساخن'],
+          reason: 'مطابقة الاسم أولاً ثم مطابقة الملاحظات فقط');
+    });
+
+    test('SEARCH-12 repo.items يدعم كلمات مفتاحية متعددة', () async {
+      final results = await repo.items(q: 'مشروب شاي');
+      expect(results.map((i) => i.name).toList(), ['مشروب ساخن']);
+    });
+
+    test('SEARCH-13 استعلام لا يطابق شيئاً يعيد قائمة فارغة', () async {
+      expect(await repo.items(q: 'قهوة تركية'), isEmpty);
     });
   });
 }
