@@ -512,6 +512,21 @@ Future<int> _allocateFreeItemId(
   }
 }
 
+/// توليد رقم ترقيم سريع (PLU) متاح داخل المعاملة الحالية.
+Future<int> _allocateNextPlu(
+  DatabaseExecutor txn,
+  String workspaceId,
+) async {
+  final ws = workspaceId.trim().isNotEmpty
+      ? workspaceId.trim()
+      : AppDatabase.activeWorkspaceId;
+  final rows = await txn.rawQuery(
+    'SELECT COALESCE(MAX(plu), 0) + 1 AS next_plu FROM items WHERE workspace_id = ?',
+    [ws],
+  );
+  return (rows.firstOrNull?['next_plu'] as num?)?.toInt() ?? 1;
+}
+
 /// استخراج اسم الجهاز/المستخدم المدخل للصنف بدقة لعرضه في إشعار التعارض.
 Future<String> _resolveItemCreatorName(
   DatabaseExecutor txn, {
@@ -1351,7 +1366,6 @@ extension ApplyRemoteOp on Repo {
           final collidingId = (existingRow['id'] as num?)?.toInt() ??
               int.tryParse(op.entityId) ??
               1;
-          final existingName = '${existingRow['name'] ?? ''}'.trim();
           final incomingName = '${row['name'] ?? op.payload['name'] ?? ''}'.trim();
 
           final localCreatedMs =
@@ -1378,10 +1392,7 @@ extension ApplyRemoteOp on Repo {
           }
 
           final newId = await _allocateFreeItemId(txn, collidingId);
-          final nextPlu = await AppDatabase.nextPlu(
-            txn,
-            workspaceId: op.workspaceId,
-          );
+          final nextPlu = await _allocateNextPlu(txn, op.workspaceId);
 
           final incomingRow = <String, Object?>{
             ...row,
@@ -1776,6 +1787,7 @@ extension ApplyRemoteOp on Repo {
             if (accName.isNotEmpty) {
               await _healAccountConflict(txn, accName, op.entityId);
             }
+          }
           int? origPluCollision;
           Map<String, Object?>? pluConflictOtherRow;
           if (table == 'items') {
@@ -1787,7 +1799,7 @@ extension ApplyRemoteOp on Repo {
             }
             // إذا كان الصنف الوارد يحمل نفس رقم الترقيم السريع (PLU) لصنف محلي مختلف، نفصله تلقائياً
             final incomingPlu = (insertRow['plu'] as num?)?.toInt();
-            final incomingId = int.tryParse('${op.entityId}') ?? 0;
+            final incomingId = int.tryParse(op.entityId) ?? 0;
             final incomingName = '${insertRow['name'] ?? ''}'.trim();
             if (incomingPlu != null &&
                 incomingPlu > 0 &&
@@ -1807,9 +1819,9 @@ extension ApplyRemoteOp on Repo {
                     dupName.toLowerCase() != incomingName.toLowerCase()) {
                   origPluCollision = incomingPlu;
                   pluConflictOtherRow = pluDups.first;
-                  insertRow['plu'] = await AppDatabase.nextPlu(
+                  insertRow['plu'] = await _allocateNextPlu(
                     txn,
-                    workspaceId: op.workspaceId,
+                    op.workspaceId,
                   );
                 }
               }

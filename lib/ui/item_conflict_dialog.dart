@@ -211,7 +211,8 @@ class _ItemConflictResolutionDialogState
     try {
       await widget.repo.resolveItemConflictMergeItems(
         conflictKey: widget.conflict.key,
-        keepItem1: _keepItem1OnMerge,
+        keepItemId:
+            _keepItem1OnMerge ? widget.conflict.item1Id : widget.conflict.item2Id,
       );
       bump(widget.parentRef);
       if (!mounted) return;
@@ -257,11 +258,11 @@ class _ItemConflictResolutionDialogState
       key: const ValueKey('item_conflict_resolution_dialog'),
       titlePadding: const EdgeInsets.fromLTRB(18, 16, 18, 8),
       contentPadding: const EdgeInsets.fromLTRB(18, 8, 18, 12),
-      title: Row(
+      title: const Row(
         children: [
-          const Icon(Icons.warning_amber_rounded, color: AppColors.amber),
-          const SizedBox(width: 8),
-          const Expanded(
+          Icon(Icons.warning_amber_rounded, color: AppColors.amber),
+          SizedBox(width: 8),
+          Expanded(
             child: Text(
               'معالجة تعارض الأصناف والباركود',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800),
