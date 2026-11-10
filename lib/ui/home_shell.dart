@@ -2830,19 +2830,21 @@ class _Drawer extends ConsumerWidget {
                                     .watch(ownerDisplayNameProvider)
                                     .valueOrNull
                                     ?.trim();
-                                final customOwner =
-                                    (ownerName != null &&
-                                            ownerName.isNotEmpty &&
-                                            ownerName != 'المدير')
+                                final isOwnerOrStandalone =
+                                    wsMode != 'member';
+                                final label = isOwnerOrStandalone
+                                    ? (ownerName != null && ownerName.isNotEmpty
                                         ? ownerName
-                                        : null;
-                                final label =
-                                    (devName != null && devName.isNotEmpty)
-                                        ? devName
-                                        : (customOwner ??
-                                            (safeUserName.isNotEmpty
+                                        : (devName != null && devName.isNotEmpty
+                                            ? devName
+                                            : (safeUserName.isNotEmpty
                                                 ? safeUserName
-                                                : 'المحاسب'));
+                                                : 'المدير')))
+                                    : (devName != null && devName.isNotEmpty
+                                        ? devName
+                                        : (safeUserName.isNotEmpty
+                                            ? safeUserName
+                                            : 'المحاسب'));
                                 return Row(
                                   children: [
                                     Flexible(

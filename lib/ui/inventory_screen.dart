@@ -326,6 +326,26 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
     return 'بدون قسم';
   }
 
+  String _findCategoryName(List<ItemCategory> roots, int? id) {
+    if (id == null) return 'فئة';
+    for (final r in roots) {
+      if (r.id == id) return r.name;
+      for (final c in r.children) {
+        if (c.id == id) return c.name;
+      }
+    }
+    return 'فئة';
+  }
+
+  String _findSectionName(List<Section> sections, int? id) {
+    if (id == null) return 'قسم';
+    if (id == kGeneralSectionId) return 'عام';
+    for (final s in sections) {
+      if (s.id == id) return s.name;
+    }
+    return 'قسم';
+  }
+
   @override
   Widget build(BuildContext context) {
     final categoriesAsync = ref.watch(itemCategoryTreeProvider);
@@ -518,7 +538,7 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
     var totalCostValue = 0.0;
     var totalSellingValue = 0.0;
     if (canSeeValuation) {
-      for (final it in items) {
+      for (final it in visible) {
         if (it.quantity > 0) {
           totalCostValue += it.quantity * it.buyPrice;
           totalSellingValue += it.quantity * it.sellPrice;
@@ -770,7 +790,13 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
                       const SizedBox(width: 6),
                       Expanded(
                         child: Text(
-                          '${sections.length} قسم · ${roots.length} فئة',
+                          _subId != null
+                              ? 'فئة فرعية: ${_findCategoryName(roots, _subId)}'
+                              : _rootId != null
+                                  ? 'فئة: ${_findCategoryName(roots, _rootId)}'
+                                  : _sectionId != null
+                                      ? 'قسم: ${_findSectionName(sections, _sectionId)}'
+                                      : '${sections.length} قسم · ${roots.length} فئة',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           textAlign: TextAlign.end,
