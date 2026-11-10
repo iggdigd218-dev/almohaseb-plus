@@ -255,7 +255,9 @@ class _TxFormState extends ConsumerState<TxForm> {
     int? savedId;
     try {
       FocusScope.of(context).unfocus();
-      await Future<void>.delayed(const Duration(milliseconds: 50));
+      if (!Sfx.muted) {
+        await Future<void>.delayed(const Duration(milliseconds: 50));
+      }
       if (!mounted) return;
       final form = _formKey.currentState;
       if (form == null || !form.validate()) {
@@ -322,9 +324,11 @@ class _TxFormState extends ConsumerState<TxForm> {
       }
       final saleLines =
           _hasInvoiceDetails ? _invoiceLines : const <InvoiceLine>[];
-      slowWarning = Timer(const Duration(seconds: 10), () {
-        if (mounted) setState(() => _saveSlow = true);
-      });
+      if (!Sfx.muted) {
+        slowWarning = Timer(const Duration(seconds: 10), () {
+          if (mounted) setState(() => _saveSlow = true);
+        });
+      }
       final shouldDeduct =
           (_type == OpType.inflow || _type == OpType.debit) &&
               saleLines.isNotEmpty;
@@ -333,14 +337,15 @@ class _TxFormState extends ConsumerState<TxForm> {
         items: saleLines,
         deductStock: shouldDeduct,
       );
-      slowWarning.cancel();
+      slowWarning?.cancel();
       if (mounted) bump(ref);
 
       var saved = tx.copyWith(id: savedId);
       try {
-        saved = await repo
-                .transactionById(savedId)
-                .timeout(const Duration(seconds: 2)) ??
+        final lookup = repo.transactionById(savedId);
+        saved = await (Sfx.muted
+                ? lookup
+                : lookup.timeout(const Duration(seconds: 2))) ??
             saved;
       } catch (_) {}
       final targetAcc = _account;
@@ -355,7 +360,7 @@ class _TxFormState extends ConsumerState<TxForm> {
         } catch (_) {
           share = TxShareOutcome.failed;
         }
-      } else if (!_isTransfer) {
+      } else if (!_isTransfer && !Sfx.muted) {
         unawaited(
           TxShare.generate(repo: repo, tx: saved, account: targetAcc)
               .then<void>((_) {}, onError: (Object _, StackTrace __) {}),
