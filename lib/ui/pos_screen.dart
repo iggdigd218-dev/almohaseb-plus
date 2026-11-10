@@ -7,6 +7,7 @@ import 'package:printing/printing.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../core/accounting.dart';
+import '../core/category_tree.dart';
 import '../core/desktop.dart';
 import '../core/format.dart';
 import '../core/item_search.dart';
@@ -1388,12 +1389,9 @@ class _PosScreenState extends ConsumerState<PosScreen>
 
     final allowedCatIds = <int>{};
     if (!hasSearch && _selectedCategoryId != null) {
-      allowedCatIds.add(_selectedCategoryId!);
-      for (final c in categories) {
-        if (c.parentId == _selectedCategoryId && c.id != null) {
-          allowedCatIds.add(c.id!);
-        }
-      }
+      allowedCatIds.addAll(
+        getCategoryAndAllDescendantIds(_selectedCategoryId!, categories),
+      );
     }
 
     // (3.98.39 / الملاحظة 4) البحث في POS يشمل الملاحظات بأولوية درجتين:
@@ -1485,6 +1483,44 @@ class _PosScreenState extends ConsumerState<PosScreen>
         if (s.id != null) s.id!: s,
     };
 
+    final selectedCat = findCategoryInTree(_selectedCategoryId, roots);
+    final categoryPath = getCategoryPath(_selectedCategoryId, roots);
+
+    // تحديد الفئات المعروضة في شريط الفئات وزر «الكل»
+    final List<ItemCategory> activeCategoriesToShow;
+    final ItemCategory? activeDrillParent;
+    final String allChipLabel;
+    final bool isAllChipActive;
+
+    if (_selectedCategoryId != null && selectedCat != null) {
+      if (selectedCat.hasChildren) {
+        activeCategoriesToShow = selectedCat.children;
+        activeDrillParent = selectedCat;
+        allChipLabel = 'كل ${selectedCat.name}';
+        isAllChipActive = true;
+      } else {
+        final parent = categoryPath.length >= 2
+            ? categoryPath[categoryPath.length - 2]
+            : null;
+        if (parent != null && parent.hasChildren) {
+          activeCategoriesToShow = parent.children;
+          activeDrillParent = parent;
+          allChipLabel = 'كل ${parent.name}';
+          isAllChipActive = false;
+        } else {
+          activeCategoriesToShow = [selectedCat];
+          activeDrillParent = selectedCat;
+          allChipLabel = 'كل ${selectedCat.name}';
+          isAllChipActive = true;
+        }
+      }
+    } else {
+      activeCategoriesToShow = sectionCategories;
+      activeDrillParent = null;
+      allChipLabel = 'الكل';
+      isAllChipActive = _selectedCategoryId == null;
+    }
+
     return PopScope(
       canPop: !hasSearch &&
           !_atSectionsGate &&
@@ -1498,7 +1534,12 @@ class _PosScreenState extends ConsumerState<PosScreen>
               _searchCtrl.clear();
             });
           } else if (_selectedCategoryId != null) {
-            setState(() => _selectedCategoryId = null);
+            final path = getCategoryPath(_selectedCategoryId, roots);
+            if (path.length > 1) {
+              setState(() => _selectedCategoryId = path[path.length - 2].id);
+            } else {
+              setState(() => _selectedCategoryId = null);
+            }
           } else if (_selectedSectionId != null) {
             setState(() => _selectedSectionId = null);
           } else if (_atSectionsGate) {
@@ -1572,16 +1613,111 @@ class _PosScreenState extends ConsumerState<PosScreen>
                     ),
             ),
 
-            // 4) شريط الفئات الأفقي التابع للقسم النشط (الضغط على «عرض الكل» يفتح لوحة جميع الفئات)
+            // شريط مسار التصفح (Breadcrumb) داخل نقطة البيع عند اختيار قسم أو فئة
+            if (!_atSectionsGate &&
+                (_selectedSectionId != null || _selectedCategoryId != null)) ...[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(12, 4, 12, 4),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+                  decoration: BoxDecoration(
+                    color: AppColors.surfaceOf(context),
+                    borderRadius: BorderRadius.circular(8),
+                    border: Border.all(color: AppColors.borderOf(context)),
+                  ),
+                  child: Row(
+                    children: [
+                      Icon(
+                        Icons.account_tree_outlined,
+                        size: 13,
+                        color: AppColors.primaryOf(context),
+                      ),
+                      const SizedBox(width: 6),
+                      Expanded(
+                        child: SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: Row(
+                            children: [
+                              _PosCrumb(
+                                label: 'الكل',
+                                active: _selectedSectionId == null &&
+                                    _selectedCategoryId == null,
+                                onTap: () => setState(() {
+                                  _selectedSectionId = null;
+                                  _selectedCategoryId = null;
+                                }),
+                              ),
+                              if (_selectedSectionId != null) ...[
+                                const _PosCrumbSep(),
+                                _PosCrumb(
+                                  label: _selectedSectionId == kGeneralSectionId
+                                      ? 'عام'
+                                      : (secById[_selectedSectionId]?.name ?? 'القسم'),
+                                  active: categoryPath.isEmpty,
+                                  onTap: () => setState(() {
+                                    _selectedCategoryId = null;
+                                  }),
+                                ),
+                              ],
+                              for (int i = 0; i < categoryPath.length; i++) ...[
+                                const _PosCrumbSep(),
+                                _PosCrumb(
+                                  label: categoryPath[i].name,
+                                  active: i == categoryPath.length - 1,
+                                  onTap: () => setState(() {
+                                    _selectedCategoryId = categoryPath[i].id;
+                                  }),
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ),
+                      InkWell(
+                        borderRadius: BorderRadius.circular(6),
+                        onTap: () => setState(() {
+                          _selectedCategoryId = null;
+                          _selectedSectionId = null;
+                        }),
+                        child: Padding(
+                          padding: const EdgeInsets.all(2),
+                          child: Icon(
+                            Icons.close_rounded,
+                            size: 15,
+                            color: AppColors.text3Of(context),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+
+            // 4) شريط الفئات الأفقي التابع للقسم النشط مع دعم الغوص الشجري
             if (!_atSectionsGate)
               PosCategoryStrip(
-                categories: sectionCategories,
+                categories: activeCategoriesToShow,
                 selectedId: _selectedCategoryId,
+                allLabel: allChipLabel,
+                isAllActive: isAllChipActive,
                 showHeader: true,
-                allItemsCount: _countSectionItems(allItems, categories),
+                allItemsCount: activeDrillParent != null
+                    ? _countCategoryItems(activeDrillParent, allItems, categories)
+                    : _countSectionItems(allItems, categories),
                 itemCountOf: (cat) =>
                     _countCategoryItems(cat, allItems, categories),
-                onPick: (cid) => setState(() => _selectedCategoryId = cid),
+                onPick: (cid) => setState(() {
+                  if (cid == null) {
+                    if (activeDrillParent != null) {
+                      _selectedCategoryId = activeDrillParent.id;
+                    } else {
+                      _selectedCategoryId = null;
+                    }
+                  } else {
+                    _selectedCategoryId = cid;
+                  }
+                }),
               ),
           ],
 
@@ -1732,12 +1868,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
     List<ItemCategory> categories,
   ) {
     if (cat.id == null) return 0;
-    final allowed = <int>{cat.id!};
-    for (final c in categories) {
-      if (c.parentId == cat.id && c.id != null) {
-        allowed.add(c.id!);
-      }
-    }
+    final allowed = getCategoryAndAllDescendantIds(cat.id!, categories);
     var count = 0;
     for (final it in allItems) {
       if (it.categoryId != null && allowed.contains(it.categoryId)) {
@@ -5464,3 +5595,51 @@ class _PosSalesSummarySheetState extends ConsumerState<_PosSalesSummarySheet> {
   }
 }
 
+class _PosCrumb extends StatelessWidget {
+  final String label;
+  final bool active;
+  final VoidCallback onTap;
+
+  const _PosCrumb({
+    required this.label,
+    required this.active,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return InkWell(
+      borderRadius: BorderRadius.circular(6),
+      onTap: active ? null : onTap,
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+        child: Text(
+          label,
+          style: TextStyle(
+            fontSize: 11,
+            fontWeight: active ? FontWeight.w800 : FontWeight.w600,
+            color: active
+                ? AppColors.primaryOf(context)
+                : AppColors.text2Of(context),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _PosCrumbSep extends StatelessWidget {
+  const _PosCrumbSep();
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 2),
+      child: Icon(
+        Icons.chevron_left_rounded,
+        size: 14,
+        color: AppColors.text3Of(context),
+      ),
+    );
+  }
+}

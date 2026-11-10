@@ -9,6 +9,7 @@ import 'package:sqflite/sqflite.dart';
 
 import '../core/accounting.dart';
 import '../core/app_version.dart';
+import '../core/category_tree.dart' as category_tree;
 import '../core/ids.dart';
 import '../core/database.dart';
 import '../core/device_names.dart';
@@ -7657,9 +7658,8 @@ class Repo {
     return rows.map(ItemCategory.fromMap).toList();
   }
 
-  /// (2026-09-22) الشجرة كاملة: الفئات الرئيسية وفي كل واحدة أبناؤها
-  /// المباشرون — قراءة واحدة للجدول تُجمَّع في الذاكرة (بلا استعلامات
-  /// متتابعة لكل فئة).
+  /// (2026-09-22 / 3.98.41) الشجرة كاملة: الفئات الرئيسية وفي كل واحدة أبناؤها
+  /// وأحفادها شجرياً لأي عمق — قراءة واحدة للجدول تُجمَّع في الذاكرة.
   Future<List<ItemCategory>> itemCategoryTree() async {
     final all = await itemCategories();
     final roots = <ItemCategory>[];
@@ -7672,9 +7672,18 @@ class Repo {
         byParent.putIfAbsent(p, () => <ItemCategory>[]).add(c);
       }
     }
-    return roots
-        .map((r) => r.withChildren(byParent[r.id] ?? const []))
-        .toList();
+    ItemCategory attachChildren(ItemCategory node) {
+      final kids = byParent[node.id] ?? const <ItemCategory>[];
+      final resolvedKids = kids.map(attachChildren).toList();
+      return node.withChildren(resolvedKids);
+    }
+    return roots.map(attachChildren).toList();
+  }
+
+  /// (3.98.41) استخراج معرّف الفئة مضافاً إليه جميع معرّفات الفئات الأبناء والأحفاد التابعة لها شجرياً لأي عمق.
+  Future<Set<int>> getCategoryAndAllDescendantIds(int categoryId) async {
+    final all = await itemCategories();
+    return category_tree.getCategoryAndAllDescendantIds(categoryId, all);
   }
 
   /// إضافة فئة أو تعديل اسمها مع تحديث اسم الفئة في الأصناف التابعة لها.
@@ -7709,19 +7718,25 @@ class Repo {
       whereArgs: [name, category.id ?? -1, parentScope],
     );
 
-    // إذا كانت الفئة فرعية (لها parentId)، ترث تلقائياً قسم الفئة الأب لضمان اتساق الشجرة.
+    // إذا كانت الفئة فرعية (لها parentId)، ترث تلقائياً قسم الفئة الأب أو الجد لضمان اتساق الشجرة.
     int? effectiveSectionId = category.sectionId;
     if (category.parentId != null) {
-      final parentRows = await db.query(
-        'item_categories',
-        columns: ['section_id'],
-        where: 'id = ?',
-        whereArgs: [category.parentId],
-        limit: 1,
-      );
-      if (parentRows.isNotEmpty) {
-        effectiveSectionId =
-            (parentRows.first['section_id'] as int?) ?? effectiveSectionId;
+      var cursor = category.parentId;
+      for (var guard = 0; guard < 64 && cursor != null; guard++) {
+        final parentRows = await db.query(
+          'item_categories',
+          columns: ['section_id', 'parent_id'],
+          where: 'id = ?',
+          whereArgs: [cursor],
+          limit: 1,
+        );
+        if (parentRows.isEmpty) break;
+        final secId = parentRows.first['section_id'] as int?;
+        if (secId != null) {
+          effectiveSectionId = secId;
+          break;
+        }
+        cursor = parentRows.first['parent_id'] as int?;
       }
     }
 
@@ -7834,48 +7849,55 @@ class Repo {
         },
       );
 
-      // إذا تغيّر قسم فئة رئيسية، تتبعها جميع فئاتها الفرعية وأصناف تلك الفئات الفرعية تلقائياً.
+      // إذا تغيّر قسم الفئة، تتبعها جميع فئاتها الفرعية والأحفاد شجرياً لأي عمق وأصنافها تلقائياً.
       if (prevSection != effectiveSectionId) {
-        final childRows = await txn.query(
-          'item_categories',
-          where: "parent_id = ? AND (deleted_at IS NULL OR deleted_at = '')",
-          whereArgs: [id],
-        );
-        for (final child in childRows) {
-          final childId = child['id'] as int;
-          await txn.update(
+        final queue = <int>[id];
+        final visited = <int>{id};
+        while (queue.isNotEmpty) {
+          final currentParentId = queue.removeLast();
+          final childRows = await txn.query(
             'item_categories',
-            {
-              'section_id': effectiveSectionId,
-              'updated_at': now,
-            },
-            where: 'id = ?',
-            whereArgs: [childId],
+            where: "parent_id = ? AND (deleted_at IS NULL OR deleted_at = '')",
+            whereArgs: [currentParentId],
           );
-          await txn.update(
-            'items',
-            {
-              'section_id': effectiveSectionId,
-              'updated_at': now,
-            },
-            where: 'category_id = ?',
-            whereArgs: [childId],
-          );
-          await rec.record(
-            entityType: EntityKind.itemCategory,
-            entityId: '$childId',
-            opType: OpKind.update,
-            payload: {
-              'id': childId,
-              'name': child['name'],
-              'parent_id': id,
-              'section_id': effectiveSectionId,
-              'icon_key': child['icon_key'],
-              'color_hex': child['color_hex'],
-              'image_path': child['image_path'],
-              'updated_at': now,
-            },
-          );
+          for (final child in childRows) {
+            final childId = child['id'] as int;
+            if (!visited.add(childId)) continue;
+            queue.add(childId);
+            await txn.update(
+              'item_categories',
+              {
+                'section_id': effectiveSectionId,
+                'updated_at': now,
+              },
+              where: 'id = ?',
+              whereArgs: [childId],
+            );
+            await txn.update(
+              'items',
+              {
+                'section_id': effectiveSectionId,
+                'updated_at': now,
+              },
+              where: 'category_id = ?',
+              whereArgs: [childId],
+            );
+            await rec.record(
+              entityType: EntityKind.itemCategory,
+              entityId: '$childId',
+              opType: OpKind.update,
+              payload: {
+                'id': childId,
+                'name': child['name'],
+                'parent_id': currentParentId,
+                'section_id': effectiveSectionId,
+                'icon_key': child['icon_key'],
+                'color_hex': child['color_hex'],
+                'image_path': child['image_path'],
+                'updated_at': now,
+              },
+            );
+          }
         }
       }
     });
@@ -7945,18 +7967,20 @@ class Repo {
         categoryName = (catRows.first['name'] as String?) ?? 'عام';
         effectiveSectionId =
             (catRows.first['section_id'] as int?) ?? effectiveSectionId;
-        final pId = catRows.first['parent_id'] as int?;
-        if (effectiveSectionId == null && pId != null) {
+        var cursor = catRows.first['parent_id'] as int?;
+        for (var guard = 0;
+            guard < 64 && effectiveSectionId == null && cursor != null;
+            guard++) {
           final pRows = await db.query(
             'item_categories',
-            columns: ['section_id'],
+            columns: ['section_id', 'parent_id'],
             where: 'id = ?',
-            whereArgs: [pId],
+            whereArgs: [cursor],
             limit: 1,
           );
-          if (pRows.isNotEmpty) {
-            effectiveSectionId = pRows.first['section_id'] as int?;
-          }
+          if (pRows.isEmpty) break;
+          effectiveSectionId = pRows.first['section_id'] as int?;
+          cursor = pRows.first['parent_id'] as int?;
         }
       }
     }
