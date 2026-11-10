@@ -7,6 +7,7 @@
 import 'dart:io';
 
 import 'package:flutter_test/flutter_test.dart';
+import 'package:nexora_app/core/accounting.dart';
 import 'package:nexora_app/core/database.dart';
 import 'package:nexora_app/core/device_names.dart';
 import 'package:nexora_app/core/models.dart';
@@ -163,7 +164,6 @@ void main() {
       final receiptData = ReceiptData.fromTx(
         tx: Tx(
           id: 1,
-          workspaceId: 'ws-1',
           type: OpType.debit,
           amount: 1000,
           currency: 'YER',
@@ -172,8 +172,14 @@ void main() {
           updatedAt: now,
           cashierName: 'فخامة المدير 🫡 (I)',
         ),
-        account: Account(id: 1, name: 'عميل 1', type: 'customer'),
-        currency: CurrencyDef(code: 'YER', name: 'ريال يمني', symbol: 'ر.ي'),
+        account: Account(
+          id: 1,
+          name: 'عميل 1',
+          kind: AccountKind.customer,
+          createdAt: now,
+          updatedAt: now,
+        ),
+        currency: const CurrencyDef('YER', 'ريال يمني', 'ر.ي', 0),
         settings: st,
       );
 
