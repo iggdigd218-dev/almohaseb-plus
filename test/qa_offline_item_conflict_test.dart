@@ -54,7 +54,7 @@ void main() {
     'QA-OFFLINE-CONFLICT-1 prevents item overwrite, auto-renumbers younger item, updates linked invoices & stock_moves, creates smart notification, and supports barcode generation & merge resolutions',
     () async {
       final (tmp, db, repo) = await createTestRepo('nexora_conflict_1_');
-      const resolver = ConflictResolver();
+      final resolver = ConflictResolver();
       try {
         await repo.setSetting('sync.deviceName', 'أحمد الكاشير');
         await db.insert(
@@ -119,11 +119,11 @@ void main() {
 
         // 2. الجهاز الثاني (dev-B) أدخل أوفلاين صنفاً مختلفاً بنفس المعرف #50 ونفس الباركود SKU-9999
         const t2 = '2026-11-10T10:05:00.000Z';
-        final remoteItemOp = SyncOperation(
+        const remoteItemOp = SyncOperation(
           id: 'op-remote-item-50',
           workspaceId: 'default',
           deviceId: 'dev-B',
-          userId: '2',
+          userId: 2,
           opType: OpKind.create,
           entityType: EntityKind.item,
           entityId: '50',
@@ -144,15 +144,16 @@ void main() {
           timestamp: t2,
           deviceTime: t2,
           version: 1,
+          parentOpId: '',
         );
         await repo.applyRemoteOperation(db, remoteItemOp, resolver);
 
         // 3. الجهاز الثاني يرسل فاتورة وحركة مخزون مرتبطتين بالمعرف الأصلي 50
-        final remoteTxOp = SyncOperation(
+        const remoteTxOp = SyncOperation(
           id: 'op-remote-tx-601',
           workspaceId: 'default',
           deviceId: 'dev-B',
-          userId: '2',
+          userId: 2,
           opType: OpKind.create,
           entityType: EntityKind.tx,
           entityId: '601',
@@ -179,14 +180,15 @@ void main() {
           timestamp: t2,
           deviceTime: t2,
           version: 2,
+          parentOpId: '',
         );
         await repo.applyRemoteOperation(db, remoteTxOp, resolver);
 
-        final remoteMoveOp = SyncOperation(
+        const remoteMoveOp = SyncOperation(
           id: 'op-remote-move-701',
           workspaceId: 'default',
           deviceId: 'dev-B',
-          userId: '2',
+          userId: 2,
           opType: OpKind.create,
           entityType: EntityKind.stockMove,
           entityId: '701',
@@ -204,6 +206,7 @@ void main() {
           timestamp: t2,
           deviceTime: t2,
           version: 3,
+          parentOpId: '',
         );
         await repo.applyRemoteOperation(db, remoteMoveOp, resolver);
 
@@ -325,7 +328,7 @@ void main() {
       late Repo repo;
       late SyncEngine engine;
       late ProviderContainer container;
-      const resolver = ConflictResolver();
+      final resolver = ConflictResolver();
 
       await tester.runAsync(() async {
         (tmp, db, repo) = await createTestRepo('nexora_conflict_2_');
@@ -352,11 +355,11 @@ void main() {
         const t2 = '2026-11-10T11:03:00.000Z';
         await repo.applyRemoteOperation(
           db,
-          SyncOperation(
+          const SyncOperation(
             id: 'op-remote-item-10',
             workspaceId: 'default',
             deviceId: 'dev-peer',
-            userId: '3',
+            userId: 3,
             opType: OpKind.create,
             entityType: EntityKind.item,
             entityId: '10',
@@ -377,6 +380,7 @@ void main() {
             timestamp: t2,
             deviceTime: t2,
             version: 1,
+            parentOpId: '',
           ),
           resolver,
         );
