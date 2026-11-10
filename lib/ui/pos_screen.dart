@@ -2497,6 +2497,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
                 onPressed: () async {
                   final code = await scanBarcode(context);
                   if (code != null && code.isNotEmpty) {
+                    if (_handleQuickIndex(code.trim())) return;
                     _searchCtrl.text = code;
                     setState(() => _searchQuery = code.trim());
                   }
@@ -2528,9 +2529,114 @@ class _PosScreenState extends ConsumerState<PosScreen>
         borderSide: BorderSide(color: c, width: 1),
       );
 
+  /// نافذة مصغرة فورية لاختيار الصنف المقصود عند مسح باركود مشترك بين أكثر من صنف.
+  Future<void> _showSharedBarcodePickerDialog(
+    List<Item> candidates, {
+    required String barcode,
+    double quantity = 1.0,
+  }) async {
+    if (!mounted || candidates.isEmpty) return;
+    final picked = await showDialog<Item>(
+      context: context,
+      builder: (ctx) {
+        final cs = Theme.of(ctx).colorScheme;
+        return AlertDialog(
+          key: const ValueKey('pos_shared_barcode_picker_dialog'),
+          titlePadding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
+          contentPadding: const EdgeInsets.fromLTRB(12, 6, 12, 12),
+          title: Row(
+            children: [
+              const Icon(Icons.qr_code_scanner_rounded, color: AppColors.amber),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'باركود مشترك ($barcode) — اختر الصنف المقصود',
+                  style: const TextStyle(
+                    fontSize: 14.5,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          content: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 400, maxHeight: 340),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  for (final it in candidates)
+                    Card(
+                      key: ValueKey('shared_barcode_option_${it.id}'),
+                      margin: const EdgeInsets.symmetric(vertical: 4),
+                      elevation: 0,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                        side: BorderSide(
+                          color: cs.outlineVariant.withValues(alpha: 0.6),
+                        ),
+                      ),
+                      child: ListTile(
+                        dense: true,
+                        leading: CircleAvatar(
+                          radius: 17,
+                          backgroundColor:
+                              AppColors.primary.withValues(alpha: 0.12),
+                          child: Text(
+                            '#${it.plu ?? it.id ?? ''}',
+                            style: const TextStyle(
+                              fontSize: 11,
+                              fontWeight: FontWeight.w800,
+                              color: AppColors.primary,
+                            ),
+                          ),
+                        ),
+                        title: Text(
+                          it.name,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 13.5,
+                          ),
+                        ),
+                        subtitle: Text(
+                          'السعر: ${Fmt.money(it.sellPrice)} • المتاح: ${Fmt.qty(it.quantity)} ${it.unit}',
+                          style: const TextStyle(fontSize: 11.5),
+                        ),
+                        trailing: const Icon(
+                          Icons.add_shopping_cart_rounded,
+                          color: AppColors.primary,
+                          size: 20,
+                        ),
+                        onTap: () => Navigator.of(ctx).pop(it),
+                      ),
+                    ),
+                ],
+              ),
+            ),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(null),
+              child: const Text('إلغاء'),
+            ),
+          ],
+        );
+      },
+    );
+    if (!mounted || picked == null) return;
+    _addItem(picked, quantity: quantity);
+    _searchFocus.requestFocus();
+    showSnack(
+      context,
+      'أُضيف ${Fmt.qty(quantity)} ${picked.unit} من «${picked.name}» (باركود)',
+      silent: true,
+    );
+  }
+
   /// (2026-09-24) **نظام الترقيم السريع (PLU) ودعم قارئ الباركود**.
   ///
   /// • يدعم مسح الباركود مباشرة (USB/Bluetooth) بالبحث المطابق للـ SKU وإضافته فوراً للسلة.
+  /// • إذا اشترك أكثر من صنف في نفس الباركود (اعتماد الفصل بعد تعارض أوفلاين)، يعرض نافذة مصغرة فورية للكاشير لاختيار الصنف المقصود.
   /// • يدعم الترقيم السريع: `7` + Enter يضيف حبة واحدة، و `7*3` أو `7×3` يضيف 3 حبات.
   /// • يدعم الأرقام العربية/الفارسية تلقائياً عبر التطبيع.
   bool _handleQuickIndex(String raw, [List<Item>? itemsList]) {
@@ -2541,15 +2647,22 @@ class _PosScreenState extends ConsumerState<PosScreen>
         itemsList ?? (ref.read(itemsProvider).valueOrNull ?? const <Item>[]);
 
     // أولاً: فحص مطابقة باركود صنف (قارئات الباركود الخارجية USB / Bluetooth)
-    Item? barcodeHit;
+    final barcodeHits = <Item>[];
     for (final it in items) {
-      if (it.sku.trim().isNotEmpty &&
+      if (!it.isDeleted &&
+          it.sku.trim().isNotEmpty &&
           it.sku.trim().toLowerCase() == q.toLowerCase()) {
-        barcodeHit = it;
-        break;
+        barcodeHits.add(it);
       }
     }
-    if (barcodeHit != null) {
+    if (barcodeHits.length > 1) {
+      _searchCtrl.clear();
+      setState(() => _searchQuery = '');
+      unawaited(_showSharedBarcodePickerDialog(barcodeHits, barcode: q));
+      return true;
+    }
+    if (barcodeHits.length == 1) {
+      final barcodeHit = barcodeHits.first;
       _addItem(barcodeHit, quantity: 1);
       _searchCtrl.clear();
       setState(() => _searchQuery = '');
@@ -2570,14 +2683,26 @@ class _PosScreenState extends ConsumerState<PosScreen>
           ? (double.tryParse(m.group(2)!) ?? 1.0)
           : 1.0;
       if (idx != null && qty > 0) {
-        Item? hit;
+        final pluHits = <Item>[];
         for (final it in items) {
-          if (it.plu == idx) {
-            hit = it;
-            break;
+          if (!it.isDeleted && it.plu == idx) {
+            pluHits.add(it);
           }
         }
-        if (hit != null) {
+        if (pluHits.length > 1) {
+          _searchCtrl.clear();
+          setState(() => _searchQuery = '');
+          unawaited(
+            _showSharedBarcodePickerDialog(
+              pluHits,
+              barcode: '#$idx',
+              quantity: qty,
+            ),
+          );
+          return true;
+        }
+        if (pluHits.length == 1) {
+          final hit = pluHits.first;
           _addItem(hit, quantity: qty);
           _searchCtrl.clear();
           setState(() => _searchQuery = '');
