@@ -1,10 +1,10 @@
 {
-  "version": "3.98.41+356",
+  "version": "3.98.42+357",
   "minSupported": "3.13.0",
-  "sha256": "2a8bc8c48b7f538b3c961a7cb4b28ce93d2eaa95ff1a9254459ff1c6fd0f18ad",
+  "sha256": "31aec276357aca29b7c043ba06287aa60c06bf216eeca0d02ef84147553577e9",
   "sha256Variants": {
-    "arm64": "2a8bc8c48b7f538b3c961a7cb4b28ce93d2eaa95ff1a9254459ff1c6fd0f18ad",
-    "armv7": "093db17e33608044e6be7440407660ad95783d17c7f79c6b1dd346ad6f496488"
+    "arm64": "31aec276357aca29b7c043ba06287aa60c06bf216eeca0d02ef84147553577e9",
+    "armv7": "d2824ec85218c4aa1f1ae61f591e59db0a1b7a6130de1bf197880a2669c9341e"
   },
   "releaseUrl": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/tag/latest",
   "download_url": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/Almohaseb-Plus-arm64.apk",
@@ -17,12 +17,12 @@
     "windows": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/NexoraSetup.exe"
   },
   "downloadsMirror": {
-    "android": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.41-356/Almohaseb-Plus-arm64.apk",
+    "android": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.42-357/Almohaseb-Plus-arm64.apk",
     "androidVariants": {
-      "arm64": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.41-356/Almohaseb-Plus-arm64.apk",
-      "armv7": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.41-356/nexora-armv7.apk"
+      "arm64": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.42-357/Almohaseb-Plus-arm64.apk",
+      "armv7": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.42-357/nexora-armv7.apk"
     },
-    "windows": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.41-356/NexoraSetup.exe"
+    "windows": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.42-357/NexoraSetup.exe"
   },
   "downloadsFallbackGithub": {
     "android": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/Almohaseb-Plus-arm64.apk",
@@ -32,6 +32,6 @@
     },
     "windows": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/NexoraSetup.exe"
   },
-  "publishedAt": "2026-11-10T16:42:00Z",
-  "notes": "• المخزون ونقطة البيع: دعم الفئات الفرعية متعددة المستويات (شجرة مفتوحة العمق) والغوص الشجري غير المحدود عبر شريط الفلاتر والمسار التفاعلي.\n• التصفية ورأس المال: جلب الأصناف وحساب إجمالي التكلفة وقيمة البيع تكرارياً لتشمل الفئة المختارة وجميع فروعها الأحفاد بأي عمق.\n• إدارة الفئات والأصناف: عرض المسار الشجري الكامل للفئات في قوائم إضافة وتعديل ونقل الأصناف وإنشاء الفروع تحت الفئة المختارة مباشرةً."
+  "publishedAt": "2026-11-10T18:39:33Z",
+  "notes": "• حسابات العملاء: تفعيل قائمة خيارات وإجراءات كل عملية داخل كشف الحساب (عرض التفاصيل والفاتورة، تعديل، مشاركة وطباعة السند، حذف) مع التحديث الفوري للرصيد.\n• واجهة تفاصيل العميل: إصلاح الهوامش وارتفاع السطر لاسم العميل في ترويسة البطاقة العلوية ليظهر كاملاً وبوضوح دون اقتطاع.\n• المخزون ونقطة البيع: دعم الفئات الفرعية متعددة المستويات (شجرة مفتوحة العمق) وحساب رأس المال وقيمة البيع تكرارياً لجميع الفروع."
 }
