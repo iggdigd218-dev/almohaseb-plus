@@ -81,7 +81,7 @@ void main() {
         'id': 101,
         'workspace_id': 'ws-1',
         'name': 'العميل الأول',
-        'type': 'customer',
+        'kind': 'customer',
         'created_at': now,
         'updated_at': now,
       });
@@ -89,7 +89,7 @@ void main() {
         'id': 102,
         'workspace_id': 'ws-1',
         'name': 'العميل الثاني',
-        'type': 'customer',
+        'kind': 'customer',
         'created_at': now,
         'updated_at': now,
       });
