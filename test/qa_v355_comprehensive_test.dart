@@ -21,12 +21,13 @@ void main() {
 
   group('V355-01 تحديث إجمالي رأس المال وقيمة البيع ديناميكياً حسب الفلتر', () {
     test('حساب رأس المال وقيمة البيع على القائمة المصفاة فقط', () {
+      final now = DateTime.now();
       final allItems = [
-        Item(id: 1, name: 'صنف 1', buyPrice: 100, sellPrice: 150, quantity: 10, categoryId: 1, sectionId: 1),
-        Item(id: 2, name: 'صنف 2', buyPrice: 200, sellPrice: 300, quantity: 5, categoryId: 2, sectionId: 1),
-        Item(id: 3, name: 'صنف 3', buyPrice: 50, sellPrice: 80, quantity: 20, categoryId: 3, sectionId: 2),
-        Item(id: 4, name: 'صنف رصيده صفر', buyPrice: 100, sellPrice: 150, quantity: 0, categoryId: 1, sectionId: 1),
-        Item(id: 5, name: 'صنف رصيده سالب', buyPrice: 100, sellPrice: 150, quantity: -2, categoryId: 1, sectionId: 1),
+        Item(id: 1, name: 'صنف 1', buyPrice: 100, sellPrice: 150, quantity: 10, categoryId: 1, sectionId: 1, createdAt: now, updatedAt: now),
+        Item(id: 2, name: 'صنف 2', buyPrice: 200, sellPrice: 300, quantity: 5, categoryId: 2, sectionId: 1, createdAt: now, updatedAt: now),
+        Item(id: 3, name: 'صنف 3', buyPrice: 50, sellPrice: 80, quantity: 20, categoryId: 3, sectionId: 2, createdAt: now, updatedAt: now),
+        Item(id: 4, name: 'صنف رصيده صفر', buyPrice: 100, sellPrice: 150, quantity: 0, categoryId: 1, sectionId: 1, createdAt: now, updatedAt: now),
+        Item(id: 5, name: 'صنف رصيده سالب', buyPrice: 100, sellPrice: 150, quantity: -2, categoryId: 1, sectionId: 1, createdAt: now, updatedAt: now),
       ];
 
       // حساب الإجمالي الكلي (الأصناف ذات الكمية الموجبة فقط):
@@ -158,6 +159,7 @@ void main() {
         'profile.owner_name': 'منير قايد',
         'sync.deviceName': 'جهاز الإدارة',
       };
+      final now = DateTime.now();
       final receiptData = ReceiptData.fromTx(
         tx: Tx(
           id: 1,
@@ -165,7 +167,9 @@ void main() {
           type: OpType.debit,
           amount: 1000,
           currency: 'YER',
-          date: DateTime.now(),
+          date: now,
+          createdAt: now,
+          updatedAt: now,
           cashierName: 'فخامة المدير 🫡 (I)',
         ),
         account: Account(id: 1, name: 'عميل 1', type: 'customer'),

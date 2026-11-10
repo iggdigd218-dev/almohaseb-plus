@@ -771,11 +771,11 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
                       Expanded(
                         child: Text(
                           _subId != null
-                              ? 'فئة فرعية: ${_badgeOf(visible.firstOrNull ?? Item(id: 0, name: '', buyPrice: 0, sellPrice: 0, quantity: 0, categoryId: _subId), roots, sections)}'
+                              ? 'فئة فرعية: ${roots.expand((r) => r.children).firstWhere((c) => c.id == _subId, orElse: () => roots.firstWhere((r) => r.id == _subId, orElse: () => const ItemCategory(name: 'فئة فرعية'))).name}'
                               : _rootId != null
-                                  ? 'فئة: ${roots.firstWhere((r) => r.id == _rootId, orElse: () => ItemCategory(id: _rootId, name: 'فئة')).name}'
+                                  ? 'فئة: ${roots.firstWhere((r) => r.id == _rootId, orElse: () => const ItemCategory(name: 'فئة')).name}'
                                   : _sectionId != null
-                                      ? 'قسم: ${_sectionId == kGeneralSectionId ? 'عام' : sections.firstWhere((s) => s.id == _sectionId, orElse: () => Section(id: _sectionId, name: 'قسم')).name}'
+                                      ? 'قسم: ${_sectionId == kGeneralSectionId ? 'عام' : sections.firstWhere((s) => s.id == _sectionId, orElse: () => const Section(name: 'قسم')).name}'
                                       : '${sections.length} قسم · ${roots.length} فئة',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
