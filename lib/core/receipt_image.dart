@@ -63,23 +63,29 @@ class ReceiptData {
     String cashierName,
     Map<String, String> settings,
   ) {
-    final c = cashierName.trim();
+    // 1) تنظيف الاسم المخزن من أي لاحقة قديمة مثل (I) أو (A)
+    var c = cashierName.trim().replaceAll(RegExp(r'\s*\([A-Za-z0-9]\)\s*$'), '').trim();
+
+    final ownerName = (settings['profile.owner_name'] ?? '').trim();
     final devName = (settings['sync.deviceName'] ?? '').trim();
-    final rawDevId = (settings['sync.deviceId'] ?? '').trim();
-    final devCode = Fmt.singleLetterDevicePrefix(
-      rawDevId,
-      configuredPrefix: settings['devicePrefix'],
-    );
-    if (c.isNotEmpty && devCode.isNotEmpty && !c.contains('($devCode)')) {
-      return '$c ($devCode)';
+    final accountName = (settings['account.name'] ?? '').trim();
+
+    // 2) إذا كان الاسم المخزن مكاناً شاغراً أو اسم جهاز قديم غير مخصص، نستبدله بالاسم الموحد المعتمد
+    if (c.isEmpty || isPlaceholderDeviceName(c) || c.contains('المدير') || c.contains('المحاسب')) {
+      if (ownerName.isNotEmpty && isCustomDeviceName(ownerName)) {
+        c = ownerName;
+      } else if (devName.isNotEmpty && isCustomDeviceName(devName)) {
+        c = devName;
+      } else if (accountName.isNotEmpty && isCustomDeviceName(accountName)) {
+        c = accountName;
+      } else if (ownerName.isNotEmpty) {
+        c = ownerName;
+      } else if (devName.isNotEmpty) {
+        c = devName;
+      }
     }
+
     if (c.isNotEmpty) return c;
-    if (devName.isNotEmpty) {
-      return devCode.isNotEmpty && !devName.contains('($devCode)')
-          ? '$devName ($devCode)'
-          : devName;
-    }
-    if (devCode.isNotEmpty) return 'الموظف ($devCode)';
     return 'الموظف';
   }
 

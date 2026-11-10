@@ -66,8 +66,20 @@ String resolveOwnerDisplayName({
   String? deviceName,
   String? userName,
 }) {
-  for (final candidate in [profileOwnerName, accountName, deviceName, userName]) {
+  // 1) الاسم الصريح المحفوظ للمالك أولاً (من ✎ أو شاشة الملف الشخصي)
+  if (profileOwnerName != null && profileOwnerName.trim().isNotEmpty) {
+    final explicit = profileOwnerName.trim();
+    if (!kPlaceholderDeviceNames.contains(explicit)) return explicit;
+  }
+  // 2) اسم جهاز المالك أو اسم المستخدم المخصص
+  for (final candidate in [deviceName, userName]) {
     if (isCustomDeviceName(candidate)) return candidate!.trim();
+  }
+  // 3) اسم حساب السحابة / Google
+  if (isCustomDeviceName(accountName)) return accountName!.trim();
+  // 4) إن لم يوجد سوى الاسم المحفوظ (حتى لو كان من الأسماء الافتراضية كـ المدير)
+  if (profileOwnerName != null && profileOwnerName.trim().isNotEmpty) {
+    return profileOwnerName.trim();
   }
   return 'المدير';
 }

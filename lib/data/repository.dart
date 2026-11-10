@@ -1669,6 +1669,79 @@ class Repo {
         .toList();
   }
 
+  /// (3.98.40 / الملاحظة 2) جلب اقتراحات البيان/الوصف للعمليات:
+  /// تبدأ بالبحث بمطابقة البادئة أو الجزئية لما يكتبه المستخدم مع إعطاء
+  /// الأولوية للبيانات السابقة لنفس الحساب المحدد ثم الأكثر تكراراً واستخداماً.
+  Future<List<String>> transactionDescriptionSuggestions({
+    String query = '',
+    int? accountId,
+    int limit = 8,
+  }) async {
+    final db = await _db;
+    final q = query.trim();
+    final result = <String>[];
+    final seen = <String>{};
+
+    void addUnique(String val) {
+      final clean = val.trim();
+      if (clean.length >= 2 && !seen.contains(clean)) {
+        seen.add(clean);
+        result.add(clean);
+      }
+    }
+
+    // 1) الاقتراحات السابقة لنفس الحساب أولاً
+    if (accountId != null && accountId > 0) {
+      final whereParts = <String>[
+        "(account_id = ? OR from_id = ? OR to_id = ?)",
+        "COALESCE(deleted_at, '') = ''",
+        "TRIM(COALESCE(description, '')) <> ''",
+      ];
+      final args = <dynamic>[accountId, accountId, accountId];
+      if (q.isNotEmpty) {
+        whereParts.add("description LIKE ?");
+        args.add('%$q%');
+      }
+      final rows = await db.rawQuery('''
+        SELECT description, COUNT(*) as cnt
+        FROM transactions
+        WHERE ${whereParts.join(' AND ')}
+        GROUP BY description
+        ORDER BY cnt DESC, MAX(id) DESC
+        LIMIT ?
+      ''', [...args, limit]);
+      for (final r in rows) {
+        addUnique('${r['description'] ?? ''}');
+        if (result.length >= limit) return result;
+      }
+    }
+
+    // 2) الاقتراحات العامة لبقية العمليات (الأكثر تكراراً)
+    final wherePartsGen = <String>[
+      "COALESCE(deleted_at, '') = ''",
+      "TRIM(COALESCE(description, '')) <> ''",
+    ];
+    final argsGen = <dynamic>[];
+    if (q.isNotEmpty) {
+      wherePartsGen.add("description LIKE ?");
+      argsGen.add('%$q%');
+    }
+    final rowsGen = await db.rawQuery('''
+      SELECT description, COUNT(*) as cnt
+      FROM transactions
+      WHERE ${wherePartsGen.join(' AND ')}
+      GROUP BY description
+      ORDER BY cnt DESC, MAX(id) DESC
+      LIMIT ?
+    ''', [...argsGen, limit * 2]);
+    for (final r in rowsGen) {
+      addUnique('${r['description'] ?? ''}');
+      if (result.length >= limit) break;
+    }
+
+    return result;
+  }
+
   Future<void> updateTxImage(int id, String path) async {
     await _ensureCan('edit_tx');
     final db = await _db;

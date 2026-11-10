@@ -518,7 +518,7 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
     var totalCostValue = 0.0;
     var totalSellingValue = 0.0;
     if (canSeeValuation) {
-      for (final it in items) {
+      for (final it in visible) {
         if (it.quantity > 0) {
           totalCostValue += it.quantity * it.buyPrice;
           totalSellingValue += it.quantity * it.sellPrice;
@@ -770,7 +770,13 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
                       const SizedBox(width: 6),
                       Expanded(
                         child: Text(
-                          '${sections.length} قسم · ${roots.length} فئة',
+                          _subId != null
+                              ? 'فئة فرعية: ${_badgeOf(visible.firstOrNull ?? Item(id: 0, name: '', buyPrice: 0, sellPrice: 0, quantity: 0, categoryId: _subId), roots, sections)}'
+                              : _rootId != null
+                                  ? 'فئة: ${roots.firstWhere((r) => r.id == _rootId, orElse: () => ItemCategory(id: _rootId, name: 'فئة')).name}'
+                                  : _sectionId != null
+                                      ? 'قسم: ${_sectionId == kGeneralSectionId ? 'عام' : sections.firstWhere((s) => s.id == _sectionId, orElse: () => Section(id: _sectionId, name: 'قسم')).name}'
+                                      : '${sections.length} قسم · ${roots.length} فئة',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           textAlign: TextAlign.end,

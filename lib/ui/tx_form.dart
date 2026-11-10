@@ -95,10 +95,47 @@ class _TxFormState extends ConsumerState<TxForm> {
   /// مسار الصورة المرفقة بالعملية (اختياري).
   String _image = '';
 
+  /// (3.98.40 / الملاحظة 2) الاقتراحات الذكية التلقائية لحقل البيان / الوصف
+  List<String> _descSuggestions = [];
+  bool _fetchingDescSuggestions = false;
+
   @override
   void initState() {
     super.initState();
+    _desc.addListener(_onDescChanged);
     _load();
+  }
+
+  void _onDescChanged() {
+    _fetchDescSuggestions();
+  }
+
+  Future<void> _fetchDescSuggestions() async {
+    final text = _desc.text.trim();
+    if (text.isEmpty) {
+      if (_descSuggestions.isNotEmpty && mounted) {
+        setState(() => _descSuggestions = []);
+      }
+      return;
+    }
+    if (_fetchingDescSuggestions) return;
+    _fetchingDescSuggestions = true;
+    try {
+      final repo = ref.read(repoProvider);
+      final suggestions = await repo.transactionDescriptionSuggestions(
+        query: text,
+        accountId: _accountId,
+        limit: 6,
+      );
+      if (mounted) {
+        setState(() {
+          _descSuggestions = suggestions.where((s) => s != text).toList();
+        });
+      }
+    } catch (_) {
+    } finally {
+      _fetchingDescSuggestions = false;
+    }
   }
 
   Future<void> _load() async {
@@ -174,6 +211,7 @@ class _TxFormState extends ConsumerState<TxForm> {
 
   @override
   void dispose() {
+    _desc.removeListener(_onDescChanged);
     _amount.dispose();
     _rate.dispose();
     _desc.dispose();
@@ -967,97 +1005,157 @@ class _TxFormState extends ConsumerState<TxForm> {
     );
   }
 
-  /// الصف الرابع: حقل «البيان / الوصف» وبداخله في طرفه الأيسر أيقونة الكاميرا/المعرض لإرفاق صورة.
+  /// الصف الرابع: حقل «البيان / الوصف» وبداخله في طرفه الأيسر أيقونة الكاميرا/المعرض لإرفاق صورة
+  /// مع شريط اقتراحات ذكي وسريع مدمج من العمليات السابقة.
   Widget _descriptionWithImageField() {
     final hasImage = _image.isNotEmpty && File(_image).existsSync();
-    return TextFormField(
-      controller: _desc,
-      style: const TextStyle(fontSize: 13.5),
-      decoration: InputDecoration(
-        isDense: true,
-        labelText: 'البيان / الوصف',
-        hintText: 'وصف مختصر (اختياري)',
-        contentPadding: const EdgeInsets.symmetric(
-          horizontal: 10,
-          vertical: 10,
-        ),
-        suffixIconConstraints: const BoxConstraints(minWidth: 36, minHeight: 34),
-        suffixIcon: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            if (hasImage) ...[
-              ClipRRect(
-                borderRadius: BorderRadius.circular(5),
-                child: Image.file(
-                  File(_image),
-                  width: 24,
-                  height: 24,
-                  fit: BoxFit.cover,
-                  cacheWidth: crispCacheWidth(context, 24),
-                  filterQuality: FilterQuality.medium,
-                ),
-              ),
-              IconButton(
-                tooltip: 'إزالة الصورة',
-                visualDensity: VisualDensity.compact,
-                padding: EdgeInsets.zero,
-                constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
-                icon: Icon(
-                  Icons.close_rounded,
-                  size: 16,
-                  color: AppColors.dangerOf(context),
-                ),
-                onPressed: () => setState(() => _image = ''),
-              ),
-            ],
-            PopupMenuButton<String>(
-              tooltip: 'إرفاق صورة',
-              onSelected: (v) {
-                if (v == 'camera') {
-                  _captureImage();
-                } else if (v == 'gallery') {
-                  _pickImage();
-                }
-              },
-              itemBuilder: (_) => const [
-                PopupMenuItem<String>(
-                  value: 'camera',
-                  height: 36,
-                  child: Row(
-                    children: [
-                      Icon(Icons.photo_camera_outlined, size: 18),
-                      SizedBox(width: 8),
-                      Text('التقاط بالكاميرا', style: TextStyle(fontSize: 13)),
-                    ],
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        TextFormField(
+          controller: _desc,
+          style: const TextStyle(fontSize: 13.5),
+          decoration: InputDecoration(
+            isDense: true,
+            labelText: 'البيان / الوصف',
+            hintText: 'وصف مختصر (اختياري)',
+            contentPadding: const EdgeInsets.symmetric(
+              horizontal: 10,
+              vertical: 10,
+            ),
+            suffixIconConstraints: const BoxConstraints(minWidth: 36, minHeight: 34),
+            suffixIcon: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                if (hasImage) ...[
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(5),
+                    child: Image.file(
+                      File(_image),
+                      width: 24,
+                      height: 24,
+                      fit: BoxFit.cover,
+                      cacheWidth: crispCacheWidth(context, 24),
+                      filterQuality: FilterQuality.medium,
+                    ),
                   ),
-                ),
-                PopupMenuItem<String>(
-                  value: 'gallery',
-                  height: 36,
-                  child: Row(
-                    children: [
-                      Icon(Icons.photo_library_outlined, size: 18),
-                      SizedBox(width: 8),
-                      Text('اختيار من المعرض', style: TextStyle(fontSize: 13)),
-                    ],
+                  IconButton(
+                    tooltip: 'إزالة الصورة',
+                    visualDensity: VisualDensity.compact,
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(minWidth: 26, minHeight: 26),
+                    icon: Icon(
+                      Icons.close_rounded,
+                      size: 16,
+                      color: AppColors.dangerOf(context),
+                    ),
+                    onPressed: () => setState(() => _image = ''),
+                  ),
+                ],
+                PopupMenuButton<String>(
+                  tooltip: 'إرفاق صورة',
+                  onSelected: (v) {
+                    if (v == 'camera') {
+                      _captureImage();
+                    } else if (v == 'gallery') {
+                      _pickImage();
+                    }
+                  },
+                  itemBuilder: (_) => const [
+                    PopupMenuItem<String>(
+                      value: 'camera',
+                      height: 36,
+                      child: Row(
+                        children: [
+                          Icon(Icons.photo_camera_outlined, size: 18),
+                          SizedBox(width: 8),
+                          Text('التقاط بالكاميرا', style: TextStyle(fontSize: 13)),
+                        ],
+                      ),
+                    ),
+                    PopupMenuItem<String>(
+                      value: 'gallery',
+                      height: 36,
+                      child: Row(
+                        children: [
+                          Icon(Icons.photo_library_outlined, size: 18),
+                          SizedBox(width: 8),
+                          Text('اختيار من المعرض', style: TextStyle(fontSize: 13)),
+                        ],
+                      ),
+                    ),
+                  ],
+                  child: Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 8),
+                    child: Icon(
+                      hasImage
+                          ? Icons.photo_camera_back_rounded
+                          : Icons.camera_alt_outlined,
+                      size: 19,
+                      color: AppColors.primaryOf(context),
+                    ),
                   ),
                 ),
               ],
-              child: Padding(
-                padding: const EdgeInsets.symmetric(horizontal: 8),
-                child: Icon(
-                  hasImage
-                      ? Icons.photo_camera_back_rounded
-                      : Icons.camera_alt_outlined,
-                  size: 19,
-                  color: AppColors.primaryOf(context),
-                ),
-              ),
             ),
-          ],
+          ),
+          textInputAction: TextInputAction.done,
         ),
-      ),
-      textInputAction: TextInputAction.done,
+        if (_descSuggestions.isNotEmpty) ...[
+          const SizedBox(height: 5),
+          SizedBox(
+            height: 27,
+            child: ListView.separated(
+              scrollDirection: Axis.horizontal,
+              itemCount: _descSuggestions.length,
+              separatorBuilder: (_, __) => const SizedBox(width: 5),
+              itemBuilder: (ctx, i) {
+                final s = _descSuggestions[i];
+                return InkWell(
+                  borderRadius: BorderRadius.circular(14),
+                  onTap: () {
+                    _desc.text = s;
+                    _desc.selection = TextSelection.fromPosition(
+                      TextPosition(offset: s.length),
+                    );
+                    setState(() => _descSuggestions = []);
+                  },
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 3),
+                    decoration: BoxDecoration(
+                      color: AppColors.surface2Of(context),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: AppColors.primaryOf(context).withValues(alpha: 0.3),
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          Icons.history_rounded,
+                          size: 13,
+                          color: AppColors.primaryOf(context),
+                        ),
+                        const SizedBox(width: 4),
+                        Text(
+                          s,
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w600,
+                            color: AppColors.textOf(context),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ],
     );
   }
 
