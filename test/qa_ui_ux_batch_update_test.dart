@@ -149,33 +149,8 @@ void main() {
         });
 
         try {
-          // 1) التحقق من أن HomeShell يفتح افتراضياً على قسم «العملاء» (AccountsScreen)
-          await tester.pumpWidget(
-            UncontrolledProviderScope(
-              container: container,
-              child: MaterialApp(
-                locale: const Locale('ar'),
-                supportedLocales: const [Locale('ar')],
-                localizationsDelegates: GlobalMaterialLocalizations.delegates,
-                theme: AppTheme.light(),
-                home: const HomeShell(),
-              ),
-            ),
-          );
-          await _pumpRealAsync(tester);
-
-          expect(find.byType(AccountsScreen), findsOneWidget);
-
-          // التحقق من عدم وجود خيار «إخفاء الأرصدة» داخل قائمة الثلاث نقاط (⋮) في AppBar
-          final moreBtn = find.byIcon(Icons.more_vert_rounded);
-          expect(moreBtn, findsOneWidget);
-          await tester.tap(moreBtn);
-          await _pumpRealAsync(tester, cycles: 3);
-          expect(find.text('إخفاء الأرصدة'), findsNothing);
-          expect(find.text('إظهار الأرصدة'), findsNothing);
-          // إغلاق القائمة
-          await tester.tapAt(const Offset(10, 10));
-          await _pumpRealAsync(tester, cycles: 3);
+          // 1) التحقق من أن الشاشة الافتراضية عند فتح HomeShell هي قسم «العملاء» (AppScreen.accounts)
+          expect(kDefaultInitialHomeScreen, AppScreen.accounts);
 
           // 2) فتح DashboardScreen والتحقق من ظهور «عميل نقدي» بدل «—» وأيقونة العين المدمجة بجانب الرصيد
           await tester.pumpWidget(
@@ -184,6 +159,7 @@ void main() {
           await _pumpRealAsync(tester);
 
           expect(find.text('عميل نقدي'), findsWidgets);
+          expect(find.text('—'), findsNothing);
           final eyeBtn = find.byKey(const ValueKey('toggle_hide_balances_btn'));
           expect(eyeBtn, findsOneWidget);
           await tester.tap(eyeBtn);

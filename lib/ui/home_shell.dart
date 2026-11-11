@@ -104,9 +104,12 @@ class HomeShell extends ConsumerStatefulWidget {
   ConsumerState<HomeShell> createState() => _HomeShellState();
 }
 
+/// التبويب الافتراضي عند فتح التطبيق (المتطلب 7-أ: قسم «العملاء»).
+const AppScreen kDefaultInitialHomeScreen = AppScreen.accounts;
+
 class _HomeShellState extends ConsumerState<HomeShell>
     with WidgetsBindingObserver {
-  AppScreen _screen = AppScreen.accounts;
+  AppScreen _screen = kDefaultInitialHomeScreen;
 
   // (المتطلب 7-أ) قسم «العملاء» (AppScreen.accounts) هو التبويب الافتراضي عند التشغيل.
 
@@ -1962,10 +1965,17 @@ class _HomeShellState extends ConsumerState<HomeShell>
                       PopupMenuItem(
                         value: 'refresh',
                         child: Row(
+                          mainAxisSize: MainAxisSize.min,
                           children: [
                             Icon(Icons.refresh_rounded, size: 19, color: Color(0xFF16A34A)),
                             SizedBox(width: 10),
-                            Text('تحديث والتحقق من الإصدار'),
+                            Flexible(
+                              child: Text(
+                                'تحديث والتحقق من الإصدار',
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
                           ],
                         ),
                       ),
