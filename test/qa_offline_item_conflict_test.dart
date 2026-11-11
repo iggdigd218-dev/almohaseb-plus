@@ -394,6 +394,8 @@ void main() {
         );
         await container.read(itemsProvider.future);
         await container.read(itemCategoryTreeProvider.future);
+        await container.read(sectionsProvider.future);
+        await container.read(settingsProvider.future);
         await container.read(pendingItemConflictsProvider.future);
       });
 
@@ -533,6 +535,7 @@ void main() {
         );
       } finally {
         await tester.pumpWidget(const SizedBox.shrink());
+        await tester.pump(const Duration(seconds: 10));
         engine.stop();
         container.dispose();
         await tester.runAsync(() async {
