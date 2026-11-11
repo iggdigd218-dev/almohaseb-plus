@@ -52,10 +52,14 @@ DateTime? safeParseNullableDateTime(Object? raw) {
       return null;
     }
 
+    final asNum = num.tryParse(s);
+    if (asNum != null && asNum >= 100000000) {
+      return _epochToDateTime(asNum);
+    }
+
     final direct = DateTime.tryParse(s);
     if (direct != null) return direct;
 
-    final asNum = num.tryParse(s);
     if (asNum != null) return _epochToDateTime(asNum);
 
     s = s.replaceFirstMapped(

@@ -411,7 +411,7 @@ void main() {
           'device_time': t1,
           'version': 1,
           'parent_op_id': '',
-          'sync_status': 'synced',
+          'synced': 1,
         });
 
         // الصنف المكرر #71: أُنشئ برصيد افتتاحي 8 ثم بيع منه 3 فصار رصيده الحالي 5 وصافي حركاته -3

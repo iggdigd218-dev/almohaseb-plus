@@ -2656,9 +2656,14 @@ class _PosScreenState extends ConsumerState<PosScreen>
       }
     }
     if (barcodeHits.length > 1) {
+      final displayBarcode = barcodeHits.first.sku.trim().isNotEmpty
+          ? barcodeHits.first.sku.trim()
+          : raw.trim();
       _searchCtrl.clear();
       setState(() => _searchQuery = '');
-      unawaited(_showSharedBarcodePickerDialog(barcodeHits, barcode: q));
+      unawaited(
+        _showSharedBarcodePickerDialog(barcodeHits, barcode: displayBarcode),
+      );
       return true;
     }
     if (barcodeHits.length == 1) {

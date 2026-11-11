@@ -107,14 +107,8 @@ jobs:
 
       - name: Run test shard
         run: |
-          set +e
+          set -o pipefail
           flutter test --reporter expanded \
             --dart-define=NEXORA_FIREBASE_API_KEY=${{ secrets.NEXORA_FIREBASE_API_KEY }} \
             --total-shards ${{ strategy.job-total }} \
-            --shard-index ${{ matrix.shard }} 2>&1 | tee /tmp/shard.log
-          CODE=${PIPESTATUS[0]}
-          if [ "$CODE" != "0" ]; then
-            ERR_SUMMARY=$(grep -E '(\[E\]|Expected:|Actual:|Exception|Error|failed)' /tmp/shard.log | tail -n 30 | tr '\n' ' | ')
-            echo "::error::SHARD_FAIL: $ERR_SUMMARY"
-            exit "$CODE"
-          fi
+            --shard-index ${{ matrix.shard }}
