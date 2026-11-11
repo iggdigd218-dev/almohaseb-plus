@@ -35,6 +35,7 @@ import 'sync/recorder.dart';
 import 'sync/snapshot_apply.dart';
 import 'sync/sync_diagnostics.dart';
 import 'sync/sync_queue.dart';
+import 'daily_harvest_service.dart';
 import 'sync/workspace_service.dart';
 import '../core/cloud_config.dart';
 
@@ -339,10 +340,14 @@ class Repo {
         return groupId;
       }
     } catch (_) {}
-    final id = await ensureWorkspace(db, repo: this);
-    await AppDatabase.ensureWorkspaceRow(db, id);
-    _workspaceId = id;
-    return id;
+    try {
+      final id = await ensureWorkspace(db, repo: this);
+      await AppDatabase.ensureWorkspaceRow(db, id);
+      _workspaceId = id;
+      return id;
+    } catch (_) {
+      return _workspaceId ?? 'default';
+    }
   }
 
   /// ══ (2026-09-22 — توجيه العمليات) ══
@@ -9692,8 +9697,138 @@ class Repo {
         return await deviceName(this);
       }
       return devId.length > 10 ? devId.substring(0, 10) : devId;
-    } catch (_) {
+    } catch (e) {
+      debugPrint('Repo.txCreatorDeviceName error: $e');
       return '';
     }
   }
+
+  /// استرجاع ملخص مختصر للأصناف المرتبطة بمجموعة عمليات (أول صنفين + «+N» للباقي).
+  Future<Map<int, String>> batchTxItemsSummary(Iterable<int> txIds) async {
+    final ids = txIds.where((id) => id > 0).toSet().toList();
+    if (ids.isEmpty) return const {};
+    final result = <int, String>{};
+    try {
+      final db = await _db;
+      final placeholders = List.filled(ids.length, '?').join(',');
+      final rows = await db.rawQuery(
+        'SELECT tx_id, name FROM transaction_items '
+        'WHERE tx_id IN ($placeholders) ORDER BY id ASC',
+        ids,
+      );
+      final grouped = <int, List<String>>{};
+      for (final r in rows) {
+        final txId = (r['tx_id'] as num?)?.toInt();
+        final name = '${r['name'] ?? ''}'.trim();
+        if (txId == null || name.isEmpty) continue;
+        grouped.putIfAbsent(txId, () => <String>[]).add(name);
+      }
+      for (final entry in grouped.entries) {
+        final names = entry.value;
+        if (names.isEmpty) continue;
+        if (names.length <= 2) {
+          result[entry.key] = names.join('، ');
+        } else {
+          final rest = names.length - 2;
+          result[entry.key] = '${names.take(2).join('، ')} +$rest';
+        }
+      }
+    } catch (e) {
+      debugPrint('Repo.batchTxItemsSummary error: $e');
+    }
+    return result;
+  }
+
+  /// استرجاع اسم الكاشير أو الجهاز المنفّذ لكل عملية ضمن القائمة دفعة واحدة.
+  Future<Map<int, String>> batchTxExecutors(List<Tx> txs) async {
+    if (txs.isEmpty) return const {};
+    final result = <int, String>{};
+    try {
+      final missingIds = <String>[];
+      for (final t in txs) {
+        final id = t.id;
+        if (id == null) continue;
+        final cashier = t.cashierName.trim();
+        if (cashier.isNotEmpty) {
+          result[id] = cashier;
+        } else {
+          missingIds.add('$id');
+        }
+      }
+      if (missingIds.isEmpty) return result;
+
+      final db = await _db;
+      final placeholders = List.filled(missingIds.length, '?').join(',');
+      final batch = await Future.wait<Object>([
+        db.query('devices', columns: ['id', 'name']),
+        deviceName(this),
+        db.rawQuery(
+          "SELECT entity_id, device_id FROM operations "
+          "WHERE entity_type = 'tx' AND entity_id IN ($placeholders) "
+          "ORDER BY timestamp ASC",
+          missingIds,
+        ),
+      ]);
+      final devRows = batch[0] as List<Map<String, Object?>>;
+      final myDevName = (batch[1] as String).trim();
+      final opRows = batch[2] as List<Map<String, Object?>>;
+
+      final devNameById = <String, String>{};
+      for (final r in devRows) {
+        final id = '${r['id'] ?? ''}'.trim();
+        final name = '${r['name'] ?? ''}'.trim();
+        if (id.isNotEmpty && name.isNotEmpty) {
+          devNameById[id] = name;
+        }
+      }
+      for (final r in opRows) {
+        final txId = int.tryParse('${r['entity_id'] ?? ''}');
+        if (txId == null || result.containsKey(txId)) continue;
+        final devId = '${r['device_id'] ?? ''}'.trim();
+        if (devId.isEmpty) continue;
+        final resolved = devNameById[devId] ??
+            (devId == _deviceId && myDevName.isNotEmpty
+                ? myDevName
+                : (devId.length > 10 ? devId.substring(0, 10) : devId));
+        if (resolved.isNotEmpty) {
+          result[txId] = resolved;
+        }
+      }
+
+      for (final t in txs) {
+        final id = t.id;
+        if (id == null) continue;
+        if ((result[id] ?? '').trim().isEmpty && myDevName.isNotEmpty) {
+          result[id] = myDevName;
+        }
+      }
+    } catch (e) {
+      debugPrint('Repo.batchTxExecutors error: $e');
+    }
+    return result;
+  }
+
+  /// تقييم ملخص الحصاد اليومي الذكي للمبيعات حسب صلاحية الجهاز (مدير / عضو).
+  Future<DailyHarvestSummary> evaluateDailyHarvest({
+    DateTime? date,
+    bool? isManagerOverride,
+  }) =>
+      DailyHarvestService.evaluate(
+        this,
+        date: date,
+        isManagerOverride: isManagerOverride,
+      );
+
+  /// فحص وإصدار إشعار الحصاد اليومي الذكي إذا لم يُعرض بعد لهذا اليوم.
+  Future<DailyHarvestSummary?> checkAndEmitDailyHarvest({
+    DateTime? date,
+    bool force = false,
+    bool? isManagerOverride,
+  }) =>
+      DailyHarvestService.checkAndNotify(
+        this,
+        date: date,
+        force: force,
+        isManagerOverride: isManagerOverride,
+      );
 }
