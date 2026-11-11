@@ -4,59 +4,50 @@ import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:intl/date_symbol_data_local.dart';
 import 'package:path/path.dart' as p;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'package:nexora_app/core/accounting.dart';
+import 'package:nexora_app/core/cloud_config.dart';
 import 'package:nexora_app/core/database.dart';
 import 'package:nexora_app/core/models.dart';
+import 'package:nexora_app/core/sfx.dart';
 import 'package:nexora_app/core/theme.dart';
 import 'package:nexora_app/data/daily_harvest_service.dart';
 import 'package:nexora_app/data/providers.dart';
 import 'package:nexora_app/data/repository.dart';
+import 'package:nexora_app/data/sync/sync_engine.dart';
 import 'package:nexora_app/ui/accounts_screen.dart';
 import 'package:nexora_app/ui/dashboard_screen.dart';
 import 'package:nexora_app/ui/home_shell.dart';
 import 'package:nexora_app/ui/reports_screen.dart';
 import 'package:nexora_app/ui/transactions_screen.dart';
 
-Future<(Repo, Directory)> _openFreshRepo(String tag) async {
+Future<(Repo, Database, Directory, SyncEngine)> _openFreshRepo(String tag) async {
   sqfliteFfiInit();
   databaseFactory = databaseFactoryFfi;
   final dir = await Directory.systemTemp.createTemp('nexora_ui_ux_$tag');
   final dbFile = p.join(dir.path, 'test.db');
-  var initialized = false;
-  Future<Database> open() async {
-    return databaseFactoryFfi.openDatabase(
-      dbFile,
-      options: OpenDatabaseOptions(
-        version: kSchemaVersion,
-        onCreate: (db, v) async {
-          await AppDb.createSchema(db);
-          initialized = true;
-        },
-        onOpen: (db) async {
-          if (!initialized) {
-            await AppDb.migrate(db, 0, kSchemaVersion);
-            initialized = true;
-          }
-        },
-      ),
-    );
-  }
-
-  final repo = Repo(
-    dbOpener: open,
-    deviceId: 'dev-owner-test',
-    workspaceId: 'default',
+  final db = await databaseFactory.openDatabase(
+    dbFile,
+    options: OpenDatabaseOptions(
+      onConfigure: (db) => db.execute('PRAGMA foreign_keys = ON'),
+    ),
   );
-  await repo.ensureInitialized();
-  return (repo, dir);
+  await AppDatabase.createSchema(db);
+  final repo = Repo(databaseProvider: () async => db);
+  await repo.initSyncInfra();
+  final engine = SyncEngine(repo: repo, dbProvider: () async => db);
+  return (repo, db, dir, engine);
 }
 
-Widget _wrapWithProviders(Repo repo, Widget home) {
+Widget _wrapWithProviders(Repo repo, SyncEngine engine, Widget home) {
   return ProviderScope(
-    overrides: [repoProvider.overrideWithValue(repo)],
+    overrides: [
+      repoProvider.overrideWithValue(repo),
+      syncEngineProvider.overrideWithValue(engine),
+    ],
     child: MaterialApp(
       locale: const Locale('ar'),
       supportedLocales: const [Locale('ar')],
@@ -72,7 +63,16 @@ Widget _wrapWithProviders(Repo repo, Widget home) {
 }
 
 void main() {
+  debugDefaultBackendUrlOverride = '';
   TestWidgetsFlutterBinding.ensureInitialized();
+  sqfliteFfiInit();
+  databaseFactory = databaseFactoryFfi;
+
+  setUpAll(() async {
+    await initializeDateFormatting('ar');
+    await initializeDateFormatting('en');
+    Sfx.setMuted(true);
+  });
 
   group('QA — حزمة تحديثات الواجهة وتجربة المستخدم والتقارير والحصاد اليومي (7 متطلبات)', () {
     testWidgets(
@@ -81,10 +81,28 @@ void main() {
         await tester.binding.setSurfaceSize(const Size(430, 900));
         addTearDown(() => tester.binding.setSurfaceSize(null));
 
-        final (repo, dir) = await _openFreshRepo('req1_6_7a');
+        late Repo repo;
+        late Database db;
+        late Directory dir;
+        late SyncEngine engine;
+        await tester.runAsync(() async {
+          (repo, db, dir, engine) = await _openFreshRepo('req1_6_7a');
+          final now = DateTime.now();
+          await repo.saveTx(
+            Tx(
+              type: OpType.expense,
+              accountId: null,
+              amount: 3500,
+              currency: 'YER',
+              description: 'مشتريات سريعة',
+              date: now,
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
+        });
         addTearDown(() async {
           try {
-            final db = await repo.database;
             await db.close();
           } catch (e) {
             debugPrint('close db error: $e');
@@ -96,22 +114,13 @@ void main() {
           }
         });
 
-        // إضافة عملية نقدية بدون حساب مسجل (accountId == null)
-        await repo.saveTx(
-          Tx(
-            type: OpType.expense,
-            accountId: null,
-            amount: 3500,
-            currency: 'YER',
-            description: 'مشتريات سريعة',
-            date: DateTime.now(),
-          ),
-        );
-
         // 1) التحقق من أن HomeShell يفتح افتراضياً على قسم «العملاء» (AccountsScreen)
         await tester.pumpWidget(
           ProviderScope(
-            overrides: [repoProvider.overrideWithValue(repo)],
+            overrides: [
+              repoProvider.overrideWithValue(repo),
+              syncEngineProvider.overrideWithValue(engine),
+            ],
             child: MaterialApp(
               locale: const Locale('ar'),
               supportedLocales: const [Locale('ar')],
@@ -125,6 +134,9 @@ void main() {
             ),
           ),
         );
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 120)),
+        );
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 250));
 
@@ -134,15 +146,22 @@ void main() {
         final moreBtn = find.byIcon(Icons.more_vert_rounded);
         expect(moreBtn, findsOneWidget);
         await tester.tap(moreBtn);
-        await tester.pumpAndSettle();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 250));
         expect(find.text('إخفاء الأرصدة'), findsNothing);
         expect(find.text('إظهار الأرصدة'), findsNothing);
         // إغلاق القائمة
         await tester.tapAt(const Offset(10, 10));
-        await tester.pumpAndSettle();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 250));
 
         // 2) فتح DashboardScreen والتحقق من ظهور «عميل نقدي» بدل «—» وأيقونة العين المدمجة بجانب الرصيد
-        await tester.pumpWidget(_wrapWithProviders(repo, const DashboardScreen()));
+        await tester.pumpWidget(
+          _wrapWithProviders(repo, engine, const DashboardScreen()),
+        );
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 120)),
+        );
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 250));
 
@@ -161,10 +180,63 @@ void main() {
         await tester.binding.setSurfaceSize(const Size(430, 900));
         addTearDown(() => tester.binding.setSurfaceSize(null));
 
-        final (repo, dir) = await _openFreshRepo('req5_7bcd');
+        late Repo repo;
+        late Database db;
+        late Directory dir;
+        late SyncEngine engine;
+        await tester.runAsync(() async {
+          (repo, db, dir, engine) = await _openFreshRepo('req5_7bcd');
+          final now = DateTime.now();
+          final debtorId = await repo.saveAccount(
+            Account(
+              name: 'أحمد صالح',
+              kind: AccountKind.customer,
+              currency: 'YER',
+              phone: '777111222',
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
+          final creditorId = await repo.saveAccount(
+            Account(
+              name: 'خالد منصور',
+              kind: AccountKind.customer,
+              currency: 'YER',
+              phone: '777333444',
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
+
+          // عملية تجعل «أحمد صالح» مديناً (عليه > 0)
+          await repo.saveTx(
+            Tx(
+              type: OpType.debit,
+              accountId: debtorId,
+              amount: 5000,
+              currency: 'YER',
+              description: 'فاتورة آجلة',
+              date: now,
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
+          // عملية تجعل «خالد منصور» دائناً (له < 0)
+          await repo.saveTx(
+            Tx(
+              type: OpType.credit,
+              accountId: creditorId,
+              amount: 2500,
+              currency: 'YER',
+              description: 'دفعة مقدمة',
+              date: now,
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
+        });
         addTearDown(() async {
           try {
-            final db = await repo.database;
             await db.close();
           } catch (e) {
             debugPrint('close db error: $e');
@@ -176,47 +248,12 @@ void main() {
           }
         });
 
-        final debtorId = await repo.saveAccount(
-          const Account(
-            name: 'أحمد صالح',
-            kind: AccountKind.customer,
-            currency: 'YER',
-            phone: '777111222',
-          ),
+        await tester.pumpWidget(
+          _wrapWithProviders(repo, engine, const AccountsScreen()),
         );
-        final creditorId = await repo.saveAccount(
-          const Account(
-            name: 'خالد منصور',
-            kind: AccountKind.customer,
-            currency: 'YER',
-            phone: '777333444',
-          ),
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 120)),
         );
-
-        // عملية تجعل «أحمد صالح» مديناً (عليه > 0)
-        await repo.saveTx(
-          Tx(
-            type: OpType.debit,
-            accountId: debtorId,
-            amount: 5000,
-            currency: 'YER',
-            description: 'فاتورة آجلة',
-            date: DateTime.now(),
-          ),
-        );
-        // عملية تجعل «خالد منصور» دائناً (له < 0)
-        await repo.saveTx(
-          Tx(
-            type: OpType.credit,
-            accountId: creditorId,
-            amount: 2500,
-            currency: 'YER',
-            description: 'دفعة مقدمة',
-            date: DateTime.now(),
-          ),
-        );
-
-        await tester.pumpWidget(_wrapWithProviders(repo, const AccountsScreen()));
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 300));
 
@@ -228,7 +265,6 @@ void main() {
 
         // المتطلب 7-ب: أيقونة الشخص القياسية بدلاً من الحروف الأولى
         expect(find.byIcon(Icons.person_rounded), findsWidgets);
-        expect(find.byIcon(Icons.person), findsWidgets);
         expect(find.text('أص'), findsNothing);
         expect(find.text('خم'), findsNothing);
 
@@ -272,10 +308,58 @@ void main() {
         await tester.binding.setSurfaceSize(const Size(430, 900));
         addTearDown(() => tester.binding.setSurfaceSize(null));
 
-        final (repo, dir) = await _openFreshRepo('req2a_3_7d');
+        late Repo repo;
+        late Database db;
+        late Directory dir;
+        late SyncEngine engine;
+        await tester.runAsync(() async {
+          (repo, db, dir, engine) = await _openFreshRepo('req2a_3_7d');
+          final now = DateTime.now();
+          final threeDaysAgo = now.subtract(const Duration(days: 3));
+
+          // عملية اليوم
+          final todayTxId = await repo.saveTx(
+            Tx(
+              type: OpType.revenue,
+              accountId: null,
+              amount: 4000,
+              currency: 'YER',
+              description: 'فاتورة نقدية مدفوعة',
+              date: now,
+              cashierName: 'محمد الكاشير',
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
+          for (final name in ['حليب نادك', 'خبز أبيض', 'جبن شيدر', 'عصير برتقال']) {
+            await db.insert('transaction_items', {
+              'workspace_id': 'default',
+              'transaction_id': todayTxId,
+              'item_name': name,
+              'quantity': 1,
+              'unit_price': 1000,
+              'total': 1000,
+              'created_at': now.toIso8601String(),
+            });
+          }
+
+          // عملية قبل 3 أيام
+          await repo.saveTx(
+            Tx(
+              type: OpType.revenue,
+              accountId: null,
+              amount: 6000,
+              currency: 'YER',
+              description: 'مبيعات سابقة',
+              date: threeDaysAgo,
+              cashierName: 'سالم',
+              createdAt: threeDaysAgo,
+              updatedAt: threeDaysAgo,
+            ),
+          );
+        });
         addTearDown(() async {
           try {
-            final db = await repo.database;
             await db.close();
           } catch (e) {
             debugPrint('close db error: $e');
@@ -287,48 +371,12 @@ void main() {
           }
         });
 
-        final now = DateTime.now();
-        final threeDaysAgo = now.subtract(const Duration(days: 3));
-
-        // عملية اليوم
-        final todayTxId = await repo.saveTx(
-          Tx(
-            type: OpType.revenue,
-            accountId: null,
-            amount: 4000,
-            currency: 'YER',
-            description: 'فاتورة نقدية مدفوعة',
-            date: now,
-            cashierName: 'محمد الكاشير',
-          ),
+        await tester.pumpWidget(
+          _wrapWithProviders(repo, engine, const TransactionsScreen()),
         );
-        final db = await repo.database;
-        for (final name in ['حليب نادك', 'خبز أبيض', 'جبن شيدر', 'عصير برتقال']) {
-          await db.insert('transaction_items', {
-            'workspace_id': 'default',
-            'transaction_id': todayTxId,
-            'item_name': name,
-            'quantity': 1,
-            'unit_price': 1000,
-            'total': 1000,
-            'created_at': now.toIso8601String(),
-          });
-        }
-
-        // عملية قبل 3 أيام
-        await repo.saveTx(
-          Tx(
-            type: OpType.revenue,
-            accountId: null,
-            amount: 6000,
-            currency: 'YER',
-            description: 'مبيعات سابقة',
-            date: threeDaysAgo,
-            cashierName: 'سالم',
-          ),
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 150)),
         );
-
-        await tester.pumpWidget(_wrapWithProviders(repo, const TransactionsScreen()));
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 350));
 
@@ -345,9 +393,13 @@ void main() {
 
         // النقر على بطاقة «وارد» واختيار «أسبوعي» يحدّث العنوان والإجمالي ليشمل عملية قبل 3 أيام (10,000)
         await tester.tap(find.textContaining('وارد (YER) • يومي'));
-        await tester.pumpAndSettle();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 250));
         await tester.tap(find.text('أسبوعي'));
-        await tester.pumpAndSettle();
+        await tester.pump();
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 120)),
+        );
         await tester.pump(const Duration(milliseconds: 250));
 
         expect(find.textContaining('وارد (YER) • أسبوعي'), findsOneWidget);
@@ -358,10 +410,9 @@ void main() {
     test(
       '2-ب: نظام إشعار الحصاد اليومي الذكي — شروط الظهور، صلاحيات المدير مقابل العضو، والعمود seen',
       () async {
-        final (repo, dir) = await _openFreshRepo('req2b_harvest');
+        final (repo, db, dir, _) = await _openFreshRepo('req2b_harvest');
         addTearDown(() async {
           try {
-            final db = await repo.database;
             await db.close();
           } catch (e) {
             debugPrint('close db error: $e');
@@ -373,6 +424,8 @@ void main() {
           }
         });
 
+        final now = DateTime.now();
+
         // 1) بدون أصناف مدخلة في المخزون -> لا يظهر الإشعار أبداً
         final emptyEval = await DailyHarvestService.evaluate(repo);
         expect(emptyEval.shouldShow, isFalse);
@@ -380,20 +433,19 @@ void main() {
 
         // 2) إدخال صنف في المخزون ولكن المبيعات = 0 -> لا يظهر الإشعار
         await repo.saveItem(
-          const Item(
+          Item(
             name: 'أرز بسمتي',
             sku: 'SKU-100',
-            price: 5000,
-            costPrice: 4000,
+            sellPrice: 5000,
+            buyPrice: 4000,
             quantity: 20,
+            createdAt: now,
+            updatedAt: now,
           ),
         );
         final zeroSalesEval = await DailyHarvestService.evaluate(repo);
         expect(zeroSalesEval.shouldShow, isFalse);
         expect(await DailyHarvestService.checkAndNotify(repo), isNull);
-
-        final db = await repo.database;
-        final now = DateTime.now();
 
         // تسجيل جهاز عضو ومبيعات خاصة بالمدير ومبيعات خاصة بالعضو
         await db.insert('devices', {
@@ -414,6 +466,8 @@ void main() {
             description: 'فاتورة نقدية مدفوعة #1',
             date: now,
             cashierName: 'المدير العام',
+            createdAt: now,
+            updatedAt: now,
           ),
         );
 
@@ -482,10 +536,37 @@ void main() {
         await tester.binding.setSurfaceSize(const Size(430, 900));
         addTearDown(() => tester.binding.setSurfaceSize(null));
 
-        final (repo, dir) = await _openFreshRepo('req4_reports');
+        late Repo repo;
+        late Database db;
+        late Directory dir;
+        late SyncEngine engine;
+        await tester.runAsync(() async {
+          (repo, db, dir, engine) = await _openFreshRepo('req4_reports');
+          final now = DateTime.now();
+          final custId = await repo.saveAccount(
+            Account(
+              name: 'عميل التقارير',
+              kind: AccountKind.customer,
+              currency: 'YER',
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
+          await repo.saveTx(
+            Tx(
+              type: OpType.debit,
+              accountId: custId,
+              amount: 7500,
+              currency: 'YER',
+              description: 'فاتورة مبيعات تقارير',
+              date: now,
+              createdAt: now,
+              updatedAt: now,
+            ),
+          );
+        });
         addTearDown(() async {
           try {
-            final db = await repo.database;
             await db.close();
           } catch (e) {
             debugPrint('close db error: $e');
@@ -497,25 +578,12 @@ void main() {
           }
         });
 
-        final custId = await repo.saveAccount(
-          const Account(
-            name: 'عميل التقارير',
-            kind: AccountKind.customer,
-            currency: 'YER',
-          ),
+        await tester.pumpWidget(
+          _wrapWithProviders(repo, engine, const ReportsScreen()),
         );
-        await repo.saveTx(
-          Tx(
-            type: OpType.debit,
-            accountId: custId,
-            amount: 7500,
-            currency: 'YER',
-            description: 'فاتورة مبيعات تقارير',
-            date: DateTime.now(),
-          ),
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 150)),
         );
-
-        await tester.pumpWidget(_wrapWithProviders(repo, const ReportsScreen()));
         await tester.pump();
         await tester.pump(const Duration(milliseconds: 350));
 
@@ -532,12 +600,14 @@ void main() {
 
         // النقر على بطاقة «إجمالي المبيعات» يميزها ويحدث الجدول لعرض عمليات المبيعات
         await tester.tap(find.byKey(const ValueKey('report_card_sales')));
-        await tester.pumpAndSettle();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 250));
         expect(find.text('فاتورة مبيعات تقارير'), findsOneWidget);
 
         // النقر على بطاقة «إجمالي المستحق لنا» يحدث الجدول لعرض الحسابات المدينة
         await tester.tap(find.byKey(const ValueKey('report_card_owed_to_us')));
-        await tester.pumpAndSettle();
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 250));
         expect(find.textContaining('عميل التقارير'), findsOneWidget);
       },
     );

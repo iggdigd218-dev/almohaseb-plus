@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 
 import '../core/accounting.dart';
 import '../core/format.dart';
+import '../core/models.dart';
 import '../core/pdf_fonts.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';

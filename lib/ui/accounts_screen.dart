@@ -224,8 +224,8 @@ class _EnhancedFilterBarState extends ConsumerState<_EnhancedFilterBar> {
     if (balanceFilter != _BalanceFilter.all) {
       parts.add(_balanceFilterLabel(balanceFilter));
     }
-    if (filter.sort != AccountSort.name) {
-      parts.add(filter.sort.label);
+    if (filter.kind != null) {
+      parts.add(filter.kind!.label);
     }
     return parts.join(' • ');
   }
@@ -356,7 +356,7 @@ class _EnhancedFilterBarState extends ConsumerState<_EnhancedFilterBar> {
                     ),
                     const SizedBox(height: 14),
                     Text(
-                      'ترتيب العرض',
+                      'نوع الحساب',
                       style: TextStyle(
                         fontSize: 12.5,
                         fontWeight: FontWeight.w800,
@@ -367,14 +367,25 @@ class _EnhancedFilterBarState extends ConsumerState<_EnhancedFilterBar> {
                     Wrap(
                       spacing: 8,
                       runSpacing: 8,
-                      children: AccountSort.values.map((s) {
-                        return _chip(
+                      children: [
+                        _chip(
                           ctx,
-                          s.label,
-                          f.sort == s,
-                          () => n.state = f.copyWith(sort: s),
-                        );
-                      }).toList(),
+                          'الكل',
+                          f.kind == null,
+                          () => n.state = f.copyWith(clearKind: true),
+                        ),
+                        ...AccountKind.values.map((k) {
+                          return _chip(
+                            ctx,
+                            '${k.icon} ${k.label}',
+                            f.kind == k,
+                            () => n.state = f.copyWith(
+                              kind: f.kind == k ? null : k,
+                              clearKind: f.kind == k,
+                            ),
+                          );
+                        }),
+                      ],
                     ),
                     const SizedBox(height: 16),
                     SizedBox(
@@ -403,7 +414,7 @@ class _EnhancedFilterBarState extends ConsumerState<_EnhancedFilterBar> {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final hasActiveFilter = filter.currency != null ||
         balanceFilter != _BalanceFilter.all ||
-        filter.sort != AccountSort.name;
+        filter.kind != null;
 
     // (المتطلب 5) صف علوي واحد مضغوط وأنيق يجمع بادج التصفية والفرز الموحّد + أيقونة البحث المتمددة عند النقر + أيقونة (+) بدون نص.
     return Padding(
