@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
@@ -14,6 +15,7 @@ import '../core/ids.dart';
 import '../core/database.dart';
 import '../core/device_names.dart';
 import '../core/format.dart';
+import '../core/item_conflict.dart';
 import '../core/secret_store.dart';
 import '../core/media_paths.dart';
 import '../core/models.dart';
@@ -2628,7 +2630,7 @@ class Repo {
     final rows = await db.query('transactions',
         columns: ['date'], where: 'id = ?', whereArgs: [txId], limit: 1);
     if (rows.isEmpty) return;
-    final d = DateTime.tryParse('${rows.first['date']}');
+    final d = safeParseNullableDateTime(rows.first['date']);
     if (d == null) return;
     if (DateTime.now().difference(d).inDays >= days) {
       throw StateError('هذا السجل أقدم من $days يوماً ومقفل ضد التعديل والحذف. '
@@ -5417,7 +5419,8 @@ class Repo {
       }
       // آخر ظهور: إن غاب طويلاً فقد يتأخر استلام العملية السيادية.
       final lastSeen = '${d['last_seen_at'] ?? ''}';
-      final seen = lastSeen.isEmpty ? null : DateTime.tryParse(lastSeen);
+      final seen =
+          lastSeen.isEmpty ? null : safeParseNullableDateTime(lastSeen);
       if (seen == null) {
         warnings.add('لم يُرصد اتصال حديث لهذا الجهاز — قد يتأخر استلام '
             'الإدارة حتى يفتح التطبيق ويتزامن.');
@@ -5448,7 +5451,7 @@ class Repo {
       final d = jsonDecode(raw);
       if (d is! Map) return false;
       if ('${d['previous_owner_device_id']}' != _deviceId) return false;
-      final at = DateTime.tryParse('${d['at']}');
+      final at = safeParseNullableDateTime(d['at']);
       if (at == null) return false;
       return DateTime.now().difference(at) < const Duration(hours: 24);
     } catch (_) {
@@ -5568,7 +5571,7 @@ class Repo {
   /// متى تُتاح التهيئة القادمة؟ null = متاحة الآن.
   Future<DateTime?> groupWipeAvailableAt() async {
     final st = await settings();
-    final last = DateTime.tryParse(st[_kLastGroupWipe] ?? '');
+    final last = safeParseNullableDateTime(st[_kLastGroupWipe]);
     if (last == null) return null;
     final next = last.add(const Duration(days: 30));
     return DateTime.now().isBefore(next) ? next : null;
@@ -6761,7 +6764,7 @@ class Repo {
         for (final col in ['updated_at', 'created_at', 'date']) {
           final raw = '${r[col] ?? ''}'.trim();
           if (raw.isEmpty) continue;
-          final parsed = DateTime.tryParse(raw);
+          final parsed = safeParseNullableDateTime(raw);
           if (parsed != null && (latest == null || parsed.isAfter(latest))) {
             latest = parsed;
           }
@@ -8203,9 +8206,25 @@ class Repo {
           whereArgs: it.id != null ? [sku, it.id] : [sku],
           limit: 1);
       if (dup.isNotEmpty) {
-        throw StateError(
-            'الباركود «$sku» مستخدم مسبقاً للصنف «${dup.first['name']}». '
-            'كل صنف يجب أن يملك باركوداً فريداً.');
+        var allowSharedBarcodeOnEdit = false;
+        if (it.id != null) {
+          final existingSelf = await db.query(
+            'items',
+            columns: ['sku'],
+            where: 'id = ?',
+            whereArgs: [it.id],
+            limit: 1,
+          );
+          if (existingSelf.isNotEmpty &&
+              '${existingSelf.first['sku'] ?? ''}'.trim() == sku) {
+            allowSharedBarcodeOnEdit = true;
+          }
+        }
+        if (!allowSharedBarcodeOnEdit) {
+          throw StateError(
+              'الباركود «$sku» مستخدم مسبقاً للصنف «${dup.first['name']}». '
+              'كل صنف يجب أن يملك باركوداً فريداً.');
+        }
       }
     }
     // (2026-09-22) القسم: إن لم يُحدَّد للصنف صراحةً نستمدّه من فئته،
@@ -8256,6 +8275,43 @@ class Repo {
     ({int itemId, String name, double qty, double minQty})? lowStock;
     await db.transaction((txn) async {
       final rec = await newRecorder(txn);
+      String creatorName = '';
+      try {
+        final stRows = await txn.query(
+          'settings',
+          columns: ['key', 'value'],
+          where:
+              "key IN ('profile.owner_name', 'account.name', 'sync.deviceName')",
+        );
+        final stMap = <String, String>{
+          for (final r in stRows)
+            '${r['key'] ?? ''}'.trim(): '${r['value'] ?? ''}'.trim(),
+        };
+        for (final k in const [
+          'profile.owner_name',
+          'account.name',
+          'sync.deviceName',
+        ]) {
+          final name = (stMap[k] ?? '').trim();
+          if (isPlaceholderDeviceName(name)) continue;
+          creatorName = name;
+          break;
+        }
+        if (creatorName.isEmpty) {
+          final meRows = await txn.query(
+            'users',
+            columns: ['name'],
+            where: "is_me = 1 AND COALESCE(deleted_at,'') = ''",
+            limit: 1,
+          );
+          for (final r in meRows) {
+            final name = '${r['name'] ?? ''}'.trim();
+            if (isPlaceholderDeviceName(name)) continue;
+            creatorName = name;
+            break;
+          }
+        }
+      } catch (_) {}
       if (isCreate) {
         final newId = newGlobalId();
         id = await txn.insert(
@@ -8274,6 +8330,7 @@ class Repo {
         }
         final payload = itemToSave.toMap()..['id'] = id;
         if (thumbB64.isNotEmpty) payload['thumb_b64'] = thumbB64;
+        if (creatorName.isNotEmpty) payload['created_by_name'] = creatorName;
         await rec.record(
           entityType: EntityKind.item,
           entityId: '$id',
@@ -8288,6 +8345,7 @@ class Repo {
         final payload = Map<String, Object?>.from(map)
           ..['__qty_changed'] = qtyChanged ? 1 : 0;
         if (thumbB64.isNotEmpty) payload['thumb_b64'] = thumbB64;
+        if (creatorName.isNotEmpty) payload['created_by_name'] = creatorName;
         await rec.record(
           entityType: EntityKind.item,
           entityId: '$id',
@@ -8380,6 +8438,439 @@ class Repo {
       });
     });
     await logActivity('حذف صنف', 'item', '$id');
+  }
+
+  // ==================== معالجة تعارض الأصناف والباركود (أوفلاين) ====================
+
+  /// جميع سجلات تعارض الأصناف المسجّلة (المعلقة والمعالجة).
+  Future<List<OfflineItemConflict>> allItemConflicts() async {
+    final db = await _db;
+    final rows = await db.query(
+      'settings',
+      where: "key LIKE 'item_conflict:%'",
+    );
+    final out = <OfflineItemConflict>[];
+    for (final r in rows) {
+      final k = '${r['key'] ?? ''}'.trim();
+      final v = '${r['value'] ?? ''}'.trim();
+      final c = OfflineItemConflict.tryParseJson(v, fallbackKey: k);
+      if (c != null) out.add(c);
+    }
+    out.sort(
+      (a, b) => safeParseDateTime(b.createdAt)
+          .compareTo(safeParseDateTime(a.createdAt)),
+    );
+    return out;
+  }
+
+  /// التعارضات المعلّقة التي تنتظر اتخاذ إجراء من المدير.
+  Future<List<OfflineItemConflict>> pendingItemConflicts() async {
+    final all = await allItemConflicts();
+    return all.where((c) => c.isPending).toList();
+  }
+
+  /// جلب سجل تعارض محدد بمفتاحه.
+  Future<OfflineItemConflict?> itemConflictByKey(
+    String conflictKey, {
+    DatabaseExecutor? executor,
+  }) async {
+    final ex = executor ?? await _db;
+    final normKey = conflictKey.startsWith('item_conflict:')
+        ? conflictKey
+        : 'item_conflict:$conflictKey';
+    final rows = await ex.query(
+      'settings',
+      where: 'key = ?',
+      whereArgs: [normKey],
+      limit: 1,
+    );
+    if (rows.isEmpty) return null;
+    return OfflineItemConflict.tryParseJson(
+      '${rows.first['value'] ?? ''}',
+      fallbackKey: normKey,
+    );
+  }
+
+  /// توليد باركود رقمي فريد غير مستخدم (6 خانات على الأقل، يبدأ من 100001).
+  Future<String> generateUniqueItemBarcode() async {
+    final db = await _db;
+    final rows = await db.query(
+      'items',
+      columns: ['sku'],
+      where: "sku IS NOT NULL AND TRIM(sku) != ''",
+    );
+    final used = <String>{};
+    var maxNum = 100000;
+    for (final r in rows) {
+      final s = '${r['sku'] ?? ''}'.trim();
+      if (s.isEmpty) continue;
+      used.add(s.toLowerCase());
+      final n = int.tryParse(s);
+      if (n != null && n >= 100000 && n < 999999999 && n > maxNum) {
+        maxNum = n;
+      }
+    }
+    var candidate = maxNum + 1;
+    while (used.contains('$candidate')) {
+      candidate++;
+    }
+    return '$candidate';
+  }
+
+  /// الخيار 1: تغيير باركود أحد الصنفين المتعارضين أو توليد باركود جديد له فوراً
+  /// لإنهاء الاشتراك في الباركود ومزامنة النتيجة للجهازين.
+  Future<String> resolveItemConflictChangeBarcode({
+    required String conflictKey,
+    int? targetItemId,
+    String? newBarcode,
+  }) async {
+    final conflict = await itemConflictByKey(conflictKey);
+    if (conflict == null) {
+      throw StateError('سجل التعارض غير موجود.');
+    }
+    final itemId = targetItemId ?? conflict.item2Id;
+    var cleanSku = (newBarcode ?? '').trim();
+    if (cleanSku.isEmpty) {
+      cleanSku = await generateUniqueItemBarcode();
+    } else {
+      final db = await _db;
+      final dup = await db.query(
+        'items',
+        columns: ['id', 'name'],
+        where:
+            "LOWER(TRIM(sku)) = LOWER(TRIM(?)) AND id != ? AND COALESCE(is_deleted, 0) = 0 AND COALESCE(deleted_at, '') = ''",
+        whereArgs: [cleanSku, itemId],
+        limit: 1,
+      );
+      if (dup.isNotEmpty) {
+        throw StateError(
+          'الباركود «$cleanSku» مستخدم بالفعل للصنف «${dup.first['name']}». اختر باركوداً آخر أو اضغط توليد تلقائي.',
+        );
+      }
+    }
+
+    final db = await _db;
+    final nowIso = DateTime.now().toIso8601String();
+    final resolved = conflict.copyWith(
+      status: 'resolved',
+      resolution: 'barcode_changed',
+      resolvedAt: nowIso,
+    );
+
+    await db.transaction((txn) async {
+      await txn.update(
+        'items',
+        {'sku': cleanSku, 'updated_at': nowIso},
+        where: 'id = ?',
+        whereArgs: [itemId],
+      );
+      final updatedRows = await txn.query(
+        'items',
+        where: 'id = ?',
+        whereArgs: [itemId],
+        limit: 1,
+      );
+      await txn.insert(
+        'settings',
+        {'key': resolved.key, 'value': resolved.toJson()},
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      await txn.update(
+        'notifications',
+        {'seen': 1},
+        where: "entity_type = 'item_conflict' AND entity_id = ?",
+        whereArgs: [resolved.key],
+      );
+      try {
+        final rec = await newRecorder(txn);
+        if (updatedRows.isNotEmpty) {
+          final payload = Map<String, Object?>.from(updatedRows.first)
+            ..['id'] = itemId
+            ..['__qty_changed'] = 0
+            ..['__conflict_resolved'] = true;
+          await rec.record(
+            entityType: EntityKind.item,
+            entityId: '$itemId',
+            opType: OpKind.update,
+            payload: payload,
+          );
+        }
+        await rec.record(
+          entityType: EntityKind.setting,
+          entityId: resolved.key,
+          opType: OpKind.settings,
+          payload: {'key': resolved.key, 'value': resolved.toJson()},
+        );
+      } catch (_) {}
+    });
+
+    await logActivity(
+      'معالجة تعارض باركود الصنف #$itemId إلى $cleanSku',
+      'item',
+      '$itemId',
+    );
+    return cleanSku;
+  }
+
+  /// الخيار 2: دمج الصنفين في بطاقة صنف واحدة مع جمع كميتيهما وتوحيد جميع الفواتير والحركات المخزنية.
+  Future<int> resolveItemConflictMergeItems({
+    required String conflictKey,
+    int? keepItemId,
+    int? mergeFromItemId,
+  }) async {
+    final conflict = await itemConflictByKey(conflictKey);
+    if (conflict == null) {
+      throw StateError('سجل التعارض غير موجود.');
+    }
+    final keepId = keepItemId ?? conflict.item1Id;
+    final dropId = mergeFromItemId ??
+        (keepId == conflict.item1Id ? conflict.item2Id : conflict.item1Id);
+
+    final db = await _db;
+    final nowIso = DateTime.now().toIso8601String();
+    final dateStr = nowIso.split('T').first;
+    final resolved = conflict.copyWith(
+      status: 'resolved',
+      resolution: 'merged',
+      resolvedAt: nowIso,
+    );
+
+    await db.transaction((txn) async {
+      final keepRows = await txn.query(
+        'items',
+        where: 'id = ?',
+        whereArgs: [keepId],
+        limit: 1,
+      );
+      final dropRows = await txn.query(
+        'items',
+        where: 'id = ?',
+        whereArgs: [dropId],
+        limit: 1,
+      );
+      if (keepRows.isEmpty) {
+        throw StateError('الصنف الأساسي غير موجود.');
+      }
+      final keepQty = ((keepRows.first['quantity'] as num?) ?? 0).toDouble();
+      final dropQty = dropRows.isEmpty
+          ? 0.0
+          : ((dropRows.first['quantity'] as num?) ?? 0).toDouble();
+      final mergedQty = keepQty + dropQty;
+
+      // فحص الحركات المسجلة على الصنف المدمج قبل ترحيلها (بما فيها المبيعات السالبة والتسويات)
+      double recordedInMoves = 0.0;
+      if (dropRows.isNotEmpty) {
+        try {
+          final dropMoves = await txn.query(
+            'stock_moves',
+            columns: ['id', 'kind', 'quantity'],
+            where:
+                "item_id = ? AND (deleted_at IS NULL OR deleted_at = '')",
+            whereArgs: [dropId],
+            orderBy: 'date ASC, created_at ASC, id ASC',
+          );
+          for (final m in dropMoves) {
+            final k = '${m['kind'] ?? ''}'.trim();
+            final q = ((m['quantity'] as num?) ?? 0).toDouble();
+            if (k == 'adjust') {
+              // تحويل التسوية المطلقة للصنف المدمج إلى فرق نسبي حتى لا تطمس رصيد الصنف الأساسي
+              final delta = q - recordedInMoves;
+              if (delta >= 0) {
+                await txn.update(
+                  'stock_moves',
+                  {'kind': StockKind.purchase.code, 'quantity': delta},
+                  where: 'id = ?',
+                  whereArgs: [m['id']],
+                );
+              } else {
+                await txn.update(
+                  'stock_moves',
+                  {'kind': StockKind.sale.code, 'quantity': -delta},
+                  where: 'id = ?',
+                  whereArgs: [m['id']],
+                );
+              }
+              recordedInMoves = q;
+            } else if (k == 'purchase' || k == 'return' || k == 'returnIn') {
+              recordedInMoves += q;
+            } else if (k == 'sale') {
+              recordedInMoves -= q;
+            }
+          }
+        } catch (e) {
+          debugPrint('resolveItemConflictMergeItems moves query error: $e');
+        }
+      }
+
+      // توحيد جميع الحركات المخزنية والفواتير إلى الصنف الموحّد
+      await txn.update(
+        'stock_moves',
+        {'item_id': keepId},
+        where: 'item_id = ?',
+        whereArgs: [dropId],
+      );
+      await txn.update(
+        'transaction_items',
+        {'item_id': keepId},
+        where: 'item_id = ?',
+        whereArgs: [dropId],
+      );
+
+      if (dropRows.isNotEmpty) {
+        // الرصيد التأسيسي غير المغطى بحركات = رصيد الصنف الحالي ناقص صافي حركاته
+        // (عندما يكون صافي الحركات سالباً بسبب مبيعات سابقة، فإن dropQty - recordedInMoves
+        // يعيد الرصيد التأسيسي الكامل قبل البيع فلا يُخصم البيع مرتين عند المطابقة،
+        // ولا يُضاعف الرصيد إن كانت الحركات موجبة أو تسوية).
+        final rawUncovered = dropQty - recordedInMoves;
+        final uncoveredQty = rawUncovered > 0 ? rawUncovered : 0.0;
+        if (uncoveredQty > 0) {
+          try {
+            await txn.insert('stock_moves', {
+              'workspace_id': requireWorkspaceId,
+              'item_id': keepId,
+              'kind': StockKind.purchase.code,
+              'quantity': uncoveredQty,
+              'unit_price': 0,
+              'notes':
+                  'دمج رصيد الصنف المكرر (${conflict.item2Name}) في (${conflict.item1Name})',
+              'date': dateStr,
+              'created_at': nowIso,
+            });
+          } catch (e) {
+            debugPrint('resolveItemConflictMergeItems insert move error: $e');
+          }
+        }
+      }
+
+      await txn.update(
+        'items',
+        {
+          'quantity': mergedQty,
+          'is_deleted': 0,
+          'is_active': 1,
+          'deleted_at': '',
+          'updated_at': nowIso,
+        },
+        where: 'id = ?',
+        whereArgs: [keepId],
+      );
+
+      if (dropRows.isNotEmpty) {
+        await txn.update(
+          'items',
+          {
+            'is_deleted': 1,
+            'is_active': 0,
+            'deleted_at': nowIso,
+            'updated_at': nowIso,
+          },
+          where: 'id = ?',
+          whereArgs: [dropId],
+        );
+      }
+
+      await txn.insert(
+        'settings',
+        {'key': resolved.key, 'value': resolved.toJson()},
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      await txn.update(
+        'notifications',
+        {'seen': 1},
+        where: "entity_type = 'item_conflict' AND entity_id = ?",
+        whereArgs: [resolved.key],
+      );
+
+      try {
+        final rec = await newRecorder(txn);
+        final updatedKeep = await txn.query(
+          'items',
+          where: 'id = ?',
+          whereArgs: [keepId],
+          limit: 1,
+        );
+        if (updatedKeep.isNotEmpty) {
+          final payload = Map<String, Object?>.from(updatedKeep.first)
+            ..['id'] = keepId
+            ..['quantity'] = mergedQty
+            ..['__qty_changed'] = 1
+            ..['__conflict_resolved'] = true;
+          await rec.record(
+            entityType: EntityKind.item,
+            entityId: '$keepId',
+            opType: OpKind.update,
+            payload: payload,
+          );
+        }
+        if (dropRows.isNotEmpty) {
+          await rec.record(
+            entityType: EntityKind.item,
+            entityId: '$dropId',
+            opType: OpKind.delete_,
+            payload: {'id': dropId, 'deleted_at': nowIso, 'is_deleted': 1},
+          );
+        }
+        await rec.record(
+          entityType: EntityKind.setting,
+          entityId: resolved.key,
+          opType: OpKind.settings,
+          payload: {'key': resolved.key, 'value': resolved.toJson()},
+        );
+      } catch (_) {}
+    });
+
+    await logActivity(
+      'دمج الصنفين المتعارضين #$dropId في #$keepId',
+      'item',
+      '$keepId',
+    );
+    return keepId;
+  }
+
+  /// الخيار 3: اعتماد الفصل وإبقاء الصنفين منفصلين (مع إظهار نافذة اختيار فورية في POS عند قراءة باركود مشترك).
+  Future<void> resolveItemConflictKeepSeparate({
+    required String conflictKey,
+  }) async {
+    final conflict = await itemConflictByKey(conflictKey);
+    if (conflict == null) {
+      throw StateError('سجل التعارض غير موجود.');
+    }
+    final db = await _db;
+    final nowIso = DateTime.now().toIso8601String();
+    final resolved = conflict.copyWith(
+      status: 'resolved',
+      resolution: 'keep_separate',
+      resolvedAt: nowIso,
+    );
+
+    await db.transaction((txn) async {
+      await txn.insert(
+        'settings',
+        {'key': resolved.key, 'value': resolved.toJson()},
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      await txn.update(
+        'notifications',
+        {'seen': 1},
+        where: "entity_type = 'item_conflict' AND entity_id = ?",
+        whereArgs: [resolved.key],
+      );
+      try {
+        final rec = await newRecorder(txn);
+        await rec.record(
+          entityType: EntityKind.setting,
+          entityId: resolved.key,
+          opType: OpKind.settings,
+          payload: {'key': resolved.key, 'value': resolved.toJson()},
+        );
+      } catch (_) {}
+    });
+
+    await logActivity(
+      'اعتماد فصل الصنفين المتعارضين #${conflict.item1Id} و #${conflict.item2Id}',
+      'item',
+      '${conflict.item1Id}',
+    );
   }
 
   Future<List<StockMove>> stockMoves({int? itemId, int limit = 200}) async {

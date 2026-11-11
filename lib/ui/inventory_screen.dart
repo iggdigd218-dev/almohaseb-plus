@@ -26,6 +26,7 @@ import '../data/sync/sync_activity.dart';
 import 'barcode_scanner.dart';
 import 'hierarchy_filter.dart';
 import 'calculator.dart';
+import 'item_conflict_dialog.dart';
 import 'widgets.dart';
 
 /// مزود عام لتفعيل تبويب «قسم النواقص» مباشرة عند فتح شاشة المخزون.
@@ -138,6 +139,7 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
       ref.invalidate(itemCategoryTreeProvider);
       ref.invalidate(sectionsProvider);
       ref.invalidate(inventorySummaryProvider);
+      ref.invalidate(pendingItemConflictsProvider);
       setState(() {});
     });
   }
@@ -400,6 +402,7 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
                     openCategoryManager(context, ref, roots, sections),
               ),
             ),
+            const ItemConflictBanner(),
             Expanded(
               child: categoriesAsync.when(
                 skipLoadingOnReload: true,
