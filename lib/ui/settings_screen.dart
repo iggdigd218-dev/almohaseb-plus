@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../core/app_version.dart';
 import '../core/db_init.dart' show isDesktop;
 import '../core/factory_reset.dart';
+import '../core/l10n.dart';
 import '../core/models.dart';
 import '../core/security.dart';
 import '../core/sfx.dart';
@@ -1434,6 +1435,10 @@ class _SettingsHome extends ConsumerWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(14, 14, 14, 40),
       children: [
+        const Padding(
+          padding: EdgeInsets.only(bottom: 10),
+          child: LanguageSelectorCard(),
+        ),
         for (final it in visibleItems)
           Padding(
             padding: const EdgeInsets.only(bottom: 10),
@@ -1460,11 +1465,11 @@ class _SettingsHome extends ConsumerWidget {
                     MaterialPageRoute(
                       builder: (_) => Scaffold(
                         appBar: AppBar(
-                          title: Text(it.$1),
+                          title: Text(context.tr(it.$1)),
                           actions: [
                             if (onSave != null)
                               IconButton(
-                                tooltip: 'حفظ التعديلات',
+                                tooltip: context.tr('حفظ التعديلات'),
                                 icon: const Icon(Icons.save_outlined),
                                 onPressed: saving ? null : onSave,
                               ),
@@ -1498,7 +1503,7 @@ class _SettingsHome extends ConsumerWidget {
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
                             Text(
-                              it.$1,
+                              context.tr(it.$1),
                               style: const TextStyle(
                                 fontSize: 13.5,
                                 fontWeight: FontWeight.w800,
@@ -1506,7 +1511,7 @@ class _SettingsHome extends ConsumerWidget {
                             ),
                             const SizedBox(height: 2),
                             Text(
-                              it.$2,
+                              context.tr(it.$2),
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis,
                               style: TextStyle(
@@ -1519,7 +1524,9 @@ class _SettingsHome extends ConsumerWidget {
                         ),
                       ),
                       Icon(
-                        Icons.chevron_left,
+                        Directionality.of(context) == TextDirection.ltr
+                            ? Icons.chevron_right
+                            : Icons.chevron_left,
                         size: 20,
                         color: AppColors.text3Of(context),
                       ),

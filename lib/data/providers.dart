@@ -73,6 +73,26 @@ Future<void> saveAppThemeMode(WidgetRef ref, ThemeMode mode) async {
 /// إخفاء الأرصدة.
 final hideBalancesProvider = StateProvider<bool>((ref) => false);
 
+/// لغة التطبيق النشطة (الافتراضي: العربية `ar`، أو الإنجليزية `en`).
+final appLocaleProvider = StateProvider<Locale>((ref) => const Locale('ar'));
+
+/// حفظ اختيار المستخدم للغة في SharedPreferences وقاعدة البيانات وتطبيق التغيير فوراً.
+Future<void> saveAppLocale(WidgetRef ref, Locale locale) async {
+  final code = locale.languageCode.toLowerCase().startsWith('en') ? 'en' : 'ar';
+  ref.read(appLocaleProvider.notifier).state = Locale(code);
+  try {
+    final sp = await SharedPreferences.getInstance();
+    await sp.setString('app_locale', code);
+  } catch (e) {
+    debugPrint('saveAppLocale SharedPreferences warning: $e');
+  }
+  try {
+    await ref.read(repoProvider).setSetting('language', code);
+  } catch (e) {
+    debugPrint('saveAppLocale repo.setSetting warning: $e');
+  }
+}
+
 /// وضع واجهة التطبيق والقائمة الجانبية (المبيعات / المحاسبة).
 enum NavAppMode {
   pos, // وضع المبيعات
@@ -516,13 +536,19 @@ final txPageProvider = FutureProvider<TxPage>((ref) async {
   final period = ref.watch(txTotalsPeriodProvider);
   final repo = ref.watch(repoProvider);
 
-  final all = await repo.transactions(
-    accountId: f.accountId,
-    from: f.from,
-    to: f.to,
-    type: f.type,
-  );
-  final accs = await repo.accounts(includeArchived: true);
+  final initialBatch = await Future.wait<Object>([
+    repo.transactions(
+      accountId: f.accountId,
+      from: f.from,
+      to: f.to,
+      type: f.type,
+    ),
+    repo.accounts(includeArchived: true),
+    repo.posInvoiceTxIds(),
+  ]);
+  final all = initialBatch[0] as List<Tx>;
+  final accs = initialBatch[1] as List<Account>;
+  final posTxIds = initialBatch[2] as Set<int>;
   final byId = {for (final a in accs) a.id!: a};
 
   final q = f.query.trim();
@@ -554,7 +580,6 @@ final txPageProvider = FutureProvider<TxPage>((ref) async {
   }
 
   // إجماليات الداخل والخارج وإجمالي المبيعات لكل عملة حسب الفترة المختارة (افتراضياً: اليوم من 00:00).
-  final posTxIds = await repo.posInvoiceTxIds();
   final periodStart = period.startOf();
   final inflow = <String, double>{};
   final outflow = <String, double>{};
@@ -603,8 +628,12 @@ final txPageProvider = FutureProvider<TxPage>((ref) async {
   }
 
   final txIds = list.map((t) => t.id).whereType<int>().toList();
-  final itemsSummaries = await repo.batchTxItemsSummary(txIds);
-  final executors = await repo.batchTxExecutors(list);
+  final metaBatch = await Future.wait<Map<int, String>>([
+    repo.batchTxItemsSummary(txIds),
+    repo.batchTxExecutors(list),
+  ]);
+  final itemsSummaries = metaBatch[0];
+  final executors = metaBatch[1];
 
   return TxPage(
     items: list,

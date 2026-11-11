@@ -340,10 +340,14 @@ class Repo {
         return groupId;
       }
     } catch (_) {}
-    final id = await ensureWorkspace(db, repo: this);
-    await AppDatabase.ensureWorkspaceRow(db, id);
-    _workspaceId = id;
-    return id;
+    try {
+      final id = await ensureWorkspace(db, repo: this);
+      await AppDatabase.ensureWorkspaceRow(db, id);
+      _workspaceId = id;
+      return id;
+    } catch (_) {
+      return _workspaceId ?? 'default';
+    }
   }
 
   /// ══ (2026-09-22 — توجيه العمليات) ══
@@ -9740,18 +9744,6 @@ class Repo {
     if (txs.isEmpty) return const {};
     final result = <int, String>{};
     try {
-      final db = await _db;
-      final devRows = await db.query('devices', columns: ['id', 'name']);
-      final devNameById = <String, String>{};
-      for (final r in devRows) {
-        final id = '${r['id'] ?? ''}'.trim();
-        final name = '${r['name'] ?? ''}'.trim();
-        if (id.isNotEmpty && name.isNotEmpty) {
-          devNameById[id] = name;
-        }
-      }
-      final myDevName = (await deviceName(this)).trim();
-
       final missingIds = <String>[];
       for (final t in txs) {
         final id = t.id;
@@ -9763,27 +9755,43 @@ class Repo {
           missingIds.add('$id');
         }
       }
+      if (missingIds.isEmpty) return result;
 
-      if (missingIds.isNotEmpty) {
-        final placeholders = List.filled(missingIds.length, '?').join(',');
-        final opRows = await db.rawQuery(
+      final db = await _db;
+      final placeholders = List.filled(missingIds.length, '?').join(',');
+      final batch = await Future.wait<Object>([
+        db.query('devices', columns: ['id', 'name']),
+        deviceName(this),
+        db.rawQuery(
           "SELECT entity_id, device_id FROM operations "
           "WHERE entity_type = 'tx' AND entity_id IN ($placeholders) "
           "ORDER BY timestamp ASC",
           missingIds,
-        );
-        for (final r in opRows) {
-          final txId = int.tryParse('${r['entity_id'] ?? ''}');
-          if (txId == null || result.containsKey(txId)) continue;
-          final devId = '${r['device_id'] ?? ''}'.trim();
-          if (devId.isEmpty) continue;
-          final resolved = devNameById[devId] ??
-              (devId == _deviceId && myDevName.isNotEmpty
-                  ? myDevName
-                  : (devId.length > 10 ? devId.substring(0, 10) : devId));
-          if (resolved.isNotEmpty) {
-            result[txId] = resolved;
-          }
+        ),
+      ]);
+      final devRows = batch[0] as List<Map<String, Object?>>;
+      final myDevName = (batch[1] as String).trim();
+      final opRows = batch[2] as List<Map<String, Object?>>;
+
+      final devNameById = <String, String>{};
+      for (final r in devRows) {
+        final id = '${r['id'] ?? ''}'.trim();
+        final name = '${r['name'] ?? ''}'.trim();
+        if (id.isNotEmpty && name.isNotEmpty) {
+          devNameById[id] = name;
+        }
+      }
+      for (final r in opRows) {
+        final txId = int.tryParse('${r['entity_id'] ?? ''}');
+        if (txId == null || result.containsKey(txId)) continue;
+        final devId = '${r['device_id'] ?? ''}'.trim();
+        if (devId.isEmpty) continue;
+        final resolved = devNameById[devId] ??
+            (devId == _deviceId && myDevName.isNotEmpty
+                ? myDevName
+                : (devId.length > 10 ? devId.substring(0, 10) : devId));
+        if (resolved.isNotEmpty) {
+          result[txId] = resolved;
         }
       }
 

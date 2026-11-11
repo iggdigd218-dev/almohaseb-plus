@@ -6,11 +6,13 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:intl/date_symbol_data_local.dart';
 import 'package:path/path.dart' as p;
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 import 'package:nexora_app/core/accounting.dart';
 import 'package:nexora_app/core/cloud_config.dart';
 import 'package:nexora_app/core/database.dart';
+import 'package:nexora_app/core/l10n.dart';
 import 'package:nexora_app/core/models.dart';
 import 'package:nexora_app/core/sfx.dart';
 import 'package:nexora_app/core/theme.dart';
@@ -21,7 +23,9 @@ import 'package:nexora_app/data/sync/sync_engine.dart';
 import 'package:nexora_app/ui/accounts_screen.dart';
 import 'package:nexora_app/ui/dashboard_screen.dart';
 import 'package:nexora_app/ui/home_shell.dart';
+import 'package:nexora_app/ui/onboarding_screen.dart';
 import 'package:nexora_app/ui/reports_screen.dart';
+import 'package:nexora_app/ui/settings_screen.dart';
 import 'package:nexora_app/ui/transactions_screen.dart';
 
 Future<(Repo, Database, Directory, SyncEngine)> _openFreshRepo(String tag) async {
@@ -186,9 +190,9 @@ void main() {
           await tester.pump();
           expect(find.text('••••••'), findsWidgets);
         } finally {
+          engine.stop();
           await tester.pumpWidget(const SizedBox.shrink());
           await tester.pump(const Duration(seconds: 15));
-          engine.stop();
           container.dispose();
           await tester.runAsync(() async {
             await db.close();
@@ -332,9 +336,9 @@ void main() {
             findsOneWidget,
           );
         } finally {
+          engine.stop();
           await tester.pumpWidget(const SizedBox.shrink());
           await tester.pump(const Duration(seconds: 15));
-          engine.stop();
           container.dispose();
           await tester.runAsync(() async {
             await db.close();
@@ -439,9 +443,9 @@ void main() {
           expect(find.textContaining('وارد (YER) • أسبوعي'), findsOneWidget);
           expect(find.text('10,000'), findsOneWidget);
         } finally {
+          engine.stop();
           await tester.pumpWidget(const SizedBox.shrink());
           await tester.pump(const Duration(seconds: 15));
-          engine.stop();
           container.dispose();
           await tester.runAsync(() async {
             await db.close();
@@ -662,9 +666,190 @@ void main() {
           await tester.pump(const Duration(milliseconds: 250));
           expect(find.textContaining('عميل التقارير'), findsOneWidget);
         } finally {
+          engine.stop();
           await tester.pumpWidget(const SizedBox.shrink());
           await tester.pump(const Duration(seconds: 15));
+          container.dispose();
+          await tester.runAsync(() async {
+            await db.close();
+            await dir.delete(recursive: true);
+          });
+          tester.view.resetPhysicalSize();
+          tester.view.resetDevicePixelRatio();
+        }
+      },
+    );
+
+    testWidgets(
+      'شاشة تسجيل الدخول وإدارة الحساب (OnboardingScreen) — الأزرار المختصرة، أيقونة QR المدمجة، إزالة زر الحذف الكامل، ورسائل الأخطاء الصريحة',
+      (tester) async {
+        tester.view.devicePixelRatio = 1;
+        tester.view.physicalSize = const Size(430, 900);
+
+        // 1) التحقق من تصنيف رسائل الأخطاء الصريحة الثلاث بدقة
+        expect(
+          classifyOnboardingAuthError(
+            const SocketException('Failed host lookup'),
+          ),
+          'لا يوجد اتصال بالإنترنت، يرجى التحقق من الشبكة',
+        );
+        expect(
+          classifyOnboardingAuthError(StateError('INVALID_PASSWORD')),
+          'خطأ في البريد الإلكتروني / رقم الهاتف أو كلمة المرور',
+        );
+        expect(
+          classifyOnboardingAuthError(
+            StateError('INVALID_CREDENTIALS_OR_NOT_FOUND:INVALID_LOGIN_CREDENTIALS'),
+          ),
+          'خطأ في البريد الإلكتروني / رقم الهاتف أو كلمة المرور',
+        );
+        expect(
+          classifyOnboardingAuthError(StateError('USER_NOT_FOUND')),
+          'لم يتم العثور على حسابك أو أي منشأة مرتبطة بهذا الحساب',
+        );
+        expect(
+          classifyOnboardingAuthError(null, isWorkspaceNotFound: true),
+          'لم يتم العثور على حسابك أو أي منشأة مرتبطة بهذا الحساب',
+        );
+
+        late Repo repo;
+        late Database db;
+        late Directory dir;
+        late SyncEngine engine;
+        late ProviderContainer container;
+        await tester.runAsync(() async {
+          (repo, db, dir, engine) = await _openFreshRepo('onboarding_ui');
+          container = await _createWarmedContainer(repo, engine);
+        });
+
+        try {
+          await tester.pumpWidget(
+            _wrapWithContainer(container, const OnboardingScreen()),
+          );
+          await _pumpRealAsync(tester);
+
+          // التحقق من اختصار الأزرار وإزالة الأزرار القديمة
+          expect(find.text('تسجيل جديد'), findsOneWidget);
+          expect(find.text('تسجيل حساب جديد وتأسيس منشأة'), findsNothing);
+
+          expect(find.text('الدخول بدون حساب'), findsOneWidget);
+          expect(find.text('الاستخدام المحلي المستقل'), findsNothing);
+
+          // وجود زر أيقونة باركود QR مصغر بدون نص بجانب زر «الدخول بدون حساب»
+          expect(
+            find.byKey(const ValueKey('onboarding_qr_join_btn')),
+            findsOneWidget,
+          );
+          expect(
+            find.text('انضمام كعضو لمحل قائم (رمز / باركود QR)'),
+            findsNothing,
+          );
+
+          // إزالة زر «حذف كامل من الجهاز والسحابة» تماماً من أسفل الشاشة
+          expect(find.text('حذف كامل من الجهاز والسحابة'), findsNothing);
+        } finally {
           engine.stop();
+          await tester.pumpWidget(const SizedBox.shrink());
+          await tester.pump(const Duration(seconds: 15));
+          container.dispose();
+          await tester.runAsync(() async {
+            await db.close();
+            await dir.delete(recursive: true);
+          });
+          tester.view.resetPhysicalSize();
+          tester.view.resetDevicePixelRatio();
+        }
+      },
+    );
+
+    testWidgets(
+      'نظام اللغات (العربية / English) — تبديل اللغة من الإعدادات، الحفظ في SharedPreferences، وتحديث اتجاه الواجهة RTL / LTR فوراً',
+      (tester) async {
+        tester.view.devicePixelRatio = 1;
+        tester.view.physicalSize = const Size(430, 900);
+        SharedPreferences.setMockInitialValues({});
+
+        late Repo repo;
+        late Database db;
+        late Directory dir;
+        late SyncEngine engine;
+        late ProviderContainer container;
+        await tester.runAsync(() async {
+          (repo, db, dir, engine) = await _openFreshRepo('l10n_switch');
+          container = await _createWarmedContainer(repo, engine);
+        });
+
+        try {
+          await tester.pumpWidget(
+            UncontrolledProviderScope(
+              container: container,
+              child: Consumer(
+                builder: (context, ref, _) {
+                  final loc = ref.watch(appLocaleProvider);
+                  final isEn = loc.languageCode == 'en';
+                  return MaterialApp(
+                    locale: loc,
+                    supportedLocales: AppLocalizations.supportedLocales,
+                    localizationsDelegates: const [
+                      AppLocalizations.delegate,
+                      GlobalMaterialLocalizations.delegate,
+                      GlobalWidgetsLocalizations.delegate,
+                      GlobalCupertinoLocalizations.delegate,
+                    ],
+                    builder: (context, child) => Directionality(
+                      textDirection:
+                          isEn ? TextDirection.ltr : TextDirection.rtl,
+                      child: child ?? const SizedBox.shrink(),
+                    ),
+                    home: const Scaffold(body: SettingsScreen()),
+                  );
+                },
+              ),
+            ),
+          );
+          await _pumpRealAsync(tester);
+
+          // افتراضياً: اللغة العربية واتجاه RTL
+          expect(container.read(appLocaleProvider).languageCode, 'ar');
+          expect(
+            Directionality.of(tester.element(find.byType(SettingsScreen))),
+            TextDirection.rtl,
+          );
+          expect(
+            find.byKey(const ValueKey('settings_language_card')),
+            findsOneWidget,
+          );
+          expect(find.text('بيانات المؤسسة'), findsOneWidget);
+
+          // النقر على خيار English لتبديل اللغة فوراً
+          await tester.tap(find.byKey(const ValueKey('lang_option_en')));
+          await _pumpRealAsync(tester, cycles: 2);
+
+          expect(container.read(appLocaleProvider).languageCode, 'en');
+          expect(
+            Directionality.of(tester.element(find.byType(SettingsScreen))),
+            TextDirection.ltr,
+          );
+          expect(find.text('Business Profile'), findsOneWidget);
+
+          final sp = await SharedPreferences.getInstance();
+          expect(sp.getString('app_locale'), 'en');
+
+          // العودة إلى العربية
+          await tester.tap(find.byKey(const ValueKey('lang_option_ar')));
+          await _pumpRealAsync(tester, cycles: 2);
+
+          expect(container.read(appLocaleProvider).languageCode, 'ar');
+          expect(
+            Directionality.of(tester.element(find.byType(SettingsScreen))),
+            TextDirection.rtl,
+          );
+          expect(find.text('بيانات المؤسسة'), findsOneWidget);
+          expect(sp.getString('app_locale'), 'ar');
+        } finally {
+          engine.stop();
+          await tester.pumpWidget(const SizedBox.shrink());
+          await tester.pump(const Duration(seconds: 15));
           container.dispose();
           await tester.runAsync(() async {
             await db.close();
