@@ -469,7 +469,7 @@ void main() {
         expect(mergedBeforeReconcile.quantity, 15.0);
 
         // التحقق من ثبات الرصيد عند إعادة مطابقة المخزون مع سجل الحركات (10 + 8 - 3 = 15)
-        await reconcileInventoryQuantities(db);
+        await ApplyRemoteOp.reconcileInventoryQuantities(db);
         final mergedAfterReconcile = (await repo.items()).singleWhere(
           (i) => i.id == 70,
         );
