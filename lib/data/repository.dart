@@ -9708,14 +9708,14 @@ class Repo {
       final db = await _db;
       final placeholders = List.filled(ids.length, '?').join(',');
       final rows = await db.rawQuery(
-        'SELECT transaction_id, item_name FROM transaction_items '
-        'WHERE transaction_id IN ($placeholders) ORDER BY id ASC',
+        'SELECT tx_id, name FROM transaction_items '
+        'WHERE tx_id IN ($placeholders) ORDER BY id ASC',
         ids,
       );
       final grouped = <int, List<String>>{};
       for (final r in rows) {
-        final txId = (r['transaction_id'] as num?)?.toInt();
-        final name = '${r['item_name'] ?? ''}'.trim();
+        final txId = (r['tx_id'] as num?)?.toInt();
+        final name = '${r['name'] ?? ''}'.trim();
         if (txId == null || name.isEmpty) continue;
         grouped.putIfAbsent(txId, () => <String>[]).add(name);
       }

@@ -221,6 +221,9 @@ class DailyHarvestService {
     bool belongsToScope(Tx t) {
       if (isManager) return true;
       // في جهاز العضو (الموظف/الكاشير): يعرض حصيلة مبيعات هذا العضو/الجهاز فقط
+      if (t.id != null && txOpDeviceMap.containsKey(t.id)) {
+        return myDeviceId.isNotEmpty && txOpDeviceMap[t.id] == myDeviceId;
+      }
       if (t.createdByUserId != null && myUserId != null) {
         return t.createdByUserId == myUserId;
       }
@@ -229,9 +232,6 @@ class DailyHarvestService {
         if (myUserName.isNotEmpty && cName == myUserName) return true;
         if (myDeviceName.isNotEmpty && cName == myDeviceName) return true;
         return false;
-      }
-      if (t.id != null && txOpDeviceMap.containsKey(t.id)) {
-        return myDeviceId.isNotEmpty && txOpDeviceMap[t.id] == myDeviceId;
       }
       return t.createdByUserId == null;
     }
