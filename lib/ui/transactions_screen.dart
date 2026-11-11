@@ -98,22 +98,31 @@ class TransactionsScreen extends ConsumerWidget {
               return RefreshIndicator(
                 onRefresh: () async => bump(ref),
                 child: ListView.separated(
-                padding: const EdgeInsets.fromLTRB(14, 4, 14, 96),
-                itemCount: p.items.length + 1,
-                separatorBuilder: (_, __) => const SizedBox(height: 10),
-                itemBuilder: (context, i) {
-                  if (i == 0) return _Totals(page: p, hidden: hidden);
-                  final t = p.items[i - 1];
-                  return _TxCard(
-                    tx: t,
-                    account: t.type == OpType.transfer
-                        ? p.accounts[t.fromId]
-                        : p.accounts[t.accountId],
-                    toAccount: p.accounts[t.toId],
-                    hidden: hidden,
-                  );
-                },
-              ),
+                  padding: const EdgeInsets.fromLTRB(14, 4, 14, 96),
+                  itemCount: p.items.length + 1,
+                  separatorBuilder: (_, __) => const SizedBox(height: 10),
+                  itemBuilder: (context, i) {
+                    if (i == 0) return _Totals(page: p, hidden: hidden);
+                    final idx = i - 1;
+                    final t = p.items[idx];
+                    final txId = t.id;
+                    return _TxCard(
+                      index: idx,
+                      tx: t,
+                      account: t.type == OpType.transfer
+                          ? p.accounts[t.fromId]
+                          : p.accounts[t.accountId],
+                      toAccount: p.accounts[t.toId],
+                      hidden: hidden,
+                      itemsSummary:
+                          (txId != null ? p.itemsSummaryByTxId[txId] : null) ??
+                              '',
+                      executorName:
+                          (txId != null ? p.executorByTxId[txId] : null) ??
+                              t.cashierName,
+                    );
+                  },
+                ),
               );
             },
           ),
@@ -513,18 +522,73 @@ class _SheetList extends StatelessWidget {
   }
 }
 
-class _Totals extends StatelessWidget {
+class _Totals extends ConsumerWidget {
   final TxPage page;
   final bool hidden;
   const _Totals({required this.page, required this.hidden});
 
+  Future<void> _pickPeriod(
+    BuildContext context,
+    WidgetRef ref,
+    TxTotalsPeriod current,
+  ) async {
+    final chosen = await showModalBottomSheet<TxTotalsPeriod>(
+      context: context,
+      showDragHandle: true,
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(16, 4, 16, 10),
+              child: Text(
+                'فترة إجماليات (وارد / صادر)',
+                style: Theme.of(ctx).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w800,
+                    ),
+              ),
+            ),
+            const Divider(height: 1),
+            for (final p in TxTotalsPeriod.values)
+              ListTile(
+                leading: Icon(
+                  p == current
+                      ? Icons.radio_button_checked_rounded
+                      : Icons.radio_button_off_rounded,
+                  color: p == current
+                      ? AppColors.primaryOf(ctx)
+                      : AppColors.text3Of(ctx),
+                ),
+                title: Text(
+                  p.label,
+                  style: TextStyle(
+                    fontWeight:
+                        p == current ? FontWeight.w800 : FontWeight.w600,
+                    color: p == current
+                        ? AppColors.primaryOf(ctx)
+                        : AppColors.textOf(ctx),
+                  ),
+                ),
+                onTap: () => Navigator.pop(ctx, p),
+              ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    if (chosen != null && chosen != current) {
+      ref.read(txTotalsPeriodProvider.notifier).state = chosen;
+    }
+  }
+
   @override
-  Widget build(BuildContext context) {
-    final codes = {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final period = ref.watch(txTotalsPeriodProvider);
+    final rawCodes = {
       ...page.inflowByCurrency.keys,
       ...page.outflowByCurrency.keys,
     }.toList();
-    if (codes.isEmpty) return const SizedBox.shrink();
+    final codes = rawCodes.isEmpty ? const <String>['YER'] : rawCodes;
 
     return Padding(
       padding: const EdgeInsets.only(top: 10, bottom: 2),
@@ -537,23 +601,25 @@ class _Totals extends StatelessWidget {
                 children: [
                   Expanded(
                     child: StatCard(
-                      title: 'وارد ($code)',
+                      title: 'وارد ($code) • ${period.label}',
                       value: hidden
                           ? '••••'
                           : Fmt.money(page.inflowByCurrency[code] ?? 0),
                       icon: Icons.south_west,
                       color: AppColors.greenOf(context),
+                      onTap: () => _pickPeriod(context, ref, period),
                     ),
                   ),
                   const SizedBox(width: 10),
                   Expanded(
                     child: StatCard(
-                      title: 'صادر ($code)',
+                      title: 'صادر ($code) • ${period.label}',
                       value: hidden
                           ? '••••'
                           : Fmt.money(page.outflowByCurrency[code] ?? 0),
                       icon: Icons.north_east,
                       color: AppColors.dangerOf(context),
+                      onTap: () => _pickPeriod(context, ref, period),
                     ),
                   ),
                 ],
@@ -571,6 +637,33 @@ class _Totals extends StatelessWidget {
                 ),
               ),
               const Spacer(),
+              InkWell(
+                borderRadius: BorderRadius.circular(8),
+                onTap: () => _pickPeriod(context, ref, period),
+                child: Padding(
+                  padding:
+                      const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        Icons.calendar_today_rounded,
+                        size: 13,
+                        color: AppColors.primaryOf(context),
+                      ),
+                      const SizedBox(width: 4),
+                      Text(
+                        'الفترة: ${period.label}',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.primaryOf(context),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ],
           ),
         ],
@@ -580,15 +673,21 @@ class _Totals extends StatelessWidget {
 }
 
 class _TxCard extends ConsumerWidget {
+  final int index;
   final Tx tx;
   final Account? account;
   final Account? toAccount;
   final bool hidden;
+  final String itemsSummary;
+  final String executorName;
   const _TxCard({
+    this.index = 0,
     required this.tx,
     required this.account,
     required this.toAccount,
     required this.hidden,
+    this.itemsSummary = '',
+    this.executorName = '',
   });
 
   @override
@@ -603,13 +702,31 @@ class _TxCard extends ConsumerWidget {
       _ => AppColors.violetOf(context),
     };
 
+    // (المتطلب 1) عرض «عميل نقدي» بدلاً من الشرطة «—» عندما لا ترتبط العملية بحساب عميل مسجل.
     final title = isTransfer
-        ? '${account?.name ?? '—'}  ←  ${toAccount?.name ?? '—'}'
+        ? '${account?.name.trim().isNotEmpty == true ? account!.name : 'عميل نقدي'}  ←  ${toAccount?.name.trim().isNotEmpty == true ? toAccount!.name : 'عميل نقدي'}'
         : (account?.name.trim().isNotEmpty == true
             ? account!.name
-            : (tx.type == OpType.revenue ? 'عميل نقدي' : '—'));
+            : 'عميل نقدي');
+
+    // (المتطلب 7-د) تلوين متناوب للبطاقات بين الأبيض والتركواز الفاتح الهادئ.
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final cardBg = index.isEven
+        ? (isDark ? const Color(0xFF1E293B) : Colors.white)
+        : (isDark ? const Color(0xFF132A2E) : const Color(0xFFE6F7F5));
+
+    // (المتطلب 3) ملخص الأصناف (أول صنفين + +N) أو البيان بجانب اسم المنفّذ.
+    final hasItemsSummary = itemsSummary.trim().isNotEmpty;
+    final detailsLine = hasItemsSummary
+        ? itemsSummary.trim()
+        : (tx.description.trim().isNotEmpty
+            ? tx.description.trim()
+            : tx.type.label);
+    final cleanExecutor = executorName.trim();
 
     return Card(
+      color: cardBg,
+      surfaceTintColor: Colors.transparent,
       child: InkWell(
         borderRadius: BorderRadius.circular(16),
         onTap: () => _menu(context, ref),
@@ -632,93 +749,88 @@ class _TxCard extends ConsumerWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text(
-                      title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontWeight: FontWeight.w700,
-                        fontSize: 14.5,
-                      ),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: Text(
+                            title,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 14.5,
+                            ),
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        _buildCompactSyncBadge(context, ref),
+                      ],
                     ),
                     const SizedBox(height: 3),
                     Row(
                       children: [
                         Pill(tx.type.label, color: color),
                         const SizedBox(width: 6),
-                        // (دفعة 58 — متطلب 10) وقت التنفيذ HH:MM بجانب
-                        // التاريخ في بطاقة العملية.
                         Flexible(
                           child: Text(
-                            tx.description.isEmpty
-                                ? '${Fmt.date(tx.date)} · ${Fmt.clock(tx.createdAt)}'
-                                : '${tx.description} · ${Fmt.clock(tx.createdAt)}',
+                            '${Fmt.date(tx.date)} · ${Fmt.clock(tx.createdAt)}',
                             maxLines: 1,
                             overflow: TextOverflow.ellipsis,
                             style: TextStyle(
-                              fontSize: 12,
+                              fontSize: 11.5,
                               color: AppColors.text3Of(context),
                             ),
                           ),
                         ),
                       ],
                     ),
-                    const SizedBox(height: 4),
-                    Builder(
-                      builder: (context) {
-                        final mode =
-                            ref.watch(workspaceModeProvider).value ?? 'standalone';
-                        final st = ref.watch(settingsProvider).value ??
-                            const <String, String>{};
-                        final googleLinked =
-                            ref.watch(googleLinkedProvider).value ?? false;
-                        final isOwner =
-                            ref.watch(isOwnerProvider).value ?? (mode == 'host');
-                        final isLocalStandalone = mode == 'standalone' ||
-                            ((st['account.type'] ?? '') == 'individual' &&
-                                (st['account.email'] ?? st['email'] ?? '')
-                                    .trim()
-                                    .isEmpty &&
-                                !googleLinked);
-                        final badges = isOwner
-                            ? ref.watch(txDeliveryBadgesProvider).valueOrNull
-                            : null;
-                        final b = badges?['${tx.id}'];
-                        final hasManagerTracker =
-                            isOwner && b != null && b.total > 1;
-                        // على جهاز المدير فقط: إذا رُفعت العملية للسحابة ولكن لم تستلمها
-                        // كافة أجهزة الروستر بعد، تبقى الشارة «بانتظار المزامنة» مع العداد الذكي.
-                        final effectiveSyncState = hasManagerTracker
-                            ? (tx.syncState == 'synced' && !b.all
-                                ? 'pending'
-                                : tx.syncState)
-                            : tx.syncState;
-                        return Wrap(
-                          spacing: 5,
-                          runSpacing: 4,
-                          children: [
-                            _statusPill(context, tx.status),
-                            if (!isLocalStandalone) ...[
-                              if (hasManagerTracker)
-                                InkWell(
-                                  borderRadius: BorderRadius.circular(20),
-                                  onTap: () =>
-                                      _showDeliveryDetailsSheet(context, b),
-                                  child: Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      _syncPill(context, effectiveSyncState),
-                                      const SizedBox(width: 5),
-                                      _deliveryBadge(context, b),
-                                    ],
-                                  ),
-                                )
-                              else
-                                _syncPill(context, effectiveSyncState),
-                            ],
-                          ],
-                        );
-                      },
+                    const SizedBox(height: 5),
+                    // سطر نظيف وغير مزدحم يعرض ملخص أصناف الفاتورة (أو البيان) بجانب اسم الجهاز/الموظف المنفذ.
+                    Row(
+                      children: [
+                        Icon(
+                          hasItemsSummary
+                              ? Icons.shopping_bag_outlined
+                              : Icons.notes_rounded,
+                          size: 13.5,
+                          color: AppColors.text2Of(context),
+                        ),
+                        const SizedBox(width: 4),
+                        Expanded(
+                          child: Text(
+                            detailsLine,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 12,
+                              fontWeight: FontWeight.w600,
+                              color: AppColors.text2Of(context),
+                            ),
+                          ),
+                        ),
+                        if (cleanExecutor.isNotEmpty) ...[
+                          const SizedBox(width: 8),
+                          Icon(
+                            Icons.person_outline_rounded,
+                            size: 13,
+                            color: AppColors.text3Of(context),
+                          ),
+                          const SizedBox(width: 3),
+                          ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 110),
+                            child: Text(
+                              cleanExecutor,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                fontSize: 11.5,
+                                fontWeight: FontWeight.w700,
+                                color: AppColors.text3Of(context),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                   ],
                 ),
@@ -753,43 +865,78 @@ class _TxCard extends ConsumerWidget {
     );
   }
 
-  Widget _statusPill(BuildContext context, String status) {
-    final (label, color, icon) = switch (status) {
-      'done' => ('ناجحة', Colors.green.shade600, Icons.check_circle_outline),
-      'pending' => (
-          'قيد التنفيذ',
-          Colors.orange.shade700,
-          Icons.hourglass_empty,
-        ),
-      'failed' || 'cancelled' => (
-          'فاشلة',
-          Colors.red.shade600,
-          Icons.cancel_outlined
-        ),
-      _ => ('ناجحة', Colors.green.shade600, Icons.check_circle_outline),
-    };
-    return _Badge(label: label, color: color, icon: icon);
-  }
+  /// (المتطلب 3) بادج واحد مصغّر وأنيق جداً يحتوي على علامة صح (أو أيقونة انتظار صغيرة) وعداد الأجهزة المتزامنة.
+  Widget _buildCompactSyncBadge(BuildContext context, WidgetRef ref) {
+    final mode = ref.watch(workspaceModeProvider).value ?? 'standalone';
+    final isOwner = ref.watch(isOwnerProvider).value ?? (mode == 'host');
+    final badges =
+        isOwner ? ref.watch(txDeliveryBadgesProvider).valueOrNull : null;
+    final b = badges?['${tx.id}'];
+    final hasTracker = isOwner && b != null && b.total > 1;
 
-  /// شارة ذكية لجهاز المدير فقط تعرض عداد انتشار العملية بين أجهزة المنشأة (`👥 delivered/total`).
-  Widget _deliveryBadge(BuildContext context, TxDeliveryBadge b) {
-    final badgeColor = b.all ? Colors.green.shade700 : Colors.amber.shade900;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2.5),
+    final int delivered;
+    final int total;
+    final bool isComplete;
+
+    if (hasTracker) {
+      delivered = b.delivered;
+      total = b.total;
+      isComplete = tx.syncState == 'synced' && b.all;
+    } else {
+      final devices = ref.watch(devicesProvider).valueOrNull ?? const [];
+      final rosterTotal = devices.length > 1 ? devices.length : 1;
+      total = b?.total ?? rosterTotal;
+      final isSynced =
+          mode == 'standalone' || tx.syncState == 'synced' || tx.status == 'done' && tx.syncState != 'pending' && tx.syncState != 'syncing' && tx.syncState != 'failed';
+      delivered = b?.delivered ?? (isSynced ? total : 1);
+      isComplete = isSynced && delivered >= total;
+    }
+
+    final badgeColor =
+        isComplete ? Colors.green.shade700 : Colors.amber.shade900;
+    final text = isComplete
+        ? '✓ $delivered/$total'
+        : '$delivered/$total';
+
+    final pill = Container(
+      key: ValueKey('tx_compact_sync_badge_${tx.id ?? index}'),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
         color: badgeColor.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: badgeColor.withValues(alpha: 0.35)),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: badgeColor.withValues(alpha: 0.32)),
       ),
-      child: Text(
-        '👥 ${b.delivered}/${b.total}',
-        style: TextStyle(
-          fontSize: 10.5,
-          fontWeight: FontWeight.w800,
-          color: badgeColor,
-        ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          if (!isComplete) ...[
+            Icon(
+              Icons.hourglass_top_rounded,
+              size: 11,
+              color: badgeColor,
+            ),
+            const SizedBox(width: 2),
+          ],
+          Text(
+            text,
+            style: TextStyle(
+              fontSize: 10.5,
+              fontWeight: FontWeight.w800,
+              color: badgeColor,
+            ),
+          ),
+        ],
       ),
     );
+
+    if (hasTracker) {
+      return InkWell(
+        borderRadius: BorderRadius.circular(10),
+        onTap: () => _showDeliveryDetailsSheet(context, b),
+        child: pill,
+      );
+    }
+    return pill;
   }
 
   Future<void> _showDeliveryDetailsSheet(
@@ -969,25 +1116,6 @@ class _TxCard extends ConsumerWidget {
     );
   }
 
-  Widget _syncPill(BuildContext context, String sync) {
-    final (label, color, icon) = switch (sync) {
-      'synced' => (
-          'تمت المزامنة',
-          Colors.green.shade600,
-          Icons.check_circle_rounded,
-        ),
-      'syncing' => ('جاري المزامنة', Colors.orange.shade700, Icons.sync),
-      'failed' => ('فشلت المزامنة', Colors.red.shade600, Icons.error_outline),
-      'pending' => (
-          'بانتظار المزامنة',
-          Colors.amber.shade800,
-          Icons.cloud_upload_outlined,
-        ),
-      _ => ('غير متزامنة', Colors.grey.shade600, Icons.cloud_off_outlined),
-    };
-    return _Badge(label: label, color: color, icon: icon);
-  }
-
   Future<void> _menu(BuildContext context, WidgetRef ref) async {
     final action = await showModalBottomSheet<String>(
       context: context,
@@ -1073,39 +1201,6 @@ class _TxCard extends ConsumerWidget {
           }
         }
     }
-  }
-}
-
-class _Badge extends StatelessWidget {
-  final String label;
-  final Color color;
-  final IconData icon;
-  const _Badge({required this.label, required this.color, required this.icon});
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
-      decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
-        borderRadius: BorderRadius.circular(20),
-        border: Border.all(color: color.withValues(alpha: 0.35)),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(icon, size: 11, color: color),
-          const SizedBox(width: 4),
-          Text(
-            label,
-            style: TextStyle(
-              fontSize: 10.5,
-              color: color,
-              fontWeight: FontWeight.w700,
-            ),
-          ),
-        ],
-      ),
-    );
   }
 }
 

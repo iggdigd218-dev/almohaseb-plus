@@ -14,6 +14,7 @@ import '../core/media_paths.dart';
 import '../core/models.dart';
 import '../core/app_version.dart';
 import '../core/theme.dart';
+import '../data/daily_harvest_service.dart';
 import '../data/providers.dart';
 import '../data/sync/device_registry.dart';
 import '../data/sync/cloud_join.dart';
@@ -105,10 +106,9 @@ class HomeShell extends ConsumerStatefulWidget {
 
 class _HomeShellState extends ConsumerState<HomeShell>
     with WidgetsBindingObserver {
-  AppScreen _screen = AppScreen.dashboard;
+  AppScreen _screen = AppScreen.accounts;
 
-  // (3.70.0) لوحة التحكم مثبّتة كأول شاشة دائمة على كل المنصات —
-  // عند الإقلاع وبعد تجاوز شاشة القفل (أُلغي الإقلاع المباشر على POS).
+  // (المتطلب 7-أ) قسم «العملاء» (AppScreen.accounts) هو التبويب الافتراضي عند التشغيل.
 
   /// الشريط الجانبي المكتبي: مطوي (أيقونات) أو موسّع (أيقونات + عناوين).
   bool _railExtended = true;
@@ -223,6 +223,8 @@ class _HomeShellState extends ConsumerState<HomeShell>
       _consumeNotifyTap();
       // (3.98.34) إشعار دوري (كل يومين كحد أقصى) لإكمال هاتف/بريد الاسترداد.
       _maybeNudgeProfileCompletion();
+      // (المتطلب 2-ب) فحص وعرض إشعار الحصاد اليومي الذكي إن تحققت شروطه.
+      _maybeShowDailyHarvest();
     });
     // (دفعة 58) المستمع العالمي لطلبات الانضمام — للمدير فقط.
     _startGlobalJoinWatcher();
@@ -318,9 +320,37 @@ class _HomeShellState extends ConsumerState<HomeShell>
         if (mounted) setState(() => _screen = AppScreen.inventory);
       } else {
         ref.read(navAppModeProvider.notifier).setMode(NavAppMode.ledger);
-        if (mounted) setState(() => _screen = AppScreen.dashboard);
+        if (mounted) setState(() => _screen = AppScreen.accounts);
       }
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('HomeShell._applyStartupRouting error: $e');
+    }
+  }
+
+  /// (المتطلب 2-ب) فحص وعرض إشعار الحصاد اليومي الذكي عند توفر أصناف ومبيعات > 0.
+  Future<void> _maybeShowDailyHarvest() async {
+    if (Platform.environment.containsKey('FLUTTER_TEST')) return;
+    try {
+      await Future<void>.delayed(const Duration(milliseconds: 900));
+      if (!mounted) return;
+      final repo = ref.read(repoProvider);
+      final summary = await DailyHarvestService.checkAndNotify(repo);
+      if (summary == null || !summary.shouldShow || !mounted) return;
+      ref.invalidate(notificationsProvider);
+      ref.invalidate(unreadCountProvider);
+      while (mounted && _isAnotherModalOpen) {
+        await Future<void>.delayed(const Duration(seconds: 1));
+      }
+      if (!mounted) return;
+      _modalBusy = true;
+      try {
+        await DailyHarvestService.showHarvestDialog(context, summary);
+      } finally {
+        _modalBusy = false;
+      }
+    } catch (e) {
+      debugPrint('HomeShell._maybeShowDailyHarvest error: $e');
+    }
   }
 
   /// يطلب إذن الإشعارات الرسمي للنظام عند الحاجة، ويوقف أي إشعار دائم في شريط النظام.
@@ -486,6 +516,14 @@ class _HomeShellState extends ConsumerState<HomeShell>
         return true;
       case 'cloud_alert':
         await showCloudAlertsSheet(context, ref);
+        return true;
+      case 'daily_harvest':
+        final repo = ref.read(repoProvider);
+        final parsed = safeParseDateTime(id, fallback: DateTime.now());
+        final summary = await DailyHarvestService.evaluate(repo, date: parsed);
+        if (mounted && summary.shouldShow) {
+          await DailyHarvestService.showHarvestDialog(context, summary);
+        }
         return true;
       case 'update_download':
         try {
@@ -1885,13 +1923,12 @@ class _HomeShellState extends ConsumerState<HomeShell>
                 );
               },
             ),
-            // قائمة الخيارات الإضافية (⋮) في الزاوية (تم نقل إعدادات المظهر إلى شاشة الإعدادات)
+            // قائمة الخيارات الإضافية (⋮) في الزاوية (تم نقل خيار إخفاء الأرصدة لجانب الرصيد في الرئيسية)
             Padding(
               padding: const EdgeInsetsDirectional.only(end: 6),
               child: Consumer(
                 builder: (ctx, rref, _) {
                   final isDark = Theme.of(ctx).brightness == Brightness.dark;
-                  final hidden = rref.watch(hideBalancesProvider);
 
                   return PopupMenuButton<String>(
                     tooltip: 'خيارات إضافية',
@@ -1910,55 +1947,28 @@ class _HomeShellState extends ConsumerState<HomeShell>
                     ),
                     shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
                     onSelected: (val) {
-                      if (val == 'balances') {
-                        Sfx.tap();
-                        final next = !hidden;
-                        rref.read(hideBalancesProvider.notifier).state = next;
-                        unawaited(() async {
-                          try {
-                            await rref.read(repoProvider).setSetting(
-                                  'hideBalances',
-                                  next ? '1' : '0',
-                                );
-                          } catch (_) {}
-                        }());
-                      } else if (val == 'refresh') {
+                      if (val == 'refresh') {
                         bump(ref);
                         _refreshSync();
                         try {
                           ref.read(syncEngineProvider).forceSyncNow();
-                        } catch (_) {}
+                        } catch (e) {
+                          debugPrint('HomeShell refresh sync error: $e');
+                        }
                         _checkForAppUpdate();
                       }
                     },
-                    itemBuilder: (c) => [
+                    itemBuilder: (c) => const [
                       PopupMenuItem(
-                        value: 'balances',
+                        value: 'refresh',
                         child: Row(
                           children: [
-                            Icon(
-                              hidden ? Icons.visibility_outlined : Icons.visibility_off_outlined,
-                              size: 19,
-                              color: const Color(0xFF7C3AED),
-                            ),
-                            const SizedBox(width: 10),
-                            Text(hidden ? 'إظهار الأرصدة' : 'إخفاء الأرصدة'),
+                            Icon(Icons.refresh_rounded, size: 19, color: Color(0xFF16A34A)),
+                            SizedBox(width: 10),
+                            Text('تحديث والتحقق من الإصدار'),
                           ],
                         ),
                       ),
-                      if (desktop) ...[
-                        const PopupMenuDivider(),
-                        const PopupMenuItem(
-                          value: 'refresh',
-                          child: Row(
-                            children: [
-                              Icon(Icons.refresh_rounded, size: 19, color: Color(0xFF16A34A)),
-                              SizedBox(width: 10),
-                              Text('تحديث والتحقق من الإصدار'),
-                            ],
-                          ),
-                        ),
-                      ],
                     ],
                   );
                 },

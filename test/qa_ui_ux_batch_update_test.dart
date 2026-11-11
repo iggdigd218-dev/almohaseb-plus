@@ -1,0 +1,545 @@
+import 'dart:io';
+
+import 'package:flutter/material.dart';
+import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
+import 'package:path/path.dart' as p;
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+
+import 'package:nexora_app/core/accounting.dart';
+import 'package:nexora_app/core/database.dart';
+import 'package:nexora_app/core/models.dart';
+import 'package:nexora_app/core/theme.dart';
+import 'package:nexora_app/data/daily_harvest_service.dart';
+import 'package:nexora_app/data/providers.dart';
+import 'package:nexora_app/data/repository.dart';
+import 'package:nexora_app/ui/accounts_screen.dart';
+import 'package:nexora_app/ui/dashboard_screen.dart';
+import 'package:nexora_app/ui/home_shell.dart';
+import 'package:nexora_app/ui/reports_screen.dart';
+import 'package:nexora_app/ui/transactions_screen.dart';
+
+Future<(Repo, Directory)> _openFreshRepo(String tag) async {
+  sqfliteFfiInit();
+  databaseFactory = databaseFactoryFfi;
+  final dir = await Directory.systemTemp.createTemp('nexora_ui_ux_$tag');
+  final dbFile = p.join(dir.path, 'test.db');
+  var initialized = false;
+  Future<Database> open() async {
+    return databaseFactoryFfi.openDatabase(
+      dbFile,
+      options: OpenDatabaseOptions(
+        version: kSchemaVersion,
+        onCreate: (db, v) async {
+          await AppDb.createSchema(db);
+          initialized = true;
+        },
+        onOpen: (db) async {
+          if (!initialized) {
+            await AppDb.migrate(db, 0, kSchemaVersion);
+            initialized = true;
+          }
+        },
+      ),
+    );
+  }
+
+  final repo = Repo(
+    dbOpener: open,
+    deviceId: 'dev-owner-test',
+    workspaceId: 'default',
+  );
+  await repo.ensureInitialized();
+  return (repo, dir);
+}
+
+Widget _wrapWithProviders(Repo repo, Widget home) {
+  return ProviderScope(
+    overrides: [repoProvider.overrideWithValue(repo)],
+    child: MaterialApp(
+      locale: const Locale('ar'),
+      supportedLocales: const [Locale('ar')],
+      localizationsDelegates: const [
+        GlobalMaterialLocalizations.delegate,
+        GlobalWidgetsLocalizations.delegate,
+        GlobalCupertinoLocalizations.delegate,
+      ],
+      theme: AppTheme.light(),
+      home: Scaffold(body: home),
+    ),
+  );
+}
+
+void main() {
+  TestWidgetsFlutterBinding.ensureInitialized();
+
+  group('QA — حزمة تحديثات الواجهة وتجربة المستخدم والتقارير والحصاد اليومي (7 متطلبات)', () {
+    testWidgets(
+      '1 & 7-أ & 6: فتح التطبيق افتراضياً على «العملاء»، وعرض «عميل نقدي» بدل الشرطة، وأيقونة إخفاء الأرصدة بجانب الرصيد',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(430, 900));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        final (repo, dir) = await _openFreshRepo('req1_6_7a');
+        addTearDown(() async {
+          try {
+            final db = await repo.database;
+            await db.close();
+          } catch (e) {
+            debugPrint('close db error: $e');
+          }
+          try {
+            await dir.delete(recursive: true);
+          } catch (e) {
+            debugPrint('delete dir error: $e');
+          }
+        });
+
+        // إضافة عملية نقدية بدون حساب مسجل (accountId == null)
+        await repo.saveTx(
+          Tx(
+            type: OpType.expense,
+            accountId: null,
+            amount: 3500,
+            currency: 'YER',
+            description: 'مشتريات سريعة',
+            date: DateTime.now(),
+          ),
+        );
+
+        // 1) التحقق من أن HomeShell يفتح افتراضياً على قسم «العملاء» (AccountsScreen)
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [repoProvider.overrideWithValue(repo)],
+            child: MaterialApp(
+              locale: const Locale('ar'),
+              supportedLocales: const [Locale('ar')],
+              localizationsDelegates: const [
+                GlobalMaterialLocalizations.delegate,
+                GlobalWidgetsLocalizations.delegate,
+                GlobalCupertinoLocalizations.delegate,
+              ],
+              theme: AppTheme.light(),
+              home: const HomeShell(),
+            ),
+          ),
+        );
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 250));
+
+        expect(find.byType(AccountsScreen), findsOneWidget);
+
+        // التحقق من عدم وجود خيار «إخفاء الأرصدة» داخل قائمة الثلاث نقاط (⋮) في AppBar
+        final moreBtn = find.byIcon(Icons.more_vert_rounded);
+        expect(moreBtn, findsOneWidget);
+        await tester.tap(moreBtn);
+        await tester.pumpAndSettle();
+        expect(find.text('إخفاء الأرصدة'), findsNothing);
+        expect(find.text('إظهار الأرصدة'), findsNothing);
+        // إغلاق القائمة
+        await tester.tapAt(const Offset(10, 10));
+        await tester.pumpAndSettle();
+
+        // 2) فتح DashboardScreen والتحقق من ظهور «عميل نقدي» بدل «—» وأيقونة العين المدمجة بجانب الرصيد
+        await tester.pumpWidget(_wrapWithProviders(repo, const DashboardScreen()));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 250));
+
+        expect(find.text('عميل نقدي'), findsWidgets);
+        final eyeBtn = find.byKey(const ValueKey('toggle_hide_balances_btn'));
+        expect(eyeBtn, findsOneWidget);
+        await tester.tap(eyeBtn);
+        await tester.pump();
+        expect(find.text('••••••'), findsWidgets);
+      },
+    );
+
+    testWidgets(
+      '5 & 7-ب & 7-ج & 7-د: شاشة العملاء — الشريط العلوي الموحّد، أيقونة الشخص، ألوان ومسمى «عليه» (أحمر) و«له» (أزرق)، وتناوب ألوان البطاقات',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(430, 900));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        final (repo, dir) = await _openFreshRepo('req5_7bcd');
+        addTearDown(() async {
+          try {
+            final db = await repo.database;
+            await db.close();
+          } catch (e) {
+            debugPrint('close db error: $e');
+          }
+          try {
+            await dir.delete(recursive: true);
+          } catch (e) {
+            debugPrint('delete dir error: $e');
+          }
+        });
+
+        final debtorId = await repo.saveAccount(
+          const Account(
+            name: 'أحمد صالح',
+            kind: AccountKind.customer,
+            currency: 'YER',
+            phone: '777111222',
+          ),
+        );
+        final creditorId = await repo.saveAccount(
+          const Account(
+            name: 'خالد منصور',
+            kind: AccountKind.customer,
+            currency: 'YER',
+            phone: '777333444',
+          ),
+        );
+
+        // عملية تجعل «أحمد صالح» مديناً (عليه > 0)
+        await repo.saveTx(
+          Tx(
+            type: OpType.debit,
+            accountId: debtorId,
+            amount: 5000,
+            currency: 'YER',
+            description: 'فاتورة آجلة',
+            date: DateTime.now(),
+          ),
+        );
+        // عملية تجعل «خالد منصور» دائناً (له < 0)
+        await repo.saveTx(
+          Tx(
+            type: OpType.credit,
+            accountId: creditorId,
+            amount: 2500,
+            currency: 'YER',
+            description: 'دفعة مقدمة',
+            date: DateTime.now(),
+          ),
+        );
+
+        await tester.pumpWidget(_wrapWithProviders(repo, const AccountsScreen()));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 300));
+
+        // المتطلب 5: وجود بادج التصفية الموحد + أيقونة البحث المصغرة + زر (+) بدون نص
+        expect(find.byKey(const ValueKey('accounts_unified_filter_badge')), findsOneWidget);
+        expect(find.byKey(const ValueKey('accounts_search_icon_badge')), findsOneWidget);
+        expect(find.byKey(const ValueKey('accounts_add_btn')), findsOneWidget);
+        expect(find.text('حساب جديد'), findsNothing);
+
+        // المتطلب 7-ب: أيقونة الشخص القياسية بدلاً من الحروف الأولى
+        expect(find.byIcon(Icons.person_rounded), findsWidgets);
+        expect(find.byIcon(Icons.person), findsWidgets);
+        expect(find.text('أص'), findsNothing);
+        expect(find.text('خم'), findsNothing);
+
+        // المتطلب 7-ج: ظهور «عليه» (وليس «عليكم») باللون الأحمر، و«له» باللون الأزرق
+        expect(find.text('عليكم'), findsNothing);
+        expect(find.text('لكم'), findsNothing);
+        final debtLabel = tester.widget<Text>(find.text('عليه').first);
+        expect(debtLabel.style?.color, const Color(0xFFEF4444));
+        final creditLabel = tester.widget<Text>(find.text('له').first);
+        expect(creditLabel.style?.color, const Color(0xFF0284C7));
+
+        // المتطلب 7-د: تلوين متناوب للبطاقات بين الأبيض والتركواز الفاتح الهادئ
+        final containers = tester
+            .widgetList<Container>(find.byType(Container))
+            .where((c) {
+          final dec = c.decoration;
+          return dec is BoxDecoration &&
+              (dec.color == Colors.white || dec.color == const Color(0xFFE6F7F5));
+        }).toList();
+        expect(
+          containers.any((c) => (c.decoration as BoxDecoration).color == Colors.white),
+          isTrue,
+        );
+        expect(
+          containers.any(
+            (c) => (c.decoration as BoxDecoration).color == const Color(0xFFE6F7F5),
+          ),
+          isTrue,
+        );
+
+        // النقر على أيقونة البحث يمدد حقل النص
+        await tester.tap(find.byKey(const ValueKey('accounts_search_icon_badge')));
+        await tester.pump();
+        expect(find.byKey(const ValueKey('accounts_search_field')), findsOneWidget);
+      },
+    );
+
+    testWidgets(
+      '2-أ & 3 & 7-د: شاشة العمليات — فلتر الفترات لبطاقتي (وارد/صادر)، البادج الموحد المصغر، وملخص الأصناف والمنفذ',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(430, 900));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        final (repo, dir) = await _openFreshRepo('req2a_3_7d');
+        addTearDown(() async {
+          try {
+            final db = await repo.database;
+            await db.close();
+          } catch (e) {
+            debugPrint('close db error: $e');
+          }
+          try {
+            await dir.delete(recursive: true);
+          } catch (e) {
+            debugPrint('delete dir error: $e');
+          }
+        });
+
+        final now = DateTime.now();
+        final threeDaysAgo = now.subtract(const Duration(days: 3));
+
+        // عملية اليوم
+        final todayTxId = await repo.saveTx(
+          Tx(
+            type: OpType.revenue,
+            accountId: null,
+            amount: 4000,
+            currency: 'YER',
+            description: 'فاتورة نقدية مدفوعة',
+            date: now,
+            cashierName: 'محمد الكاشير',
+          ),
+        );
+        final db = await repo.database;
+        for (final name in ['حليب نادك', 'خبز أبيض', 'جبن شيدر', 'عصير برتقال']) {
+          await db.insert('transaction_items', {
+            'workspace_id': 'default',
+            'transaction_id': todayTxId,
+            'item_name': name,
+            'quantity': 1,
+            'unit_price': 1000,
+            'total': 1000,
+            'created_at': now.toIso8601String(),
+          });
+        }
+
+        // عملية قبل 3 أيام
+        await repo.saveTx(
+          Tx(
+            type: OpType.revenue,
+            accountId: null,
+            amount: 6000,
+            currency: 'YER',
+            description: 'مبيعات سابقة',
+            date: threeDaysAgo,
+            cashierName: 'سالم',
+          ),
+        );
+
+        await tester.pumpWidget(_wrapWithProviders(repo, const TransactionsScreen()));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 350));
+
+        // المتطلب 2-أ: افتراضياً الفترة «يومي» وتعرض حركة اليوم فقط (4,000)
+        expect(find.textContaining('وارد (YER) • يومي'), findsOneWidget);
+        expect(find.textContaining('صادر (YER) • يومي'), findsOneWidget);
+
+        // المتطلب 3: عدم وجود البادجات الثلاثة القديمة، ووجود البادج الموحد المصغر + ملخص الأصناف + اسم المنفذ
+        expect(find.text('ناجحة'), findsNothing);
+        expect(find.text('بانتظار المزامنة'), findsNothing);
+        expect(find.textContaining('✓ 1/1'), findsWidgets);
+        expect(find.textContaining('حليب نادك، خبز أبيض +2'), findsOneWidget);
+        expect(find.textContaining('محمد الكاشير'), findsOneWidget);
+
+        // النقر على بطاقة «وارد» واختيار «أسبوعي» يحدّث العنوان والإجمالي ليشمل عملية قبل 3 أيام (10,000)
+        await tester.tap(find.textContaining('وارد (YER) • يومي'));
+        await tester.pumpAndSettle();
+        await tester.tap(find.text('أسبوعي'));
+        await tester.pumpAndSettle();
+        await tester.pump(const Duration(milliseconds: 250));
+
+        expect(find.textContaining('وارد (YER) • أسبوعي'), findsOneWidget);
+        expect(find.text('10,000'), findsOneWidget);
+      },
+    );
+
+    test(
+      '2-ب: نظام إشعار الحصاد اليومي الذكي — شروط الظهور، صلاحيات المدير مقابل العضو، والعمود seen',
+      () async {
+        final (repo, dir) = await _openFreshRepo('req2b_harvest');
+        addTearDown(() async {
+          try {
+            final db = await repo.database;
+            await db.close();
+          } catch (e) {
+            debugPrint('close db error: $e');
+          }
+          try {
+            await dir.delete(recursive: true);
+          } catch (e) {
+            debugPrint('delete dir error: $e');
+          }
+        });
+
+        // 1) بدون أصناف مدخلة في المخزون -> لا يظهر الإشعار أبداً
+        final emptyEval = await DailyHarvestService.evaluate(repo);
+        expect(emptyEval.shouldShow, isFalse);
+        expect(await DailyHarvestService.checkAndNotify(repo), isNull);
+
+        // 2) إدخال صنف في المخزون ولكن المبيعات = 0 -> لا يظهر الإشعار
+        await repo.saveItem(
+          const Item(
+            name: 'أرز بسمتي',
+            sku: 'SKU-100',
+            price: 5000,
+            costPrice: 4000,
+            quantity: 20,
+          ),
+        );
+        final zeroSalesEval = await DailyHarvestService.evaluate(repo);
+        expect(zeroSalesEval.shouldShow, isFalse);
+        expect(await DailyHarvestService.checkAndNotify(repo), isNull);
+
+        final db = await repo.database;
+        final now = DateTime.now();
+
+        // تسجيل جهاز عضو ومبيعات خاصة بالمدير ومبيعات خاصة بالعضو
+        await db.insert('devices', {
+          'id': 'dev-member-2',
+          'workspace_id': 'default',
+          'name': 'كاشير الفرع',
+          'role': 'cashier',
+          'paired_at': now.toIso8601String(),
+        });
+
+        // فاتورة نفذها المدير (5,000)
+        await repo.saveTx(
+          Tx(
+            type: OpType.revenue,
+            accountId: null,
+            amount: 5000,
+            currency: 'YER',
+            description: 'فاتورة نقدية مدفوعة #1',
+            date: now,
+            cashierName: 'المدير العام',
+          ),
+        );
+
+        // فاتورة نفذها العضو (3,000)
+        final memberTxId = await db.insert('transactions', {
+          'workspace_id': 'default',
+          'type': 'revenue',
+          'amount': 3000,
+          'currency': 'YER',
+          'description': 'فاتورة نقدية مدفوعة #2',
+          'date': now.toIso8601String(),
+          'status': 'done',
+          'sync_state': 'synced',
+          'cashier_name': 'كاشير الفرع',
+          'created_at': now.toIso8601String(),
+        });
+        await db.insert('operations', {
+          'id': 'op-member-tx-$memberTxId',
+          'workspace_id': 'default',
+          'device_id': 'dev-member-2',
+          'entity_type': 'tx',
+          'entity_id': '$memberTxId',
+          'op_type': 'create',
+          'payload_json': '{}',
+          'timestamp': now.millisecondsSinceEpoch,
+        });
+
+        // 3) تقييم المدير: يعرض إجمالي مبيعات المتجر بالكامل (5000 + 3000 = 8000) وعدد الفواتير (2)
+        final managerSummary = await DailyHarvestService.evaluate(
+          repo,
+          isManagerOverride: true,
+        );
+        expect(managerSummary.shouldShow, isTrue);
+        expect(managerSummary.totalSales, 8000);
+        expect(managerSummary.invoiceCount, 2);
+        expect(managerSummary.title, isNotEmpty);
+        expect(managerSummary.message, isNotEmpty);
+
+        // إصدار الإشعار والتحقق من حفظه في جدول notifications بالعمود seen = 0
+        final emitted = await DailyHarvestService.checkAndNotify(
+          repo,
+          isManagerOverride: true,
+        );
+        expect(emitted, isNotNull);
+        final notifRows = await db.query(
+          'notifications',
+          where: "kind = 'daily_harvest'",
+        );
+        expect(notifRows, isNotEmpty);
+        expect(notifRows.first['seen'], 0);
+
+        // 4) تقييم العضو: يعرض مبيعات المدير/العضو المنفذ على جهازه فقط دون كشف مبيعات بقية الأجهزة
+        final memberSummary = await DailyHarvestService.evaluate(
+          repo,
+          isManagerOverride: false,
+        );
+        expect(memberSummary.shouldShow, isTrue);
+        expect(memberSummary.totalSales, 5000);
+        expect(memberSummary.invoiceCount, 1);
+      },
+    );
+
+    testWidgets(
+      '4: شاشة التقارير — الشريط العلوي الموحد وشبكة البطاقات الأربع التفاعلية (2×2) مع دمج عدد العمليات',
+      (tester) async {
+        await tester.binding.setSurfaceSize(const Size(430, 900));
+        addTearDown(() => tester.binding.setSurfaceSize(null));
+
+        final (repo, dir) = await _openFreshRepo('req4_reports');
+        addTearDown(() async {
+          try {
+            final db = await repo.database;
+            await db.close();
+          } catch (e) {
+            debugPrint('close db error: $e');
+          }
+          try {
+            await dir.delete(recursive: true);
+          } catch (e) {
+            debugPrint('delete dir error: $e');
+          }
+        });
+
+        final custId = await repo.saveAccount(
+          const Account(
+            name: 'عميل التقارير',
+            kind: AccountKind.customer,
+            currency: 'YER',
+          ),
+        );
+        await repo.saveTx(
+          Tx(
+            type: OpType.debit,
+            accountId: custId,
+            amount: 7500,
+            currency: 'YER',
+            description: 'فاتورة مبيعات تقارير',
+            date: DateTime.now(),
+          ),
+        );
+
+        await tester.pumpWidget(_wrapWithProviders(repo, const ReportsScreen()));
+        await tester.pump();
+        await tester.pump(const Duration(milliseconds: 350));
+
+        // 4-أ: شريط علوي واحد يضم بادج التاريخ وبادج «تصفية وعرض»
+        expect(find.byKey(const ValueKey('reports_date_range_badge')), findsOneWidget);
+        expect(find.byKey(const ValueKey('reports_unified_filter_badge')), findsOneWidget);
+
+        // 4-ب: شبكة 2×2 للبطاقات الأربع مع دمج «عدد العمليات» كعنصر فرعي داخل «إجمالي المبيعات»
+        expect(find.byKey(const ValueKey('report_card_sales')), findsOneWidget);
+        expect(find.byKey(const ValueKey('report_card_owed_to_us')), findsOneWidget);
+        expect(find.byKey(const ValueKey('report_card_owed_by_us')), findsOneWidget);
+        expect(find.byKey(const ValueKey('report_card_net')), findsOneWidget);
+        expect(find.textContaining('عدد العمليات: 1'), findsOneWidget);
+
+        // النقر على بطاقة «إجمالي المبيعات» يميزها ويحدث الجدول لعرض عمليات المبيعات
+        await tester.tap(find.byKey(const ValueKey('report_card_sales')));
+        await tester.pumpAndSettle();
+        expect(find.text('فاتورة مبيعات تقارير'), findsOneWidget);
+
+        // النقر على بطاقة «إجمالي المستحق لنا» يحدث الجدول لعرض الحسابات المدينة
+        await tester.tap(find.byKey(const ValueKey('report_card_owed_to_us')));
+        await tester.pumpAndSettle();
+        expect(find.textContaining('عميل التقارير'), findsOneWidget);
+      },
+    );
+  });
+}

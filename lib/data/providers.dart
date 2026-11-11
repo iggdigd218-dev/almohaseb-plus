@@ -458,6 +458,35 @@ enum TxSort {
   final String label;
 }
 
+/// فلتر الفترة الزمنية لبطاقتي (وارد / صادر) في شاشة العمليات.
+enum TxTotalsPeriod {
+  daily('يومي'),
+  weekly('أسبوعي'),
+  monthly('شهري'),
+  yearly('سنوي'),
+  all('الكل');
+
+  const TxTotalsPeriod(this.label);
+  final String label;
+
+  /// بداية الفترة الزمنية مقارنةً باللحظة الحالية (أو [reference]).
+  DateTime? startOf([DateTime? reference]) {
+    final now = reference ?? DateTime.now();
+    final todayStart = DateTime(now.year, now.month, now.day);
+    return switch (this) {
+      TxTotalsPeriod.daily => todayStart,
+      TxTotalsPeriod.weekly => todayStart.subtract(const Duration(days: 6)),
+      TxTotalsPeriod.monthly => DateTime(now.year, now.month, 1),
+      TxTotalsPeriod.yearly => DateTime(now.year, 1, 1),
+      TxTotalsPeriod.all => null,
+    };
+  }
+}
+
+final txTotalsPeriodProvider = StateProvider<TxTotalsPeriod>(
+  (ref) => TxTotalsPeriod.daily,
+);
+
 final txFilterProvider = StateProvider<TxFilter>((ref) => const TxFilter());
 
 /// نتيجة شاشة العمليات: العمليات المصفّاة + خريطة أسماء الحسابات + الإجماليات.
@@ -467,6 +496,8 @@ class TxPage {
   final Map<String, double> inflowByCurrency;
   final Map<String, double> outflowByCurrency;
   final Map<String, double> salesByCurrency;
+  final Map<int, String> itemsSummaryByTxId;
+  final Map<int, String> executorByTxId;
 
   const TxPage({
     required this.items,
@@ -474,12 +505,15 @@ class TxPage {
     required this.inflowByCurrency,
     required this.outflowByCurrency,
     this.salesByCurrency = const {},
+    this.itemsSummaryByTxId = const {},
+    this.executorByTxId = const {},
   });
 }
 
 final txPageProvider = FutureProvider<TxPage>((ref) async {
   ref.watch(refreshProvider);
   final f = ref.watch(txFilterProvider);
+  final period = ref.watch(txTotalsPeriodProvider);
   final repo = ref.watch(repoProvider);
 
   final all = await repo.transactions(
@@ -519,12 +553,27 @@ final txPageProvider = FutureProvider<TxPage>((ref) async {
       list.sort((a, b) => b.date.compareTo(a.date));
   }
 
-  // إجماليات الداخل والخارج وإجمالي المبيعات لكل عملة على المجموعة المعروضة.
+  // إجماليات الداخل والخارج وإجمالي المبيعات لكل عملة حسب الفترة المختارة (افتراضياً: اليوم من 00:00).
   final posTxIds = await repo.posInvoiceTxIds();
+  final periodStart = period.startOf();
   final inflow = <String, double>{};
   final outflow = <String, double>{};
   final sales = <String, double>{};
+
+  // تهيئة العملات الموجودة في القائمة لضمان بقاء بطاقتي (وارد / صادر) ظاهرتين وقابلتين للنقر حتى لو كانت حركة اليوم 0.
   for (final t in list) {
+    inflow.putIfAbsent(t.currency, () => 0.0);
+    outflow.putIfAbsent(t.currency, () => 0.0);
+  }
+  if (inflow.isEmpty && list.isNotEmpty) {
+    final c = list.first.currency;
+    inflow[c] = 0.0;
+    outflow[c] = 0.0;
+  }
+
+  for (final t in list) {
+    final inPeriod = periodStart == null || !t.date.isBefore(periodStart);
+    if (!inPeriod) continue;
     final g = opGroup(t.type);
     if (g == 'inflow') {
       inflow[t.currency] = (inflow[t.currency] ?? 0) + t.amount;
@@ -553,12 +602,18 @@ final txPageProvider = FutureProvider<TxPage>((ref) async {
     sales[cur] = (sales[cur] ?? 0.0).clamp(0.0, double.infinity);
   }
 
+  final txIds = list.map((t) => t.id).whereType<int>().toList();
+  final itemsSummaries = await repo.batchTxItemsSummary(txIds);
+  final executors = await repo.batchTxExecutors(list);
+
   return TxPage(
     items: list,
     accounts: byId,
     inflowByCurrency: inflow,
     outflowByCurrency: outflow,
     salesByCurrency: sales,
+    itemsSummaryByTxId: itemsSummaries,
+    executorByTxId: executors,
   );
 });
 
