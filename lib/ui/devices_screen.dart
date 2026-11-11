@@ -156,16 +156,16 @@ class DeviceCard extends StatelessWidget {
       if (lastSeen.isNotEmpty)
         _smallLabel(
           'آخر ظهور',
-          DateTime.tryParse(lastSeen) == null
+          safeParseNullableDateTime(lastSeen) == null
               ? lastSeen
-              : Fmt.relative(DateTime.parse(lastSeen)),
+              : Fmt.relative(safeParseDateTime(lastSeen)),
         ),
       if ('${data['last_sync_at'] ?? ''}'.isNotEmpty)
         _smallLabel(
           'آخر مزامنة ☁️',
-          DateTime.tryParse('${data['last_sync_at']}') == null
+          safeParseNullableDateTime(data['last_sync_at']) == null
               ? '${data['last_sync_at']}'
-              : Fmt.relative(DateTime.parse('${data['last_sync_at']}')),
+              : Fmt.relative(safeParseDateTime(data['last_sync_at'])),
         ),
     ];
 

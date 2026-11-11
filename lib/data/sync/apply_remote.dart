@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:flutter/foundation.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 
@@ -472,44 +473,53 @@ Future<int?> _lookupRemappedItemId(
   final idStr = '$rawItemId'.trim();
   if (idStr.isEmpty) return null;
   try {
-    final keys = <String>[
-      if (deviceId.trim().isNotEmpty) 'item_id_remap:${deviceId.trim()}:$idStr',
-      'item_id_remap:*:$idStr',
-    ];
-    for (final k in keys) {
-      final rows = await txn.query(
+    final cleanDev = deviceId.trim();
+    if (cleanDev.isNotEmpty) {
+      final exactRows = await txn.query(
         'sync_meta',
         columns: ['value'],
         where: 'key = ?',
-        whereArgs: [k],
+        whereArgs: ['item_id_remap:$cleanDev:$idStr'],
         limit: 1,
       );
-      if (rows.isNotEmpty) {
-        final parsed = int.tryParse('${rows.first['value'] ?? ''}'.trim());
+      if (exactRows.isNotEmpty) {
+        final parsed = int.tryParse('${exactRows.first['value'] ?? ''}'.trim());
         if (parsed != null && parsed > 0) return parsed;
       }
     }
-  } catch (_) {}
+    final likeRows = await txn.query(
+      'sync_meta',
+      columns: ['key', 'value'],
+      where: 'key LIKE ?',
+      whereArgs: ['item_id_remap:%:$idStr'],
+    );
+    final origId = int.tryParse(idStr);
+    int? fallbackId;
+    for (final r in likeRows) {
+      final parsed = int.tryParse('${r['value'] ?? ''}'.trim());
+      if (parsed == null || parsed <= 0) continue;
+      if (origId != null && parsed != origId) {
+        return parsed;
+      }
+      fallbackId ??= parsed;
+    }
+    if (fallbackId != null) return fallbackId;
+  } catch (e) {
+    debugPrint('_lookupRemappedItemId error: $e');
+  }
   return null;
 }
 
 /// توليد رقم صنف (id) جديد متاح للصنف المتعارض دون الكتابة فوق أي صنف موجود.
 Future<int> _allocateFreeItemId(
-  DatabaseExecutor txn,
-  int collidingId,
-) async {
-  var candidate = collidingId > 0 ? collidingId + 1 : 1;
-  while (true) {
-    final found = await txn.query(
-      'items',
-      columns: ['id'],
-      where: 'id = ?',
-      whereArgs: [candidate],
-      limit: 1,
-    );
-    if (found.isEmpty) return candidate;
-    candidate++;
-  }
+  DatabaseExecutor txn, [
+  int collidingId = 0,
+]) async {
+  final nextId = Sqflite.firstIntValue(
+        await txn.rawQuery('SELECT COALESCE(MAX(id), 0) + 1 FROM items'),
+      ) ??
+      1;
+  return nextId > collidingId ? nextId : collidingId + 1;
 }
 
 /// توليد رقم ترقيم سريع (PLU) متاح داخل المعاملة الحالية.
@@ -535,10 +545,11 @@ Future<String> _resolveItemCreatorName(
   bool isLocal = false,
 }) async {
   try {
-    if (op != null) {
+    if (op != null && !isLocal) {
       for (final k in const ['created_by_name', 'device_name', 'user_name']) {
-        final v = '${op.payload[k] ?? ''}'.trim();
-        if (v.isNotEmpty) return v;
+        final name = '${op.payload[k] ?? ''}'.trim();
+        if (isPlaceholderDeviceName(name)) continue;
+        return name;
       }
       if (op.deviceId.trim().isNotEmpty) {
         final devRows = await txn.query(
@@ -548,9 +559,10 @@ Future<String> _resolveItemCreatorName(
           whereArgs: [op.deviceId.trim()],
           limit: 1,
         );
-        if (devRows.isNotEmpty) {
-          final n = '${devRows.first['name'] ?? ''}'.trim();
-          if (n.isNotEmpty) return n;
+        for (final r in devRows) {
+          final name = '${r['name'] ?? ''}'.trim();
+          if (isPlaceholderDeviceName(name)) continue;
+          return name;
         }
       }
       if (op.userId != null) {
@@ -561,9 +573,10 @@ Future<String> _resolveItemCreatorName(
           whereArgs: [op.userId],
           limit: 1,
         );
-        if (uRows.isNotEmpty) {
-          final n = '${uRows.first['name'] ?? ''}'.trim();
-          if (n.isNotEmpty) return n;
+        for (final r in uRows) {
+          final name = '${r['name'] ?? ''}'.trim();
+          if (isPlaceholderDeviceName(name)) continue;
+          return name;
         }
       }
       if (op.deviceId.trim().isNotEmpty) return op.deviceId.trim();
@@ -571,6 +584,28 @@ Future<String> _resolveItemCreatorName(
     }
 
     if (isLocal) {
+      // 1) الإعدادات أولاً بالترتيب: profile.owner_name ثم account.name ثم sync.deviceName
+      final stRows = await txn.query(
+        'settings',
+        columns: ['key', 'value'],
+        where:
+            "key IN ('profile.owner_name', 'account.name', 'sync.deviceName')",
+      );
+      final stMap = <String, String>{
+        for (final r in stRows)
+          '${r['key'] ?? ''}'.trim(): '${r['value'] ?? ''}'.trim(),
+      };
+      for (final k in const [
+        'profile.owner_name',
+        'account.name',
+        'sync.deviceName',
+      ]) {
+        final name = (stMap[k] ?? '').trim();
+        if (isPlaceholderDeviceName(name)) continue;
+        return name;
+      }
+
+      // 2) حمولة العملية التأسيسية للصنف ثم اسم الجهاز في devices
       final itemId = itemRow?['id'];
       if (itemId != null) {
         final ops = await txn.query(
@@ -592,11 +627,14 @@ Future<String> _resolveItemCreatorName(
                   'device_name',
                   'user_name',
                 ]) {
-                  final v = '${decoded[k] ?? ''}'.trim();
-                  if (v.isNotEmpty) return v;
+                  final name = '${decoded[k] ?? ''}'.trim();
+                  if (isPlaceholderDeviceName(name)) continue;
+                  return name;
                 }
               }
-            } catch (_) {}
+            } catch (e) {
+              debugPrint('_resolveItemCreatorName payload decode error: $e');
+            }
           }
           final devId = '${ops.first['device_id'] ?? ''}'.trim();
           if (devId.isNotEmpty) {
@@ -607,36 +645,46 @@ Future<String> _resolveItemCreatorName(
               whereArgs: [devId],
               limit: 1,
             );
-            if (devRows.isNotEmpty) {
-              final n = '${devRows.first['name'] ?? ''}'.trim();
-              if (n.isNotEmpty) return n;
+            for (final r in devRows) {
+              final name = '${r['name'] ?? ''}'.trim();
+              if (isPlaceholderDeviceName(name)) continue;
+              return name;
             }
           }
         }
       }
+
+      // 3) جدول الأجهزة المحلية المقترنة
+      final localDevs = await txn.query(
+        'devices',
+        columns: ['name'],
+        where: "is_paired = 1 AND COALESCE(revoked_at,'') = ''",
+        orderBy: 'is_owner DESC, updated_at DESC',
+      );
+      for (final r in localDevs) {
+        final name = '${r['name'] ?? ''}'.trim();
+        if (isPlaceholderDeviceName(name)) continue;
+        return name;
+      }
+
+      // 4) جدول المستخدمين (is_me = 1) مع تخطي الأسماء الافتراضية مثل «المدير»
       final meRows = await txn.query(
         'users',
         columns: ['name'],
         where: "is_me = 1 AND COALESCE(deleted_at,'') = ''",
         limit: 1,
       );
-      if (meRows.isNotEmpty) {
-        final n = '${meRows.first['name'] ?? ''}'.trim();
-        if (n.isNotEmpty) return n;
+      for (final r in meRows) {
+        final name = '${r['name'] ?? ''}'.trim();
+        if (isPlaceholderDeviceName(name)) continue;
+        return name;
       }
-      final stRows = await txn.query(
-        'settings',
-        columns: ['value'],
-        where:
-            "key IN ('sync.deviceName', 'profile.owner_name', 'account.name')",
-      );
-      for (final r in stRows) {
-        final v = '${r['value'] ?? ''}'.trim();
-        if (v.isNotEmpty) return v;
-      }
+
       return 'هذا الجهاز';
     }
-  } catch (_) {}
+  } catch (e) {
+    debugPrint('_resolveItemCreatorName error: $e');
+  }
   return isLocal ? 'هذا الجهاز' : 'جهاز عضو';
 }
 
@@ -649,6 +697,9 @@ Future<void> _recordAndNotifyItemConflict(
   bool syncSetting = true,
 }) async {
   final ws = workspaceId.trim().isEmpty ? 'default' : workspaceId.trim();
+  final prev = await repo.itemConflictByKey(conflict.key, executor: txn);
+  final unchanged = prev != null && prev.toJson() == conflict.toJson();
+
   await txn.insert(
     'settings',
     {'key': conflict.key, 'value': conflict.toJson()},
@@ -674,7 +725,8 @@ Future<void> _recordAndNotifyItemConflict(
         'entity_id': conflict.key,
         'created_at': nowIso,
       });
-    } else {
+      ItemConflictHooks.notifyConflict(conflict);
+    } else if (!unchanged) {
       await txn.update(
         'notifications',
         {
@@ -687,8 +739,8 @@ Future<void> _recordAndNotifyItemConflict(
         where: 'id = ?',
         whereArgs: [existingNotif.first['id']],
       );
+      ItemConflictHooks.notifyConflict(conflict);
     }
-    ItemConflictHooks.notifyConflict(conflict);
   } else if (conflict.isResolved) {
     await txn.update(
       'notifications',
@@ -696,9 +748,11 @@ Future<void> _recordAndNotifyItemConflict(
       where: "entity_type = 'item_conflict' AND entity_id = ?",
       whereArgs: [conflict.key],
     );
+    ItemConflictHooks.notifyConflict(conflict);
   }
 
   if (syncSetting) {
+    if (unchanged) return;
     try {
       await repo.queueOperation(
         entityType: EntityKind.setting,
@@ -707,7 +761,9 @@ Future<void> _recordAndNotifyItemConflict(
         payload: {'key': conflict.key, 'value': conflict.toJson()},
         executor: txn,
       );
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('_recordAndNotifyItemConflict queueOperation error: $e');
+    }
   }
 }
 
@@ -768,6 +824,9 @@ Future<void> _detectAndNotifyBarcodeOrPluConflict(
   final secondId = otherId < itemId ? itemId : otherId;
   final conflictKey = 'item_conflict:${firstId}_$secondId';
 
+  final existing = await repo.itemConflictByKey(conflictKey, executor: txn);
+  if (existing != null && existing.isResolved) return;
+
   final localCreator = await _resolveItemCreatorName(
     txn,
     itemRow: otherRow,
@@ -779,7 +838,8 @@ Future<void> _detectAndNotifyBarcodeOrPluConflict(
   final conflict = OfflineItemConflict(
     key: conflictKey,
     conflictType: conflictType,
-    originalCollidingId: originalCollidingId,
+    originalCollidingId:
+        originalCollidingId ?? existing?.originalCollidingId,
     sharedSku: hasSkuConflict ? cleanSku : '',
     item1Id: firstId,
     item1Name: item1IsOther ? otherName : cleanName,
@@ -788,7 +848,9 @@ Future<void> _detectAndNotifyBarcodeOrPluConflict(
     item2Name: item1IsOther ? cleanName : otherName,
     item2Creator: item1IsOther ? incomingCreator : localCreator,
     status: 'pending',
-    createdAt: now,
+    createdAt: (existing != null && existing.createdAt.isNotEmpty)
+        ? existing.createdAt
+        : now,
   );
 
   await _recordAndNotifyItemConflict(
@@ -871,24 +933,44 @@ Future<void> _healItemNameConflict(
     // (initialCreateQty + طيّ الحركات) ويضخّم المخزون عند إعادة المطابقة.
     final dupQty = ((d['quantity'] as num?) ?? 0).toDouble();
     double recordedInMoves = 0.0;
-    if (dupQty > 0) {
-      try {
-        final moveRows = await txn.rawQuery(
-          "SELECT kind, SUM(quantity) as total FROM stock_moves "
-          "WHERE item_id = ? AND (deleted_at IS NULL OR deleted_at = '') "
-          "GROUP BY kind",
-          [dupId],
-        );
-        for (final r in moveRows) {
-          final k = r['kind']?.toString() ?? '';
-          final t = ((r['total'] as num?) ?? 0).toDouble();
-          if (k == 'purchase' || k == 'return' || k == 'returnIn') {
-            recordedInMoves += t;
-          } else if (k == 'sale') {
-            recordedInMoves -= t;
+    try {
+      final dropMoves = await txn.query(
+        'stock_moves',
+        columns: ['id', 'kind', 'quantity'],
+        where:
+            "item_id = ? AND (deleted_at IS NULL OR deleted_at = '')",
+        whereArgs: [dupId],
+        orderBy: 'date ASC, created_at ASC, id ASC',
+      );
+      for (final m in dropMoves) {
+        final k = '${m['kind'] ?? ''}'.trim();
+        final q = ((m['quantity'] as num?) ?? 0).toDouble();
+        if (k == 'adjust') {
+          final delta = q - recordedInMoves;
+          if (delta >= 0) {
+            await txn.update(
+              'stock_moves',
+              {'kind': StockKind.purchase.code, 'quantity': delta},
+              where: 'id = ?',
+              whereArgs: [m['id']],
+            );
+          } else {
+            await txn.update(
+              'stock_moves',
+              {'kind': StockKind.sale.code, 'quantity': -delta},
+              where: 'id = ?',
+              whereArgs: [m['id']],
+            );
           }
+          recordedInMoves = q;
+        } else if (k == 'purchase' || k == 'return' || k == 'returnIn') {
+          recordedInMoves += q;
+        } else if (k == 'sale') {
+          recordedInMoves -= q;
         }
-      } catch (_) {}
+      }
+    } catch (e) {
+      debugPrint('_healItemNameConflict moves query error: $e');
     }
 
     var movesRepointed = false;
@@ -901,7 +983,9 @@ Future<void> _healItemNameConflict(
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
       movesRepointed = true;
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('_healItemNameConflict repoint moves error: $e');
+    }
 
     try {
       await txn.update(
@@ -911,15 +995,14 @@ Future<void> _healItemNameConflict(
         whereArgs: [dupId],
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('_healItemNameConflict repoint tx_items error: $e');
+    }
 
-    if (dupQty > 0) {
-      // فقط ما لم تغطه حركات المكرر (رصيد افتتاحي، أو فشل إعادة التوجيه)
-      // يحتاج شراء تسوية — أما الكمية فتُرحَّل كاملة في كل الحالات.
-      final covered =
-          movesRepointed && recordedInMoves > 0 ? recordedInMoves : 0.0;
-      final uncoveredQty = dupQty > covered ? dupQty - covered : 0.0;
-
+    final rawUncovered =
+        movesRepointed ? (dupQty - recordedInMoves) : dupQty;
+    final uncoveredQty = rawUncovered > 0 ? rawUncovered : 0.0;
+    if (dupQty > 0 || uncoveredQty > 0) {
       final now = DateTime.now();
       final nowIso = now.toIso8601String();
       final dateStr = nowIso.split('T').first;
@@ -939,15 +1022,21 @@ Future<void> _healItemNameConflict(
             'date': dateStr,
             'created_at': nowIso,
           });
-        } catch (_) {}
+        } catch (e) {
+          debugPrint('_healItemNameConflict insert move error: $e');
+        }
       }
 
-      try {
-        await txn.rawUpdate(
-          'UPDATE items SET quantity = quantity + ?, updated_at = ? WHERE id = ?',
-          [dupQty, nowIso, newEntityId],
-        );
-      } catch (_) {}
+      if (dupQty > 0) {
+        try {
+          await txn.rawUpdate(
+            'UPDATE items SET quantity = quantity + ?, updated_at = ? WHERE id = ?',
+            [dupQty, nowIso, newEntityId],
+          );
+        } catch (e) {
+          debugPrint('_healItemNameConflict update qty error: $e');
+        }
+      }
     }
 
     try {
@@ -1369,11 +1458,11 @@ extension ApplyRemoteOp on Repo {
           final incomingName = '${row['name'] ?? op.payload['name'] ?? ''}'.trim();
 
           final localCreatedMs =
-              DateTime.tryParse('${existingRow['created_at'] ?? ''}')
+              safeParseNullableDateTime(existingRow['created_at'])
                       ?.millisecondsSinceEpoch ??
                   0;
-          final incomingCreatedMs = DateTime.tryParse(
-                    '${op.payload['created_at'] ?? op.deviceTime}',
+          final incomingCreatedMs = safeParseNullableDateTime(
+                    op.payload['created_at'] ?? op.deviceTime,
                   )?.millisecondsSinceEpoch ??
                   (op.serverTimeMs > 0 ? op.serverTimeMs : 0);
 
@@ -1419,7 +1508,20 @@ extension ApplyRemoteOp on Repo {
             };
           }
 
-          if (incomingIsYounger) {
+            incomingRow['created_at'] =
+                (safeParseNullableDateTime(incomingRow['created_at']) ??
+                        safeParseNullableDateTime(op.timestamp) ??
+                        safeParseNullableDateTime(now))
+                    ?.toIso8601String() ??
+                    now;
+            incomingRow['updated_at'] =
+                (safeParseNullableDateTime(incomingRow['updated_at']) ??
+                        safeParseNullableDateTime(incomingRow['created_at']) ??
+                        safeParseNullableDateTime(now))
+                    ?.toIso8601String() ??
+                    now;
+
+            if (incomingIsYounger) {
             // الصنف المحلي أقدم (يبقى في collidingId)، والصنف الوارد أصغر (يأخذ newId)
             incomingRow['id'] = newId;
             if (incomingRow['plu'] == null ||
@@ -1458,7 +1560,9 @@ extension ApplyRemoteOp on Repo {
                   [newId, collidingId, op.deviceId.trim()],
                 );
               }
-            } catch (_) {}
+            } catch (e) {
+              debugPrint('offline item collision repoint error: $e');
+            }
 
             try {
               final syncPayload = Map<String, Object?>.from(incomingRow)
@@ -1472,7 +1576,9 @@ extension ApplyRemoteOp on Repo {
                 payload: syncPayload,
                 executor: txn,
               );
-            } catch (_) {}
+            } catch (e) {
+              debugPrint('offline item collision queueOperation error: $e');
+            }
 
             await _detectAndNotifyBarcodeOrPluConflict(
               this,
@@ -1523,6 +1629,17 @@ extension ApplyRemoteOp on Repo {
               },
               conflictAlgorithm: ConflictAlgorithm.replace,
             );
+            if (op.deviceId.trim().isNotEmpty &&
+                op.deviceId.trim() != localDevKey) {
+              await txn.insert(
+                'sync_meta',
+                {
+                  'key': 'item_id_remap:${op.deviceId.trim()}:$collidingId',
+                  'value': '$collidingId',
+                },
+                conflictAlgorithm: ConflictAlgorithm.replace,
+              );
+            }
 
             // كتابة الصنف الوارد في المعرف الأصلي collidingId
             incomingRow['id'] = collidingId;
@@ -1544,7 +1661,9 @@ extension ApplyRemoteOp on Repo {
                 payload: syncPayload,
                 executor: txn,
               );
-            } catch (_) {}
+            } catch (e) {
+              debugPrint('offline item collision local move queue error: $e');
+            }
 
             await _detectAndNotifyBarcodeOrPluConflict(
               this,
@@ -1572,8 +1691,10 @@ extension ApplyRemoteOp on Repo {
           if (row.isNotEmpty) {
             final opMs = op.serverTimeMs > 0
                 ? op.serverTimeMs
-                : (DateTime.tryParse(op.timestamp)?.millisecondsSinceEpoch ??
-                    (DateTime.tryParse(op.deviceTime)?.millisecondsSinceEpoch ??
+                : (safeParseNullableDateTime(op.timestamp)
+                        ?.millisecondsSinceEpoch ??
+                    (safeParseNullableDateTime(op.deviceTime)
+                            ?.millisecondsSinceEpoch ??
                         0));
 
             if (table == 'items') {
@@ -1654,7 +1775,10 @@ extension ApplyRemoteOp on Repo {
                           '${existing.first['deleted_at']}'.trim() != 'null'));
               final isExplicitRestore = op.payload['restore_op_id'] != null &&
                   '${op.payload['restore_op_id']}'.trim().isNotEmpty;
-              final localDelMs = DateTime.tryParse('${existing.first['deleted_at']}')?.millisecondsSinceEpoch ?? 0;
+              final localDelMs = safeParseNullableDateTime(
+                    existing.first['deleted_at'],
+                  )?.millisecondsSinceEpoch ??
+                  0;
               final isOpNewerThanDel = opMs > localDelMs;
 
               if (isLocallyDeleted && !isExplicitRestore && !isOpNewerThanDel) {
@@ -1672,7 +1796,9 @@ extension ApplyRemoteOp on Repo {
             if ((table == 'sections' || table == 'item_categories' || table == 'accounts') &&
                 op.opType != OpKind.delete_) {
               final localDel = existing.first['deleted_at']?.toString() ?? '';
-              final localDelMs = DateTime.tryParse(localDel)?.millisecondsSinceEpoch ?? 0;
+              final localDelMs =
+                  safeParseNullableDateTime(localDel)?.millisecondsSinceEpoch ??
+                      0;
               if (localDel.isNotEmpty && localDelMs > opMs) {
                 // الحذف المحلي أحدث — نحتفظ بالحذف
                 row['deleted_at'] = localDel;
@@ -1829,12 +1955,22 @@ extension ApplyRemoteOp on Repo {
           }
           for (final col in tableInfo) {
             final name = col['name'] as String;
+            final type = ((col['type'] as String?) ?? '').toUpperCase();
+            if ((name == 'created_at' || name == 'updated_at') &&
+                !type.contains('INT')) {
+              final parsed = safeParseNullableDateTime(insertRow[name]);
+              insertRow[name] = (parsed ??
+                      safeParseNullableDateTime(op.timestamp) ??
+                      safeParseNullableDateTime(now))
+                  ?.toIso8601String() ??
+                  now;
+              continue;
+            }
             if (insertRow.containsKey(name)) continue;
             final notNull = (col['notnull'] as int? ?? 0) == 1;
             final hasDefault = col['dflt_value'] != null;
             final isPk = (col['pk'] as int? ?? 0) > 0;
             if (!notNull || hasDefault || isPk) continue;
-            final type = ((col['type'] as String?) ?? '').toUpperCase();
             insertRow[name] = switch (name) {
               'created_at' || 'updated_at' || 'date' => now,
               _ => type.contains('INT') ||
@@ -2053,9 +2189,9 @@ extension ApplyRemoteOp on Repo {
                       .trim();
               if (isSelfUser ||
                   (ourDevId.isNotEmpty && targetDevId == ourDevId)) {
-                final opDt = DateTime.tryParse(delTime) ??
-                    DateTime.tryParse(op.timestamp) ??
-                    DateTime.tryParse(op.deviceTime);
+                final opDt = safeParseNullableDateTime(delTime) ??
+                    safeParseNullableDateTime(op.timestamp) ??
+                    safeParseNullableDateTime(op.deviceTime);
                 final opMs = opDt?.millisecondsSinceEpoch ?? 0;
                 if (opMs == 0 || opMs <= joinedMs + 10000) {
                   await _insertStoredOperation(txn, op);
@@ -2158,9 +2294,9 @@ extension ApplyRemoteOp on Repo {
               ? (int.tryParse('${joinedRows.first['value'] ?? ''}'.trim()) ?? 0)
               : 0;
           final valStr = '${op.payload['value'] ?? ''}'.trim();
-          final opDt = DateTime.tryParse(valStr) ??
-              DateTime.tryParse(op.timestamp) ??
-              DateTime.tryParse(op.deviceTime);
+          final opDt = safeParseNullableDateTime(valStr) ??
+              safeParseNullableDateTime(op.timestamp) ??
+              safeParseNullableDateTime(op.deviceTime);
           final opMs = opDt?.millisecondsSinceEpoch ?? 0;
           if (joinedMs > 0 && (opMs == 0 || opMs <= joinedMs + 10000)) {
             await txn.delete(
@@ -2264,15 +2400,18 @@ extension ApplyRemoteOp on Repo {
             await txn.update(
               'notifications',
               {
-                'read': 1,
+                'seen': 1,
                 'title': '✅ تم حل تعارض الصنف (${conflict.item1Name})',
               },
               where: "entity_type = 'item_conflict' AND entity_id = ?",
               whereArgs: [conflict.key],
             );
+            ItemConflictHooks.notifyConflict(conflict);
           }
         }
-      } catch (_) {}
+      } catch (e, st) {
+        debugPrint('applyRemoteOperation item_conflict error: $e\n$st');
+      }
     }
     await _insertStoredOperation(txn, op);
     if (op.entityType == EntityKind.message) {

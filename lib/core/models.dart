@@ -1,5 +1,147 @@
 import 'accounting.dart';
 
+DateTime? _epochToDateTime(num value) {
+  if (!value.isFinite) return null;
+  final n = value.round();
+  if (n <= 0) return null;
+  if (n >= 100000000000000) {
+    return DateTime.fromMicrosecondsSinceEpoch(n);
+  }
+  if (n >= 100000000000) {
+    return DateTime.fromMillisecondsSinceEpoch(n);
+  }
+  return DateTime.fromMillisecondsSinceEpoch(n * 1000);
+}
+
+String _normalizeAsciiDigits(String input) {
+  const arabicIndic = '٠١٢٣٤٥٦٧٨٩';
+  const easternIndic = '۰۱۲۳۴۵۶۷۸۹';
+  final buf = StringBuffer();
+  for (var i = 0; i < input.length; i++) {
+    final ch = input[i];
+    final ai = arabicIndic.indexOf(ch);
+    if (ai >= 0) {
+      buf.write(ai);
+      continue;
+    }
+    final ei = easternIndic.indexOf(ch);
+    if (ei >= 0) {
+      buf.write(ei);
+      continue;
+    }
+    buf.write(ch);
+  }
+  return buf.toString();
+}
+
+/// تحليل آمن للتواريخ يعيد `null` عند القيم الفارغة أو غير الصالحة دون رمي [FormatException].
+/// يدعم صيغ ISO-8601، وأرقام Epoch (ثوانٍ/ميلي ثانية/ميكرو ثانية)، والتواريخ ذات الفواصل غير القياسية.
+DateTime? safeParseNullableDateTime(Object? raw) {
+  if (raw == null) return null;
+  if (raw is DateTime) return raw;
+  if (raw is num) return _epochToDateTime(raw);
+  try {
+    var s = _normalizeAsciiDigits('$raw').trim();
+    if (s.isEmpty) return null;
+    final lower = s.toLowerCase();
+    if (lower == 'null' ||
+        lower == 'undefined' ||
+        lower == 'nan' ||
+        lower == 'none' ||
+        lower == '-') {
+      return null;
+    }
+
+    final direct = DateTime.tryParse(s);
+    if (direct != null) return direct;
+
+    final asNum = num.tryParse(s);
+    if (asNum != null) return _epochToDateTime(asNum);
+
+    s = s.replaceFirstMapped(
+      RegExp(r'(\d{1,2}:\d{1,2}:\d{1,2}),(\d+)'),
+      (m) => '${m[1]}.${m[2]}',
+    );
+    s = s.replaceFirst(RegExp(r'\s+(?:UTC|GMT)$', caseSensitive: false), 'Z');
+    final normalizedTry = DateTime.tryParse(s);
+    if (normalizedTry != null) return normalizedTry;
+
+    // صيغة YYYY/MM/DD أو YYYY.MM.DD أو YYYY-M-D مع وقت اختياري
+    final ymd = RegExp(
+      r'^(\d{4})[\/\-\.\s](\d{1,2})[\/\-\.\s](\d{1,2})'
+      r'(?:[T\s_]+(\d{1,2}):(\d{1,2})(?::(\d{1,2})(?:\.(\d+))?)?'
+      r'(?:\s*(Z|[+\-]\d{2}:?\d{2}|[+\-]\d{2}))?)?$',
+      caseSensitive: false,
+    ).firstMatch(s);
+    if (ymd != null) {
+      final year = int.parse(ymd.group(1)!);
+      final month = int.parse(ymd.group(2)!);
+      final day = int.parse(ymd.group(3)!);
+      if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+        final hh = int.parse(ymd.group(4) ?? '0').toString().padLeft(2, '0');
+        final mm = int.parse(ymd.group(5) ?? '0').toString().padLeft(2, '0');
+        final ss = int.parse(ymd.group(6) ?? '0').toString().padLeft(2, '0');
+        final frac = ymd.group(7) != null ? '.${ymd.group(7)}' : '';
+        var tz = (ymd.group(8) ?? '').toUpperCase();
+        if (RegExp(r'^[+\-]\d{2}$').hasMatch(tz)) tz = '$tz:00';
+        final iso =
+            '${year.toString().padLeft(4, '0')}-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')}T$hh:$mm:$ss$frac$tz';
+        final dt = DateTime.tryParse(iso);
+        if (dt != null) return dt;
+      }
+    }
+
+    // صيغة DD/MM/YYYY أو DD-MM-YYYY (أو MM/DD/YYYY عند تجاوز اليوم 12)
+    final dmy = RegExp(
+      r'^(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{4})'
+      r'(?:[T\s_]+(\d{1,2}):(\d{1,2})(?::(\d{1,2})(?:\.(\d+))?)?'
+      r'(?:\s*(Z|[+\-]\d{2}:?\d{2}|[+\-]\d{2}))?)?$',
+      caseSensitive: false,
+    ).firstMatch(s);
+    if (dmy != null) {
+      final p1 = int.parse(dmy.group(1)!);
+      final p2 = int.parse(dmy.group(2)!);
+      final year = int.parse(dmy.group(3)!);
+      final int day;
+      final int month;
+      if (p1 <= 12 && p2 > 12) {
+        month = p1;
+        day = p2;
+      } else {
+        day = p1;
+        month = p2;
+      }
+      if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
+        final hh = int.parse(dmy.group(4) ?? '0').toString().padLeft(2, '0');
+        final mm = int.parse(dmy.group(5) ?? '0').toString().padLeft(2, '0');
+        final ss = int.parse(dmy.group(6) ?? '0').toString().padLeft(2, '0');
+        final frac = dmy.group(7) != null ? '.${dmy.group(7)}' : '';
+        var tz = (dmy.group(8) ?? '').toUpperCase();
+        if (RegExp(r'^[+\-]\d{2}$').hasMatch(tz)) tz = '$tz:00';
+        final iso =
+            '${year.toString().padLeft(4, '0')}-${month.toString().padLeft(2, '0')}-${day.toString().padLeft(2, '0')}T$hh:$mm:$ss$frac$tz';
+        final dt = DateTime.tryParse(iso);
+        if (dt != null) return dt;
+      }
+    }
+  } catch (_) {
+    return null;
+  }
+  return null;
+}
+
+/// تحليل آمن للتواريخ مع قيمة احتياطية مضمونة دون رمي أي استثناء.
+DateTime safeParseDateTime(
+  Object? raw, {
+  Object? fallbackRaw,
+  DateTime? fallback,
+}) {
+  return safeParseNullableDateTime(raw) ??
+      (fallbackRaw != null ? safeParseNullableDateTime(fallbackRaw) : null) ??
+      fallback ??
+      DateTime.fromMillisecondsSinceEpoch(0);
+}
+
 /// حساب: عميل أو مورد أو حساب عام.
 class Account {
   final int? id;
@@ -154,8 +296,8 @@ class Account {
       archived: ((m['archived'] ?? 0) as int) == 1,
       image: (m['image'] ?? '') as String,
       notifyChannel: (m['notify_channel'] ?? 'whatsapp') as String,
-      createdAt: DateTime.parse(m['created_at'] as String),
-      updatedAt: DateTime.parse(m['updated_at'] as String),
+      createdAt: safeParseDateTime(m['created_at'], fallbackRaw: m['updated_at']),
+      updatedAt: safeParseDateTime(m['updated_at'], fallbackRaw: m['created_at']),
     );
   }
 }
@@ -364,9 +506,12 @@ class Tx {
                 '${m['original_tx_id']}'.trim().isEmpty)
             ? null
             : '${m['original_tx_id']}'.trim(),
-        date: DateTime.parse(m['date'] as String),
-        createdAt: DateTime.parse(m['created_at'] as String),
-        updatedAt: DateTime.parse(m['updated_at'] as String),
+        date: safeParseDateTime(m['date'], fallbackRaw: m['created_at']),
+        createdAt: safeParseDateTime(m['created_at'], fallbackRaw: m['date']),
+        updatedAt: safeParseDateTime(
+          m['updated_at'],
+          fallbackRaw: m['created_at'] ?? m['date'],
+        ),
       );
 }
 
@@ -576,9 +721,12 @@ class Voucher {
         status: (m['status'] ?? 'draft') as String,
         createdByUserId: m['created_by_user_id'] as int?,
         cashierName: (m['cashier_name'] ?? '') as String,
-        date: DateTime.parse(m['date'] as String),
-        createdAt: DateTime.parse(m['created_at'] as String),
-        updatedAt: DateTime.parse(m['updated_at'] as String),
+        date: safeParseDateTime(m['date'], fallbackRaw: m['created_at']),
+        createdAt: safeParseDateTime(m['created_at'], fallbackRaw: m['date']),
+        updatedAt: safeParseDateTime(
+          m['updated_at'],
+          fallbackRaw: m['created_at'] ?? m['date'],
+        ),
       );
 }
 
@@ -815,8 +963,8 @@ class AppUser {
       isMe: ((m['is_me'] ?? 0) as int) == 1,
       active: ((m['active'] ?? 1) as int) == 1,
       canApplyDiscount: ((m['can_apply_discount'] ?? (discountDefault ? 1 : 0)) as int) == 1,
-      createdAt: DateTime.parse(m['created_at'] as String),
-      updatedAt: DateTime.parse(m['updated_at'] as String),
+      createdAt: safeParseDateTime(m['created_at'], fallbackRaw: m['updated_at']),
+      updatedAt: safeParseDateTime(m['updated_at'], fallbackRaw: m['created_at']),
     );
   }
 }
@@ -863,7 +1011,7 @@ class ChatMessage {
         body: (m['body'] ?? '') as String,
         kind: (m['kind'] ?? 'text') as String,
         payload: (m['payload'] ?? '') as String,
-        createdAt: DateTime.parse(m['created_at'] as String),
+        createdAt: safeParseDateTime(m['created_at']),
       );
 }
 
@@ -978,20 +1126,25 @@ class Section {
         'updated_at': updatedAt.toIso8601String(),
       };
 
-  factory Section.fromMap(Map<String, Object?> m) => Section(
-        id: m['id'] as int?,
-        name: (m['name'] ?? '') as String,
-        icon: (m['icon'] ?? '') as String,
-        iconKey: (m['icon_key'] ?? '') as String,
-        colorHex: (m['color_hex'] ?? '') as String,
-        imagePath: (m['image_path'] ?? '') as String,
-        sortOrder: (m['sort_order'] as int?) ?? 0,
-        deleted: ((m['deleted_at'] ?? '') as String).isNotEmpty,
-        createdAt: DateTime.tryParse((m['created_at'] ?? '') as String) ??
-            DateTime.now(),
-        updatedAt: DateTime.tryParse((m['updated_at'] ?? '') as String) ??
-            DateTime.now(),
-      );
+  factory Section.fromMap(Map<String, Object?> m) {
+    final created = safeParseDateTime(
+      m['created_at'],
+      fallbackRaw: m['updated_at'],
+      fallback: DateTime.now(),
+    );
+    return Section(
+      id: (m['id'] as num?)?.toInt(),
+      name: '${m['name'] ?? ''}',
+      icon: '${m['icon'] ?? ''}',
+      iconKey: '${m['icon_key'] ?? ''}',
+      colorHex: '${m['color_hex'] ?? ''}',
+      imagePath: '${m['image_path'] ?? ''}',
+      sortOrder: ((m['sort_order'] ?? 0) as num).toInt(),
+      deleted: '${m['deleted_at'] ?? ''}'.trim().isNotEmpty,
+      createdAt: created,
+      updatedAt: safeParseDateTime(m['updated_at'], fallback: created),
+    );
+  }
 }
 
 class ItemCategory {
@@ -1107,18 +1260,23 @@ class ItemCategory {
         'updated_at': updatedAt.toIso8601String(),
       };
 
-  factory ItemCategory.fromMap(Map<String, Object?> m) => ItemCategory(
-        id: m['id'] as int?,
-        parentId: m['parent_id'] as int?,
-        sectionId: m['section_id'] as int?,
-        name: (m['name'] ?? '') as String,
-        iconKey: (m['icon_key'] ?? '') as String,
-        colorHex: (m['color_hex'] ?? '') as String,
-        imagePath: (m['image_path'] ?? '') as String,
-        createdAt: DateTime.parse(m['created_at'] as String),
-        updatedAt:
-            DateTime.parse((m['updated_at'] ?? m['created_at']) as String),
-      );
+  factory ItemCategory.fromMap(Map<String, Object?> m) {
+    final created = safeParseDateTime(
+      m['created_at'],
+      fallbackRaw: m['updated_at'],
+    );
+    return ItemCategory(
+      id: (m['id'] as num?)?.toInt(),
+      parentId: (m['parent_id'] as num?)?.toInt(),
+      sectionId: (m['section_id'] as num?)?.toInt(),
+      name: '${m['name'] ?? ''}',
+      iconKey: '${m['icon_key'] ?? ''}',
+      colorHex: '${m['color_hex'] ?? ''}',
+      imagePath: '${m['image_path'] ?? ''}',
+      createdAt: created,
+      updatedAt: safeParseDateTime(m['updated_at'], fallback: created),
+    );
+  }
 }
 
 /// صنف في المخزون.
@@ -1264,33 +1422,39 @@ class Item {
         'updated_at': updatedAt.toIso8601String(),
       };
 
-  factory Item.fromMap(Map<String, Object?> m) => Item(
-        id: m['id'] as int?,
-        name: (m['name'] ?? '') as String,
-        categoryId: m['category_id'] as int?,
-        sectionId: m['section_id'] as int?,
-        plu: m['plu'] as int?,
-        sku: (m['sku'] ?? '') as String,
-        unit: (m['unit'] ?? 'حبة') as String,
-        buyPrice: ((m['buy_price'] ?? 0) as num).toDouble(),
-        sellPrice: ((m['sell_price'] ?? 0) as num).toDouble(),
-        quantity: ((m['quantity'] ?? 0) as num).toDouble(),
-        minQuantity: ((m['min_quantity'] ?? 0) as num).toDouble(),
-        currency: (m['currency'] ?? 'YER') as String,
-        category: (m['category_name'] ?? m['category'] ?? '') as String,
-        notes: (m['notes'] ?? '') as String,
-        image: (m['image'] ?? '') as String,
-        archived: ((m['archived'] ?? 0) as int) == 1,
-        isDeleted: ((m['is_deleted'] ?? 0) as int) == 1 ||
-            (m['deleted_at'] != null &&
-                '${m['deleted_at']}'.trim().isNotEmpty &&
-                '${m['deleted_at']}'.trim().toLowerCase() != 'null'),
-        isActive: (m['is_active'] ?? 1) == 1,
-        excludeFromShortages:
-            ((m['exclude_from_shortages'] ?? 0) as num).toInt() == 1,
-        createdAt: DateTime.parse(m['created_at'] as String),
-        updatedAt: DateTime.parse(m['updated_at'] as String),
-      );
+  factory Item.fromMap(Map<String, Object?> m) {
+    final created = safeParseDateTime(
+      m['created_at'],
+      fallbackRaw: m['updated_at'],
+    );
+    return Item(
+      id: (m['id'] as num?)?.toInt(),
+      name: '${m['name'] ?? ''}',
+      categoryId: (m['category_id'] as num?)?.toInt(),
+      sectionId: (m['section_id'] as num?)?.toInt(),
+      plu: (m['plu'] as num?)?.toInt(),
+      sku: '${m['sku'] ?? ''}',
+      unit: '${m['unit'] ?? 'حبة'}',
+      buyPrice: ((m['buy_price'] ?? 0) as num).toDouble(),
+      sellPrice: ((m['sell_price'] ?? 0) as num).toDouble(),
+      quantity: ((m['quantity'] ?? 0) as num).toDouble(),
+      minQuantity: ((m['min_quantity'] ?? 0) as num).toDouble(),
+      currency: '${m['currency'] ?? 'YER'}',
+      category: '${m['category_name'] ?? m['category'] ?? ''}',
+      notes: '${m['notes'] ?? ''}',
+      image: '${m['image'] ?? ''}',
+      archived: ((m['archived'] ?? 0) as num).toInt() == 1,
+      isDeleted: ((m['is_deleted'] ?? 0) as num).toInt() == 1 ||
+          (m['deleted_at'] != null &&
+              '${m['deleted_at']}'.trim().isNotEmpty &&
+              '${m['deleted_at']}'.trim().toLowerCase() != 'null'),
+      isActive: ((m['is_active'] ?? 1) as num).toInt() == 1,
+      excludeFromShortages:
+          ((m['exclude_from_shortages'] ?? 0) as num).toInt() == 1,
+      createdAt: created,
+      updatedAt: safeParseDateTime(m['updated_at'], fallback: created),
+    );
+  }
 }
 
 /// حركة مخزنية (شراء/بيع/تسوية/مرتجع).
@@ -1335,15 +1499,18 @@ class StockMove {
         'created_at': createdAt.toIso8601String(),
       };
 
-  factory StockMove.fromMap(Map<String, Object?> m) => StockMove(
-        id: m['id'] as int?,
-        itemId: (m['item_id'] ?? 0) as int,
-        kind: StockKind.fromCode((m['kind'] ?? 'purchase') as String),
-        quantity: ((m['quantity'] ?? 0) as num).toDouble(),
-        unitPrice: ((m['unit_price'] ?? 0) as num).toDouble(),
-        accountId: m['account_id'] as int?,
-        notes: (m['notes'] ?? '') as String,
-        date: DateTime.parse(m['date'] as String),
-        createdAt: DateTime.parse((m['created_at'] ?? m['date']) as String),
-      );
+  factory StockMove.fromMap(Map<String, Object?> m) {
+    final d = safeParseDateTime(m['date'], fallbackRaw: m['created_at']);
+    return StockMove(
+      id: (m['id'] as num?)?.toInt(),
+      itemId: ((m['item_id'] ?? 0) as num).toInt(),
+      kind: StockKind.fromCode('${m['kind'] ?? 'purchase'}'),
+      quantity: ((m['quantity'] ?? 0) as num).toDouble(),
+      unitPrice: ((m['unit_price'] ?? 0) as num).toDouble(),
+      accountId: (m['account_id'] as num?)?.toInt(),
+      notes: '${m['notes'] ?? ''}',
+      date: d,
+      createdAt: safeParseDateTime(m['created_at'], fallback: d),
+    );
+  }
 }

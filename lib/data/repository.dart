@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
+import 'package:flutter/foundation.dart';
 import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
@@ -2629,7 +2630,7 @@ class Repo {
     final rows = await db.query('transactions',
         columns: ['date'], where: 'id = ?', whereArgs: [txId], limit: 1);
     if (rows.isEmpty) return;
-    final d = DateTime.tryParse('${rows.first['date']}');
+    final d = safeParseNullableDateTime(rows.first['date']);
     if (d == null) return;
     if (DateTime.now().difference(d).inDays >= days) {
       throw StateError('هذا السجل أقدم من $days يوماً ومقفل ضد التعديل والحذف. '
@@ -5418,7 +5419,8 @@ class Repo {
       }
       // آخر ظهور: إن غاب طويلاً فقد يتأخر استلام العملية السيادية.
       final lastSeen = '${d['last_seen_at'] ?? ''}';
-      final seen = lastSeen.isEmpty ? null : DateTime.tryParse(lastSeen);
+      final seen =
+          lastSeen.isEmpty ? null : safeParseNullableDateTime(lastSeen);
       if (seen == null) {
         warnings.add('لم يُرصد اتصال حديث لهذا الجهاز — قد يتأخر استلام '
             'الإدارة حتى يفتح التطبيق ويتزامن.');
@@ -5449,7 +5451,7 @@ class Repo {
       final d = jsonDecode(raw);
       if (d is! Map) return false;
       if ('${d['previous_owner_device_id']}' != _deviceId) return false;
-      final at = DateTime.tryParse('${d['at']}');
+      final at = safeParseNullableDateTime(d['at']);
       if (at == null) return false;
       return DateTime.now().difference(at) < const Duration(hours: 24);
     } catch (_) {
@@ -5569,7 +5571,7 @@ class Repo {
   /// متى تُتاح التهيئة القادمة؟ null = متاحة الآن.
   Future<DateTime?> groupWipeAvailableAt() async {
     final st = await settings();
-    final last = DateTime.tryParse(st[_kLastGroupWipe] ?? '');
+    final last = safeParseNullableDateTime(st[_kLastGroupWipe]);
     if (last == null) return null;
     final next = last.add(const Duration(days: 30));
     return DateTime.now().isBefore(next) ? next : null;
@@ -6762,7 +6764,7 @@ class Repo {
         for (final col in ['updated_at', 'created_at', 'date']) {
           final raw = '${r[col] ?? ''}'.trim();
           if (raw.isEmpty) continue;
-          final parsed = DateTime.tryParse(raw);
+          final parsed = safeParseNullableDateTime(raw);
           if (parsed != null && (latest == null || parsed.isAfter(latest))) {
             latest = parsed;
           }
@@ -8275,27 +8277,38 @@ class Repo {
       final rec = await newRecorder(txn);
       String creatorName = '';
       try {
-        final meRows = await txn.query(
-          'users',
-          columns: ['name'],
-          where: "is_me = 1 AND COALESCE(deleted_at,'') = ''",
-          limit: 1,
+        final stRows = await txn.query(
+          'settings',
+          columns: ['key', 'value'],
+          where:
+              "key IN ('profile.owner_name', 'account.name', 'sync.deviceName')",
         );
-        if (meRows.isNotEmpty) {
-          creatorName = '${meRows.first['name'] ?? ''}'.trim();
+        final stMap = <String, String>{
+          for (final r in stRows)
+            '${r['key'] ?? ''}'.trim(): '${r['value'] ?? ''}'.trim(),
+        };
+        for (final k in const [
+          'profile.owner_name',
+          'account.name',
+          'sync.deviceName',
+        ]) {
+          final name = (stMap[k] ?? '').trim();
+          if (isPlaceholderDeviceName(name)) continue;
+          creatorName = name;
+          break;
         }
         if (creatorName.isEmpty) {
-          final stRows = await txn.query(
-            'settings',
-            columns: ['value'],
-            where: "key IN ('sync.deviceName', 'profile.owner_name', 'account.name')",
+          final meRows = await txn.query(
+            'users',
+            columns: ['name'],
+            where: "is_me = 1 AND COALESCE(deleted_at,'') = ''",
+            limit: 1,
           );
-          for (final r in stRows) {
-            final v = '${r['value'] ?? ''}'.trim();
-            if (v.isNotEmpty) {
-              creatorName = v;
-              break;
-            }
+          for (final r in meRows) {
+            final name = '${r['name'] ?? ''}'.trim();
+            if (isPlaceholderDeviceName(name)) continue;
+            creatorName = name;
+            break;
           }
         }
       } catch (_) {}
@@ -8443,7 +8456,10 @@ class Repo {
       final c = OfflineItemConflict.tryParseJson(v, fallbackKey: k);
       if (c != null) out.add(c);
     }
-    out.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    out.sort(
+      (a, b) => safeParseDateTime(b.createdAt)
+          .compareTo(safeParseDateTime(a.createdAt)),
+    );
     return out;
   }
 
@@ -8454,12 +8470,15 @@ class Repo {
   }
 
   /// جلب سجل تعارض محدد بمفتاحه.
-  Future<OfflineItemConflict?> itemConflictByKey(String conflictKey) async {
-    final db = await _db;
+  Future<OfflineItemConflict?> itemConflictByKey(
+    String conflictKey, {
+    DatabaseExecutor? executor,
+  }) async {
+    final ex = executor ?? await _db;
     final normKey = conflictKey.startsWith('item_conflict:')
         ? conflictKey
         : 'item_conflict:$conflictKey';
-    final rows = await db.query(
+    final rows = await ex.query(
       'settings',
       where: 'key = ?',
       whereArgs: [normKey],
@@ -8638,26 +8657,49 @@ class Repo {
           : ((dropRows.first['quantity'] as num?) ?? 0).toDouble();
       final mergedQty = keepQty + dropQty;
 
-      // فحص الحركات المسجلة على الصنف المدمج قبل ترحيلها
+      // فحص الحركات المسجلة على الصنف المدمج قبل ترحيلها (بما فيها المبيعات السالبة والتسويات)
       double recordedInMoves = 0.0;
-      if (dropQty > 0) {
+      if (dropRows.isNotEmpty) {
         try {
-          final moveRows = await txn.rawQuery(
-            "SELECT kind, SUM(quantity) as total FROM stock_moves "
-            "WHERE item_id = ? AND (deleted_at IS NULL OR deleted_at = '') "
-            "GROUP BY kind",
-            [dropId],
+          final dropMoves = await txn.query(
+            'stock_moves',
+            columns: ['id', 'kind', 'quantity'],
+            where:
+                "item_id = ? AND (deleted_at IS NULL OR deleted_at = '')",
+            whereArgs: [dropId],
+            orderBy: 'date ASC, created_at ASC, id ASC',
           );
-          for (final r in moveRows) {
-            final k = r['kind']?.toString() ?? '';
-            final t = ((r['total'] as num?) ?? 0).toDouble();
-            if (k == 'purchase' || k == 'return' || k == 'returnIn') {
-              recordedInMoves += t;
+          for (final m in dropMoves) {
+            final k = '${m['kind'] ?? ''}'.trim();
+            final q = ((m['quantity'] as num?) ?? 0).toDouble();
+            if (k == 'adjust') {
+              // تحويل التسوية المطلقة للصنف المدمج إلى فرق نسبي حتى لا تطمس رصيد الصنف الأساسي
+              final delta = q - recordedInMoves;
+              if (delta >= 0) {
+                await txn.update(
+                  'stock_moves',
+                  {'kind': StockKind.purchase.code, 'quantity': delta},
+                  where: 'id = ?',
+                  whereArgs: [m['id']],
+                );
+              } else {
+                await txn.update(
+                  'stock_moves',
+                  {'kind': StockKind.sale.code, 'quantity': -delta},
+                  where: 'id = ?',
+                  whereArgs: [m['id']],
+                );
+              }
+              recordedInMoves = q;
+            } else if (k == 'purchase' || k == 'return' || k == 'returnIn') {
+              recordedInMoves += q;
             } else if (k == 'sale') {
-              recordedInMoves -= t;
+              recordedInMoves -= q;
             }
           }
-        } catch (_) {}
+        } catch (e) {
+          debugPrint('resolveItemConflictMergeItems moves query error: $e');
+        }
       }
 
       // توحيد جميع الحركات المخزنية والفواتير إلى الصنف الموحّد
@@ -8674,9 +8716,13 @@ class Repo {
         whereArgs: [dropId],
       );
 
-      if (dropQty > 0) {
-        final covered = recordedInMoves > 0 ? recordedInMoves : 0.0;
-        final uncoveredQty = dropQty > covered ? dropQty - covered : 0.0;
+      if (dropRows.isNotEmpty) {
+        // الرصيد التأسيسي غير المغطى بحركات = رصيد الصنف الحالي ناقص صافي حركاته
+        // (عندما يكون صافي الحركات سالباً بسبب مبيعات سابقة، فإن dropQty - recordedInMoves
+        // يعيد الرصيد التأسيسي الكامل قبل البيع فلا يُخصم البيع مرتين عند المطابقة،
+        // ولا يُضاعف الرصيد إن كانت الحركات موجبة أو تسوية).
+        final rawUncovered = dropQty - recordedInMoves;
+        final uncoveredQty = rawUncovered > 0 ? rawUncovered : 0.0;
         if (uncoveredQty > 0) {
           try {
             await txn.insert('stock_moves', {
@@ -8690,7 +8736,9 @@ class Repo {
               'date': dateStr,
               'created_at': nowIso,
             });
-          } catch (_) {}
+          } catch (e) {
+            debugPrint('resolveItemConflictMergeItems insert move error: $e');
+          }
         }
       }
 

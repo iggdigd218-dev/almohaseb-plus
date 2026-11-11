@@ -93,12 +93,150 @@ class ItemConflictBanner extends ConsumerWidget {
                   color: Theme.of(context).colorScheme.onSurface,
                 ),
               ),
+              if (extraCount > 0) ...[
+                const SizedBox(height: 6),
+                Align(
+                  alignment: AlignmentDirectional.centerStart,
+                  child: TextButton.icon(
+                    key: const ValueKey('show_all_conflicts_banner_btn'),
+                    onPressed: () =>
+                        showAllPendingItemConflictsSheet(context, ref),
+                    icon: const Icon(Icons.list_alt_rounded, size: 16),
+                    label: Text(
+                      'عرض بقية التعارضات (+$extraCount)',
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    style: TextButton.styleFrom(
+                      foregroundColor: AppColors.amber,
+                      visualDensity: VisualDensity.compact,
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         );
       },
     );
   }
+}
+
+/// نافذة عرض جميع تعارضات الأصناف المعلّقة ليتمكن المدير من استعراضها وحل أي منها.
+Future<void> showAllPendingItemConflictsSheet(
+  BuildContext context,
+  WidgetRef ref,
+) async {
+  await showModalBottomSheet<void>(
+    context: context,
+    isScrollControlled: true,
+    showDragHandle: true,
+    builder: (_) => Consumer(
+      builder: (ctx, sheetRef, __) {
+        final conflictsAsync = sheetRef.watch(pendingItemConflictsProvider);
+        return DraggableScrollableSheet(
+          expand: false,
+          initialChildSize: 0.6,
+          minChildSize: 0.35,
+          maxChildSize: 0.9,
+          builder: (__, scrollCtrl) {
+            final list =
+                conflictsAsync.valueOrNull ?? const <OfflineItemConflict>[];
+            if (list.isEmpty) {
+              return const Center(
+                child: Padding(
+                  padding: EdgeInsets.all(24),
+                  child: Text('لا توجد تعارضات معلّقة حالياً.'),
+                ),
+              );
+            }
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 4, 16, 10),
+                  child: Row(
+                    children: [
+                      const Icon(
+                        Icons.warning_amber_rounded,
+                        color: AppColors.amber,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'جميع تعارضات الأصناف المعلّقة (${list.length})',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w800,
+                            fontSize: 15,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                const Divider(height: 1),
+                Expanded(
+                  child: ListView.separated(
+                    controller: scrollCtrl,
+                    padding: const EdgeInsets.all(12),
+                    itemCount: list.length,
+                    separatorBuilder: (_, __) => const SizedBox(height: 8),
+                    itemBuilder: (_, idx) {
+                      final item = list[idx];
+                      return Card(
+                        key: ValueKey('pending_conflict_tile_${item.key}'),
+                        margin: EdgeInsets.zero,
+                        child: ListTile(
+                          title: Text(
+                            '${item.item1Name} (#${item.item1Id}) ⇄ ${item.item2Name} (#${item.item2Id})',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w700,
+                              fontSize: 13.5,
+                            ),
+                          ),
+                          subtitle: Padding(
+                            padding: const EdgeInsets.only(top: 4),
+                            child: Text(
+                              '• ${item.conflictTypeLabel}'
+                              '${item.sharedSku.trim().isNotEmpty ? ' — الباركود: ${item.sharedSku.trim()}' : ''}\n'
+                              '• ${item.item1Creator} / ${item.item2Creator}',
+                              style: const TextStyle(fontSize: 12, height: 1.35),
+                            ),
+                          ),
+                          trailing: FilledButton.tonal(
+                            key: ValueKey('open_conflict_btn_${item.key}'),
+                            onPressed: () async {
+                              await showItemConflictResolutionDialog(
+                                ctx,
+                                sheetRef,
+                                conflictKey: item.key,
+                              );
+                            },
+                            child: const Text('معالجة'),
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    ),
+  );
+  ref.invalidate(pendingItemConflictsProvider);
+  ref.invalidate(itemsProvider);
+  ref.invalidate(notificationsProvider);
+  ref.invalidate(unreadCountProvider);
+  bump(ref);
 }
 
 /// نافذة المعالجة الفورية لتعارض الأصناف والباركود من الإشعار أو الـ Banner.

@@ -19,6 +19,7 @@ import 'package:sqflite/sqflite.dart';
 
 import '../../core/database.dart';
 import '../../core/desktop_net.dart';
+import '../../core/item_conflict.dart';
 import '../repository.dart';
 import 'apply_remote.dart';
 import 'cloud_join.dart';
@@ -582,7 +583,9 @@ class CloudFirebaseTransport implements SyncTransport {
               ? i + microBatchSize
               : entries.length;
           final chunk = entries.sublist(i, end);
-          await db.transaction((txn) async {
+          ItemConflictHooks.beginTransactionScope();
+          try {
+            await db.transaction((txn) async {
             for (final entry in chunk) {
               final v = entry.value;
               if (v is! Map) continue;
@@ -664,7 +667,12 @@ class CloudFirebaseTransport implements SyncTransport {
                 }
               }
             }
-          });
+            });
+            ItemConflictHooks.commitTransactionScope();
+          } catch (_) {
+            ItemConflictHooks.discardTransactionScope();
+            rethrow;
+          }
           if (end < entries.length) {
             await Future<void>.delayed(Duration.zero);
           }

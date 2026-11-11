@@ -631,26 +631,18 @@ class _HomeShellState extends ConsumerState<HomeShell>
       } catch (_) {}
       _showTappableNotice(title, body);
     };
-    ItemConflictHooks.onConflictDetected = (conflict) {
-      if (!mounted) return;
-      try {
-        ref.invalidate(pendingItemConflictsProvider);
-        ref.invalidate(notificationsProvider);
-        ref.invalidate(unreadCountProvider);
-        bump(ref);
-      } catch (_) {}
-      Sfx.systemNotify(
-        title: conflict.notificationTitle,
-        body: conflict.notificationBody,
-        entityType: 'item_conflict',
-        entityId: conflict.key,
-      );
-      _showTappableNotice(
-        conflict.notificationTitle,
-        conflict.notificationBody,
-        entityType: 'item_conflict',
-        entityId: conflict.key,
-      );
+    ItemConflictHooks.onConflictDetected = (_) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        try {
+          ref.invalidate(pendingItemConflictsProvider);
+          ref.invalidate(notificationsProvider);
+          ref.invalidate(unreadCountProvider);
+          bump(ref);
+        } catch (e) {
+          debugPrint('ItemConflictHooks invalidate error: $e');
+        }
+      });
     };
   }
 

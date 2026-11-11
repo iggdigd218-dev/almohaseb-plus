@@ -180,8 +180,41 @@ class OfflineItemConflict {
 /// خطاف إشعارات تعارض الأصناف الفورية لعرض تنبيه Banner واضح لحظة اكتشاف التعارض.
 class ItemConflictHooks {
   static void Function(OfflineItemConflict conflict)? onConflictDetected;
+  static int _txnDepth = 0;
+  static final List<OfflineItemConflict> _deferred = <OfflineItemConflict>[];
+
+  /// بدء نطاق معاملة قاعدة البيانات لتأجيل إشعارات الواجهة إلى ما بعد الالتزام (Commit).
+  static void beginTransactionScope() {
+    _txnDepth++;
+  }
+
+  /// تفريغ الإشعارات المؤجلة بعد نجاح التزام معاملة قاعدة البيانات خارج القفل.
+  static void commitTransactionScope() {
+    if (_txnDepth > 0) _txnDepth--;
+    if (_txnDepth == 0 && _deferred.isNotEmpty) {
+      final batch = List<OfflineItemConflict>.from(_deferred);
+      _deferred.clear();
+      for (final c in batch) {
+        try {
+          onConflictDetected?.call(c);
+        } catch (_) {}
+      }
+    }
+  }
+
+  /// إلغاء الإشعارات المؤجلة عند التراجع عن معاملة قاعدة البيانات (Rollback).
+  static void discardTransactionScope() {
+    if (_txnDepth > 0) _txnDepth--;
+    if (_txnDepth == 0) {
+      _deferred.clear();
+    }
+  }
 
   static void notifyConflict(OfflineItemConflict conflict) {
+    if (_txnDepth > 0) {
+      _deferred.add(conflict);
+      return;
+    }
     try {
       onConflictDetected?.call(conflict);
     } catch (_) {}

@@ -65,6 +65,7 @@ void main() {
             'name': 'محمود المخزن',
             'is_owner': 0,
             'is_paired': 1,
+            'created_at': '2026-11-10T08:00:00.000Z',
             'updated_at': '2026-11-10T09:00:00.000Z',
           },
           conflictAlgorithm: ConflictAlgorithm.replace,
@@ -82,7 +83,7 @@ void main() {
           'buy_price': 4000.0,
           'sell_price': 6000.0,
           'quantity': 10.0,
-          'min_qty': 2.0,
+          'min_quantity': 2.0,
           'is_active': 1,
           'is_deleted': 0,
           'created_at': t1.toIso8601String(),
@@ -135,7 +136,7 @@ void main() {
             'buy_price': 15000.0,
             'sell_price': 20000.0,
             'quantity': 5.0,
-            'min_qty': 1.0,
+            'min_quantity': 1.0,
             'created_by_name': 'محمود المخزن',
             'created_at': t2,
             'updated_at': t2,
@@ -344,7 +345,7 @@ void main() {
           'buy_price': 1500.0,
           'sell_price': 2500.0,
           'quantity': 8.0,
-          'min_qty': 1.0,
+          'min_quantity': 1.0,
           'is_active': 1,
           'is_deleted': 0,
           'created_at': t1,
@@ -371,7 +372,7 @@ void main() {
               'buy_price': 1000.0,
               'sell_price': 1800.0,
               'quantity': 12.0,
-              'min_qty': 1.0,
+              'min_quantity': 1.0,
               'created_by_name': 'سعيد المبيعات',
               'created_at': t2,
               'updated_at': t2,
@@ -392,6 +393,7 @@ void main() {
           ],
         );
         await container.read(itemsProvider.future);
+        await container.read(itemCategoryTreeProvider.future);
         await container.read(pendingItemConflictsProvider.future);
       });
 

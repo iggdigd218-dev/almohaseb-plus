@@ -402,6 +402,7 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
                     openCategoryManager(context, ref, roots, sections),
               ),
             ),
+            const ItemConflictBanner(),
             Expanded(
               child: categoriesAsync.when(
                 skipLoadingOnReload: true,
@@ -541,7 +542,6 @@ class _InventoryScreenState extends ConsumerState<InventoryScreen> {
       onRefresh: () async => bump(ref),
       child: Column(
         children: [
-          const ItemConflictBanner(),
           if (canSeeValuation)
             Padding(
               padding: const EdgeInsets.fromLTRB(14, 8, 14, 2),
