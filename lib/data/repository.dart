@@ -2022,11 +2022,11 @@ class Repo {
         final compToSave = companionTx.copyWith(
           reference: compRef,
           syncState: newSync,
-          createdAt: compNowDt,
         );
         final compMap = compToSave.toMap();
         compMap['workspace_id'] = requireWorkspaceId;
         compMap['id'] = newGlobalId();
+        compMap['created_at'] = compNow;
         compMap['updated_at'] = compNow;
         final compId = await txn.insert('transactions', compMap);
         final compSaved = Map<String, Object?>.from(compMap)..['id'] = compId;

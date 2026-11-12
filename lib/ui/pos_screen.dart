@@ -12,6 +12,7 @@ import '../core/desktop.dart';
 import '../core/format.dart';
 import '../core/item_search.dart';
 import '../core/icon_catalog.dart';
+import '../core/l10n.dart';
 import '../core/models.dart';
 import '../core/thermal_invoice_doc.dart';
 import '../core/shell_nav.dart';

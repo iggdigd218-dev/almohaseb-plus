@@ -15,6 +15,7 @@ import 'package:share_plus/share_plus.dart';
 import '../core/format.dart';
 import '../core/category_tree.dart';
 import '../core/icon_catalog.dart';
+import '../core/l10n.dart';
 import '../core/media_paths.dart';
 import '../core/models.dart';
 import '../core/pdf_fonts.dart';
@@ -3738,7 +3739,7 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
       context: context,
       useSafeArea: true,
       showDragHandle: true,
-      shape: const RoundedRectangleBorder(borderRadius: AppRadius.sheetTop),
+      shape: RoundedRectangleBorder(borderRadius: AppRadius.sheetTop),
       builder: (ctx) => SafeArea(
         child: Padding(
           padding: const EdgeInsets.fromLTRB(12, 4, 12, 16),
