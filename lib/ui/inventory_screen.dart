@@ -4978,6 +4978,27 @@ class _ShortagesListSheetState extends ConsumerState<_ShortagesListSheet> {
     }
   }
 
+  Future<String> _resolvePrintedBy(Map<String, String> st) async {
+    final candidates = <String?>[
+      ref.read(currentUserProvider).valueOrNull?.name,
+      ref.read(ownerDisplayNameProvider).valueOrNull,
+      st['profile.owner_name'],
+      st['user.name'],
+      st['sync.deviceName'],
+      st['account.name'],
+      st['businessOwner'],
+    ];
+    for (final c in candidates) {
+      final clean = (c ?? '').trim();
+      if (clean.isNotEmpty) return clean;
+    }
+    try {
+      final ownerName = await ref.read(ownerDisplayNameProvider.future);
+      if (ownerName.trim().isNotEmpty) return ownerName.trim();
+    } catch (_) {}
+    return 'المستخدم';
+  }
+
   Future<void> _exportAsImage(
     List<_ShortageDraftRow> picked,
     String groupsTitle,
@@ -4992,11 +5013,13 @@ class _ShortagesListSheetState extends ConsumerState<_ShortagesListSheet> {
       final st = await ref.read(repoProvider).settings();
       final orgName =
           (st['businessName'] ?? st['org.name'] ?? 'المتجر').trim();
+      final printedBy = await _resolvePrintedBy(st);
       final bytes = await _renderShortagesImage(
         orgName: orgName,
         rows: picked,
         date: DateTime.now(),
         groupsLabel: groupsTitle,
+        printedBy: printedBy,
       );
       final dir = await getTemporaryDirectory();
       final stamp = DateTime.now().millisecondsSinceEpoch;
@@ -5009,12 +5032,13 @@ class _ShortagesListSheetState extends ConsumerState<_ShortagesListSheet> {
         await savedCopy.writeAsBytes(bytes, flush: true);
       } catch (_) {}
 
+      final formattedGroups = _formatShortagesGroupsHeader(groupsTitle);
       await Share.shareXFiles(
         [XFile(file.path, mimeType: 'image/png')],
         subject: 'قائمة النواقص — $orgName',
-        text: groupsTitle.isEmpty
+        text: formattedGroups.isEmpty
             ? 'قائمة نواقص المخزون ($orgName) - ${Fmt.date(DateTime.now())}'
-            : 'قائمة نواقص المخزون ($orgName — $groupsTitle) - ${Fmt.date(DateTime.now())}',
+            : 'قائمة نواقص المخزون ($orgName — $formattedGroups) - ${Fmt.date(DateTime.now())}',
       );
       if (mounted) {
         showSnack(context, '✅ تم تجهيز وحفظ صورة قائمة النواقص بنجاح');
@@ -5042,11 +5066,13 @@ class _ShortagesListSheetState extends ConsumerState<_ShortagesListSheet> {
       final st = await ref.read(repoProvider).settings();
       final orgName =
           (st['businessName'] ?? st['org.name'] ?? 'المتجر').trim();
+      final printedBy = await _resolvePrintedBy(st);
       final pdfBytes = await _buildShortagesPdf(
         orgName: orgName,
         rows: picked,
         date: DateTime.now(),
         groupsLabel: groupsTitle,
+        printedBy: printedBy,
       );
       final stamp = DateTime.now().millisecondsSinceEpoch;
       final filename = 'shortages_$stamp.pdf';
@@ -5362,7 +5388,7 @@ class _ShortagesListSheetState extends ConsumerState<_ShortagesListSheet> {
                 child: Text(
                   groupsTitle.isEmpty
                       ? 'الأصناف المحددة: ${selectedRows.length} من ${visibleRows.length}'
-                      : 'المحدد (${selectedRows.length}/${visibleRows.length}) • $groupsTitle',
+                      : 'المحدد (${selectedRows.length}/${visibleRows.length}) • ${_formatShortagesGroupsHeader(groupsTitle)}',
                   maxLines: 1,
                   overflow: TextOverflow.ellipsis,
                   style: const TextStyle(
@@ -5525,7 +5551,7 @@ class _ShortagesListSheetState extends ConsumerState<_ShortagesListSheet> {
                               crossAxisAlignment: CrossAxisAlignment.center,
                               children: [
                                 Text(
-                                  'الكمية المطلوبة',
+                                  'المطلوب',
                                   style: TextStyle(
                                     fontSize: 10,
                                     fontWeight: FontWeight.w700,
@@ -5654,20 +5680,54 @@ class _ShortagesListSheetState extends ConsumerState<_ShortagesListSheet> {
   }
 }
 
-/// يولّد ملف PDF عربي متكامل لقائمة النواقص.
+/// تنسيق عنوان الأقسام في ترويسة النواقص:
+/// - إذا كان قسماً واحداً فقط (مثل "الصيانة"): يعرض "قسم الصيانة" (وليس "القسم الصيانة" أو "الأقسام: الصيانة").
+/// - إذا كانت عدة أقسام: يعرض "الأقسام: ...".
+String _formatShortagesGroupsHeader(String groupsLabel) {
+  final clean = PdfFonts.sanitize(groupsLabel).trim();
+  if (clean.isEmpty) return '';
+  final parts = clean
+      .split(RegExp(r'[,،]'))
+      .map((s) => s.trim())
+      .where((s) => s.isNotEmpty)
+      .toList();
+  if (parts.isEmpty) return '';
+  if (parts.length == 1) {
+    final single = parts.first
+        .replaceFirst(RegExp(r'^(الأقسام|القسم|قسم)\s*[:：-]?\s*'), '')
+        .trim();
+    return single.isEmpty ? '' : 'قسم $single';
+  }
+  return 'الأقسام: ${parts.join(' ، ')}';
+}
+
+const String _kAppBrandLabel = 'المحاسب - Al-Mohaseb';
+const String _kSupportPhoneLabel = 'خدمة الدعم: +967774190040';
+
+/// يولّد ملف PDF عربي متكامل لقائمة النواقص (مخصص للتاجر/المورد: يعرض المطلوب والوحدة فقط دون المتوفر وحد التنبيه والحالة).
 Future<Uint8List> _buildShortagesPdf({
   required String orgName,
   required List<_ShortageDraftRow> rows,
   required DateTime date,
   String groupsLabel = '',
+  String printedBy = '',
 }) async {
   final theme = await PdfFonts.theme();
   final doc = pw.Document(theme: theme);
   final dateStr = Fmt.dateTime(date);
-  final safeGroups = PdfFonts.sanitize(groupsLabel);
-  final subtitleText = groupsLabel.trim().isEmpty
-      ? 'قائمة النواقص وطلب البضاعة (الأصناف تحت حد التنبيه)'
-      : 'قائمة النواقص وطلب البضاعة — الأقسام: $safeGroups';
+  final formattedGroups = _formatShortagesGroupsHeader(groupsLabel);
+  final subtitleText = formattedGroups.isEmpty
+      ? 'قائمة النواقص وطلب البضاعة'
+      : 'قائمة النواقص وطلب البضاعة — $formattedGroups';
+  final cleanPrintedBy = PdfFonts.sanitize(printedBy).trim().isEmpty
+      ? 'المستخدم'
+      : PdfFonts.sanitize(printedBy).trim();
+
+  pw.MemoryImage? sysLogo;
+  try {
+    final bd = await rootBundle.load('assets/images/logo.png');
+    sysLogo = pw.MemoryImage(bd.buffer.asUint8List());
+  } catch (_) {}
 
   doc.addPage(
     pw.MultiPage(
@@ -5677,55 +5737,113 @@ Future<Uint8List> _buildShortagesPdf({
       header: (_) => PdfFonts.rtl(
         child: pw.Container(
           margin: const pw.EdgeInsets.only(bottom: 14),
-          padding: const pw.EdgeInsets.all(14),
+          padding: const pw.EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           decoration: const pw.BoxDecoration(
             color: PdfColor.fromInt(0xFF0F3E78),
             borderRadius: pw.BorderRadius.all(pw.Radius.circular(8)),
           ),
           child: pw.Row(
             mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+            crossAxisAlignment: pw.CrossAxisAlignment.center,
             children: [
-              pw.Column(
-                crossAxisAlignment: pw.CrossAxisAlignment.start,
-                children: [
-                  pw.Text(
-                    orgName.isEmpty ? 'قائمة نواقص المخزون' : orgName,
-                    style: pw.TextStyle(
-                      color: PdfColors.white,
-                      fontSize: 16,
-                      fontWeight: pw.FontWeight.bold,
+              // الجانب الأيمن: اسم المنشأة وعنوان القائمة وإجمالي الأصناف
+              pw.Expanded(
+                flex: 4,
+                child: pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.start,
+                  children: [
+                    pw.Text(
+                      orgName.isEmpty ? 'قائمة نواقص المخزون' : orgName,
+                      style: pw.TextStyle(
+                        color: PdfColors.white,
+                        fontSize: 15,
+                        fontWeight: pw.FontWeight.bold,
+                      ),
                     ),
-                  ),
-                  pw.SizedBox(height: 3),
-                  pw.Text(
-                    subtitleText,
-                    style: const pw.TextStyle(
-                      color: PdfColors.white,
-                      fontSize: 11,
+                    pw.SizedBox(height: 3),
+                    pw.Text(
+                      subtitleText,
+                      style: const pw.TextStyle(
+                        color: PdfColors.white,
+                        fontSize: 10.5,
+                      ),
                     ),
-                  ),
-                ],
+                    pw.SizedBox(height: 3),
+                    pw.Text(
+                      'إجمالي الأصناف: ${rows.length}',
+                      style: pw.TextStyle(
+                        color: PdfColors.amber200,
+                        fontSize: 10.5,
+                        fontWeight: pw.FontWeight.bold,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              pw.Column(
-                crossAxisAlignment: pw.CrossAxisAlignment.end,
-                children: [
-                  pw.Text(
-                    'التاريخ: $dateStr',
-                    style: const pw.TextStyle(
-                      color: PdfColors.white,
-                      fontSize: 10,
+              // وسط أعلى الصفحة: شعار النظام نفسه والاسم تحته
+              pw.Expanded(
+                flex: 3,
+                child: pw.Column(
+                  mainAxisSize: pw.MainAxisSize.min,
+                  crossAxisAlignment: pw.CrossAxisAlignment.center,
+                  children: [
+                    if (sysLogo != null)
+                      pw.Container(
+                        width: 36,
+                        height: 36,
+                        padding: const pw.EdgeInsets.all(3),
+                        decoration: const pw.BoxDecoration(
+                          color: PdfColors.white,
+                          borderRadius:
+                              pw.BorderRadius.all(pw.Radius.circular(8)),
+                        ),
+                        child: pw.Image(sysLogo, fit: pw.BoxFit.contain),
+                      ),
+                    pw.SizedBox(height: 3),
+                    pw.Text(
+                      'المحاسب',
+                      textAlign: pw.TextAlign.center,
+                      style: pw.TextStyle(
+                        color: PdfColors.white,
+                        fontSize: 10,
+                        fontWeight: pw.FontWeight.bold,
+                      ),
                     ),
-                  ),
-                  pw.SizedBox(height: 3),
-                  pw.Text(
-                    'إجمالي الأصناف: ${rows.length}',
-                    style: pw.TextStyle(
-                      color: PdfColors.amber200,
-                      fontSize: 11,
-                      fontWeight: pw.FontWeight.bold,
+                  ],
+                ),
+              ),
+              // جانب الصفحة (الأيسر): اسم التطبيق بالعربية والإنجليزية ورقم خدمة الدعم والتاريخ بخط صغير ومناسب
+              pw.Expanded(
+                flex: 4,
+                child: pw.Column(
+                  crossAxisAlignment: pw.CrossAxisAlignment.end,
+                  children: [
+                    pw.Text(
+                      _kAppBrandLabel,
+                      style: pw.TextStyle(
+                        color: PdfColors.amber100,
+                        fontSize: 9,
+                        fontWeight: pw.FontWeight.bold,
+                      ),
                     ),
-                  ),
-                ],
+                    pw.SizedBox(height: 2),
+                    pw.Text(
+                      _kSupportPhoneLabel,
+                      style: const pw.TextStyle(
+                        color: PdfColors.white,
+                        fontSize: 8.5,
+                      ),
+                    ),
+                    pw.SizedBox(height: 3),
+                    pw.Text(
+                      'التاريخ: $dateStr',
+                      style: const pw.TextStyle(
+                        color: PdfColors.grey200,
+                        fontSize: 8.5,
+                      ),
+                    ),
+                  ],
+                ),
               ),
             ],
           ),
@@ -5739,13 +5857,10 @@ Future<Uint8List> _buildShortagesPdf({
               width: 0.7,
             ),
             columnWidths: const {
-              0: pw.FlexColumnWidth(1.2), // الحالة
-              1: pw.FlexColumnWidth(1.1), // الوحدة
-              2: pw.FlexColumnWidth(1.3), // الكمية المطلوبة
-              3: pw.FlexColumnWidth(1.2), // حد التنبيه
-              4: pw.FlexColumnWidth(1.2), // المتوفر
-              5: pw.FlexColumnWidth(3.2), // اسم الصنف
-              6: pw.FixedColumnWidth(28), // م
+              0: pw.FlexColumnWidth(1.3), // الوحدة
+              1: pw.FlexColumnWidth(1.4), // المطلوب
+              2: pw.FlexColumnWidth(4.2), // اسم الصنف
+              3: pw.FixedColumnWidth(32), // م
             },
             children: [
               pw.TableRow(
@@ -5753,11 +5868,8 @@ Future<Uint8List> _buildShortagesPdf({
                   color: PdfColor.fromInt(0xFFF1F5F9),
                 ),
                 children: [
-                  _pdfCell('الحالة', bold: true),
                   _pdfCell('الوحدة', bold: true),
-                  _pdfCell('المطلوب طلبه', bold: true),
-                  _pdfCell('حد التنبيه', bold: true),
-                  _pdfCell('المتوفر', bold: true),
+                  _pdfCell('المطلوب', bold: true),
                   _pdfCell('اسم الصنف', bold: true, alignRight: true),
                   _pdfCell('م', bold: true),
                 ],
@@ -5770,27 +5882,49 @@ Future<Uint8List> _buildShortagesPdf({
                         : const PdfColor.fromInt(0xFFF8FAFC),
                   ),
                   children: [
-                    _pdfCell(
-                      rows[i].item.quantity <= 0 ? 'نفد' : 'تحت الحد',
-                      color: rows[i].item.quantity <= 0
-                          ? const PdfColor.fromInt(0xFFB91C1C)
-                          : const PdfColor.fromInt(0xFFB45309),
-                      bold: true,
-                    ),
                     _pdfCell(rows[i].item.unit),
                     _pdfCell(
                       Fmt.qty(rows[i].requiredQty),
                       bold: true,
                       color: const PdfColor.fromInt(0xFF0F3E78),
                     ),
-                    _pdfCell(Fmt.qty(rows[i].item.minQuantity)),
-                    _pdfCell(Fmt.qty(rows[i].item.quantity)),
                     _pdfCell(PdfFonts.sanitize(rows[i].item.name),
                         bold: true, alignRight: true),
                     _pdfCell('${i + 1}'),
                   ],
                 ),
             ],
+          ),
+        ),
+        pw.SizedBox(height: 12),
+        PdfFonts.rtl(
+          child: pw.Container(
+            padding:
+                const pw.EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+            decoration: const pw.BoxDecoration(
+              color: PdfColor.fromInt(0xFFF8FAFC),
+              borderRadius: pw.BorderRadius.all(pw.Radius.circular(6)),
+            ),
+            child: pw.Row(
+              mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
+              children: [
+                pw.Text(
+                  'تمت الطباعة بواسطة : $cleanPrintedBy',
+                  style: pw.TextStyle(
+                    fontSize: 10,
+                    fontWeight: pw.FontWeight.bold,
+                    color: const PdfColor.fromInt(0xFF1E293B),
+                  ),
+                ),
+                pw.Text(
+                  '$_kAppBrandLabel  •  $_kSupportPhoneLabel',
+                  style: const pw.TextStyle(
+                    fontSize: 8.5,
+                    color: PdfColor.fromInt(0xFF64748B),
+                  ),
+                ),
+              ],
+            ),
           ),
         ),
       ],
@@ -5820,18 +5954,19 @@ pw.Widget _pdfCell(
       ),
     );
 
-/// يرسم صورة عالية الدقة (PNG) لقائمة النواقص باللغة العربية.
+/// يرسم صورة عالية الدقة (PNG) لقائمة النواقص باللغة العربية (يعرض المطلوب والوحدة فقط دون المتوفر وحد التنبيه والحالة).
 Future<Uint8List> _renderShortagesImage({
   required String orgName,
   required List<_ShortageDraftRow> rows,
   required DateTime date,
   String groupsLabel = '',
+  String printedBy = '',
 }) async {
   const double width = 860;
-  const double headerHeight = 118;
+  const double headerHeight = 132;
   const double tableHeaderHeight = 46;
   const double rowHeight = 46;
-  const double footerHeight = 52;
+  const double footerHeight = 64;
   const double pad = 24;
 
   final double totalHeight = headerHeight +
@@ -5839,6 +5974,18 @@ Future<Uint8List> _renderShortagesImage({
       (rows.length * rowHeight) +
       footerHeight +
       (pad * 2);
+
+  ui.Image? sysLogoImage;
+  try {
+    final bd = await rootBundle.load('assets/images/logo.png');
+    final codec = await ui.instantiateImageCodec(
+      bd.buffer.asUint8List(),
+      targetWidth: 96,
+      targetHeight: 96,
+    );
+    final frame = await codec.getNextFrame();
+    sysLogoImage = frame.image;
+  } catch (_) {}
 
   final recorder = ui.PictureRecorder();
   final canvas = Canvas(recorder, Rect.fromLTWH(0, 0, width, totalHeight));
@@ -5859,30 +6006,120 @@ Future<Uint8List> _renderShortagesImage({
     Paint()..color = const Color(0xFF0F3E78),
   );
 
+  // 1) وسط أعلى الصفحة: شعار النظام نفسه والاسم تحته ("المحاسب")
+  const double centerBoxW = 140;
+  const double centerBoxX = (width - centerBoxW) / 2;
+  if (sysLogoImage != null) {
+    final logoBgRect = RRect.fromRectAndRadius(
+      const Rect.fromLTWH((width - 50) / 2, pad + 12, 50, 50),
+      const Radius.circular(12),
+    );
+    canvas.drawRRect(logoBgRect, Paint()..color = Colors.white);
+    paintImage(
+      canvas: canvas,
+      rect: const Rect.fromLTWH((width - 42) / 2, pad + 16, 42, 42),
+      image: sysLogoImage,
+      fit: BoxFit.contain,
+    );
+  }
+  _drawCanvasText(
+    canvas,
+    text: 'المحاسب',
+    x: centerBoxX,
+    y: pad + 68,
+    maxWidth: centerBoxW,
+    fontSize: 15,
+    fontWeight: FontWeight.w900,
+    color: Colors.white,
+    align: TextAlign.center,
+  );
+  _drawCanvasText(
+    canvas,
+    text: 'Al-Mohaseb',
+    x: centerBoxX,
+    y: pad + 88,
+    maxWidth: centerBoxW,
+    fontSize: 11,
+    fontWeight: FontWeight.w700,
+    color: const Color(0xFFFDE68A),
+    align: TextAlign.center,
+  );
+
+  // 2) الجانب الأيمن من الترويسة: اسم المنشأة + قسم النواقص + إجمالي الأصناف
+  const double sideColW = (width - pad * 2 - centerBoxW) / 2 - 16;
+  const double rightColX = width - pad - 16 - sideColW;
   _drawCanvasText(
     canvas,
     text: orgName.isEmpty ? 'قائمة نواقص المخزون' : orgName,
-    x: pad + 20,
-    y: pad + 18,
-    maxWidth: width - pad * 2 - 40,
-    fontSize: 22,
+    x: rightColX,
+    y: pad + 16,
+    maxWidth: sideColW,
+    fontSize: 20,
     fontWeight: FontWeight.w900,
     color: Colors.white,
     align: TextAlign.right,
   );
-  final subHeader = groupsLabel.trim().isEmpty
-      ? 'قائمة النواقص وطلب البضاعة (${rows.length} صنف)  •  ${Fmt.dateTime(date)}'
-      : 'النواقص ($groupsLabel — ${rows.length} صنف)  •  ${Fmt.dateTime(date)}';
+  final formattedGroups = _formatShortagesGroupsHeader(groupsLabel);
+  final subHeader = formattedGroups.isEmpty
+      ? 'قائمة النواقص وطلب البضاعة'
+      : 'قائمة النواقص وطلب البضاعة — $formattedGroups';
   _drawCanvasText(
     canvas,
     text: subHeader,
-    x: pad + 20,
-    y: pad + 56,
-    maxWidth: width - pad * 2 - 40,
-    fontSize: 14.5,
+    x: rightColX,
+    y: pad + 50,
+    maxWidth: sideColW,
+    fontSize: 13.5,
     fontWeight: FontWeight.w700,
+    color: Colors.white,
+    align: TextAlign.right,
+  );
+  _drawCanvasText(
+    canvas,
+    text: 'إجمالي الأصناف: ${rows.length}',
+    x: rightColX,
+    y: pad + 78,
+    maxWidth: sideColW,
+    fontSize: 13.5,
+    fontWeight: FontWeight.w800,
     color: const Color(0xFFFDE68A),
     align: TextAlign.right,
+  );
+
+  // 3) جانب الصفحة (الجانب الأيسر من الترويسة): اسم التطبيق بالعربية والإنجليزية ورقم جوال خدمة الدعم والتاريخ بخط صغير ومناسب
+  const double leftColX = pad + 16;
+  _drawCanvasText(
+    canvas,
+    text: _kAppBrandLabel,
+    x: leftColX,
+    y: pad + 18,
+    maxWidth: sideColW,
+    fontSize: 12.5,
+    fontWeight: FontWeight.w800,
+    color: const Color(0xFFFDE68A),
+    align: TextAlign.left,
+  );
+  _drawCanvasText(
+    canvas,
+    text: _kSupportPhoneLabel,
+    x: leftColX,
+    y: pad + 44,
+    maxWidth: sideColW,
+    fontSize: 11.5,
+    fontWeight: FontWeight.w700,
+    color: Colors.white,
+    align: TextAlign.left,
+  );
+  _drawCanvasText(
+    canvas,
+    text: 'التاريخ: ${Fmt.dateTime(date)}',
+    x: leftColX,
+    y: pad + 70,
+    maxWidth: sideColW,
+    fontSize: 11.5,
+    fontWeight: FontWeight.w600,
+    color: const Color(0xFFE2E8F0),
+    align: TextAlign.left,
   );
 
   double y = pad + headerHeight;
@@ -5899,14 +6136,12 @@ Future<Uint8List> _renderShortagesImage({
   );
 
   // أعمدة الجدول من اليمين إلى اليسار:
-  // م (50) | اسم الصنف (310) | المتوفر (110) | حد التنبيه (110) | المطلوب (130) | الوحدة (102)
+  // م (56) | اسم الصنف (466) | المطلوب (150) | الوحدة (140)
   final cols = <({String title, double w})>[
-    (title: 'م', w: 50),
-    (title: 'اسم الصنف', w: 310),
-    (title: 'المتوفر', w: 110),
-    (title: 'حد التنبيه', w: 110),
-    (title: 'الكمية المطلوبة', w: 130),
-    (title: 'الوحدة', w: 102),
+    (title: 'م', w: 56),
+    (title: 'اسم الصنف', w: 466),
+    (title: 'المطلوب', w: 150),
+    (title: 'الوحدة', w: 140),
   ];
 
   double colRight = width - pad;
@@ -5946,8 +6181,6 @@ Future<Uint8List> _renderShortagesImage({
     final values = <String>[
       '${i + 1}',
       PdfFonts.sanitize(r.item.name),
-      Fmt.qty(r.item.quantity),
-      Fmt.qty(r.item.minQuantity),
       Fmt.qty(r.requiredQty),
       r.item.unit,
     ];
@@ -5957,11 +6190,9 @@ Future<Uint8List> _renderShortagesImage({
       final w = cols[c].w;
       final cLeft = cRight - w;
       final isName = c == 1;
-      final isReq = c == 4;
-      final isAvail = c == 2;
+      final isReq = c == 2;
       Color txtColor = const Color(0xFF1E293B);
       if (isReq) txtColor = const Color(0xFF0F3E78);
-      if (isAvail && r.item.quantity <= 0) txtColor = const Color(0xFFB91C1C);
 
       _drawCanvasText(
         canvas,
@@ -5980,17 +6211,31 @@ Future<Uint8List> _renderShortagesImage({
     y += rowHeight;
   }
 
-  // تذييل الصورة
+  // تحت الجداول: تمت الطباعة بواسطة + اسم التطبيق وخدمة الدعم
+  final cleanPrintedBy = PdfFonts.sanitize(printedBy).trim().isEmpty
+      ? 'المستخدم'
+      : PdfFonts.sanitize(printedBy).trim();
   _drawCanvasText(
     canvas,
-    text: 'تم استخراج قائمة النواقص آلياً — إجمالي الأصناف المطلوبة: ${rows.length}',
-    x: pad,
-    y: y + 14,
-    maxWidth: tableWidth,
-    fontSize: 12.5,
+    text: 'تمت الطباعة بواسطة : $cleanPrintedBy',
+    x: pad + 8,
+    y: y + 12,
+    maxWidth: tableWidth / 2 - 12,
+    fontSize: 13.5,
+    fontWeight: FontWeight.w800,
+    color: const Color(0xFF0F172A),
+    align: TextAlign.left,
+  );
+  _drawCanvasText(
+    canvas,
+    text: '$_kAppBrandLabel  •  $_kSupportPhoneLabel',
+    x: pad + tableWidth / 2,
+    y: y + 13,
+    maxWidth: tableWidth / 2 - 8,
+    fontSize: 11.5,
     fontWeight: FontWeight.w700,
     color: const Color(0xFF64748B),
-    align: TextAlign.center,
+    align: TextAlign.right,
   );
 
   final picture = recorder.endRecording();
@@ -6030,4 +6275,5 @@ void _drawCanvasText(
   )..layout(minWidth: maxWidth, maxWidth: maxWidth);
   tp.paint(canvas, Offset(x, y));
 }
+
 
