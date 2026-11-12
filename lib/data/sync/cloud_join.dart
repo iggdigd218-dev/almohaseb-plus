@@ -2515,8 +2515,39 @@ class CloudJoin {
         final upd = '${d['updated_at'] ?? ''}';
         final remoteEntry = remote?[devIdStr];
         if (!canManage) {
-          // صمام أمان صارم للعضو: إذا كانت عقدته في السحابة موسومة بالطرد أو الحظر أو غير مقترنة،
-          // أو وُجدت له شاهدة طرد في /evictions أحدث من انضمامه المعتمد، يُحظر عليه إعادة رفع نفسه إلى /roster!
+          // صمام أمان صارم للعضو (Heartbeat Guard): إذا كانت عقدته في السحابة موسومة بالإزالة أو الحظر أو غير مقترنة،
+          // أو إذا حذفها المدير من /roster (بينما عقدة المدير قائمة في السحابة) بعد انضمام العضو،
+          // يُحظر عليه إعادة رفع نفسه أو تحديث last_seen / last_sync في السحابة!
+          if (remote != null && remote.isNotEmpty && remoteEntry == null) {
+            final hasOwnerInRemote = remote.values.any((v) =>
+                v is Map &&
+                (v['is_owner'] == 1 ||
+                    v['is_owner'] == true ||
+                    '${v['is_owner'] ?? 0}' == '1'));
+            if (hasOwnerInRemote && lastPush.isNotEmpty) {
+              final nowIso = DateTime.now().toIso8601String();
+              try {
+                await db.update(
+                  'devices',
+                  {
+                    'is_paired': 0,
+                    'revoked_at': nowIso,
+                    'expelled_at': nowIso,
+                    'updated_at': nowIso,
+                  },
+                  where: 'id = ?',
+                  whereArgs: [devIdStr],
+                );
+                await db.insert(
+                  'sync_meta',
+                  {'key': 'selfRevoked', 'value': '1'},
+                  conflictAlgorithm: ConflictAlgorithm.replace,
+                );
+                changed = true;
+              } catch (_) {}
+              continue;
+            }
+          }
           if (remoteEntry is Map &&
               ('${remoteEntry['revoked_at'] ?? ''}'.trim().isNotEmpty ||
                   '${remoteEntry['expelled_at'] ?? ''}'.trim().isNotEmpty ||

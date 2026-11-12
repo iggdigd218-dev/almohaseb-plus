@@ -493,16 +493,7 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                                     );
                                   },
                                 ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  amITheOwner
-                                      ? 'هذا الجهاز (الجهاز الرئيسي لإدارة المنشأة والمجموعة)'
-                                      : 'هذا الجهاز (مفوَّض بإدارة أعضاء المجموعة والعمليات)',
-                                  style: TextStyle(
-                                    fontSize: 12,
-                                    color: Colors.grey.shade600,
-                                  ),
-                                ),
+
                               ],
                             ),
                           ),
@@ -774,22 +765,33 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                         onExpel: () async {
                           final ok = await confirmDialog(
                             context,
-                            title: 'طرد الجهاز',
+                            title: 'إزالة من المجموعة',
                             message:
-                                'سيُطرد "${d['name']}" من المجموعة ويمسح بياناته عند أول اتصال.',
-                            confirmText: 'طرد',
+                                'سيتم إخراج "${d['name']}" من المجموعة فوراً وإلغاء ارتباطه السحابي والمحلي (ويمكنك إعادة إضافته مستقبلاً في أي وقت).',
+                            confirmText: 'إخراج العضو',
                             danger: true,
                           );
                           if (ok == true) {
                             try {
-                              await repo.expelDevice(d['id'] as String);
-                              // (دفعة 54) بروتوكول الطرد النشط: شاهدة صريحة في
-                              // /evictions + حذف عقدته من /roster — تصل
-                              // المستهدف لحظياً عبر قناته المخصصة.
+                              final targetDevId = d['id'] as String;
+                              await repo.expelDevice(targetDevId);
                               try {
+                                final stExpel = await repo.settings();
+                                final bUrl = effectiveBackendUrl(
+                                    stExpel['cloudBackendUrl']);
+                                final wsExpel = await repo.activeWorkspaceId();
+                                if (bUrl.isNotEmpty) {
+                                  await CloudJoin.expelMemberCompletely(
+                                    repo,
+                                    backendUrl: bUrl,
+                                    deviceId: targetDevId,
+                                    workspaceId: wsExpel,
+                                    reason: 'removed_by_manager',
+                                  );
+                                }
                                 await engine.broadcastEviction(
-                                  d['id'] as String,
-                                  reason: 'expelled_by_manager',
+                                  targetDevId,
+                                  reason: 'removed_by_manager',
                                 );
                                 await engine.broadcastRosterChange();
                               } catch (_) {}
@@ -798,7 +800,7 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                               if (context.mounted) {
                                 showSnack(
                                   context,
-                                  '✅ تم طرد الجهاز وبثّ الإبطال — سيُقصى لحظياً.',
+                                  '✅ تمت إزالة العضو من المجموعة فوراً.',
                                 );
                               }
                             } catch (e) {
@@ -807,7 +809,7 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                               if (context.mounted) {
                                 showSnack(
                                   context,
-                                  'تعذّر طرد الجهاز: $e',
+                                  'تعذّر إزالة العضو: $e',
                                   error: true,
                                 );
                               }
@@ -866,17 +868,7 @@ class _PairHubSheetState extends ConsumerState<_PairHubSheet> {
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.titleLarge,
             ),
-            const SizedBox(height: 6),
-            const Text(
-              'اختر طريقة الربط المناسبة. ستنضم الأجهزة الجديدة إلى هذه المجموعة وتستلم نسخة من البيانات.',
-              textAlign: TextAlign.center,
-              style: TextStyle(
-                color: Colors.black54,
-                fontSize: 12,
-                height: 1.6,
-              ),
-            ),
-            const SizedBox(height: 20),
+            const SizedBox(height: 16),
             // (دفعة 58) الاقتران سحابي حصرياً — أزيلت طرق LAN (QR بعنوان IP،
             // الإدخال اليدوي IP+منفذ، كود التفعيل المحلي) نهائياً.
             _HubTile(

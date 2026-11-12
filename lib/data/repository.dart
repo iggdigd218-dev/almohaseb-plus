@@ -2644,8 +2644,8 @@ class Repo {
   }
 
   Future<void> deleteTx(int id) async {
-    await _ensureCan('delete_tx');
     await _ensureNotAuditLocked(id);
+    await _ensureCan('delete_tx');
     final db = await _db;
     final nowDt = DateTime.now();
     final now = nowDt.toIso8601String();
@@ -4963,6 +4963,21 @@ class Repo {
         );
       } catch (_) {}
     }
+    // إلغاء أي عمليات مزامنة معلقة قد تعيد رفع سجل الجهاز المزال أو إنشائه
+    try {
+      await db.delete(
+        'sync_queue',
+        where:
+            "operation_id IN (SELECT id FROM operations WHERE (entity_type = 'device' AND entity_id = ?) OR (entity_type = 'user' AND op_type != 'delete' AND entity_id = ?))",
+        whereArgs: [deviceId, '${userId ?? ''}'],
+      );
+      await db.delete(
+        'operations',
+        where:
+            "(entity_type = 'device' AND entity_id = ?) OR (entity_type = 'user' AND op_type != 'delete' AND entity_id = ?)",
+        whereArgs: [deviceId, '${userId ?? ''}'],
+      );
+    } catch (_) {}
     try {
       await queueOperation(
         entityType: EntityKind.setting,
@@ -4971,11 +4986,11 @@ class Repo {
         payload: {'key': 'deviceExpelled:$deviceId', 'value': now},
       );
     } catch (_) {}
-    // أثر تدقيقي: الطرد يبقى موثقاً في السجل.
+    // أثر تدقيقي: الإزالة تبقى موثقة في السجل.
     try {
       await db.insert('activity', {
         'text':
-            'طرد عضو نهائياً من المجموعة: ${name.isEmpty ? deviceId : name}',
+            'إزالة عضو من المجموعة: ${name.isEmpty ? deviceId : name}',
         'ref_type': 'expel',
         'ref_id': deviceId,
         'user_name': 'المدير',

@@ -385,6 +385,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
 
   @override
   Widget build(BuildContext context) {
+    ref.watch(appLocaleProvider);
     final settings = ref.watch(settingsProvider);
     final currencies = ref.watch(currenciesProvider).valueOrNull ?? [];
 
@@ -472,7 +473,7 @@ class _SettingsScreenState extends ConsumerState<SettingsScreen> {
                                       keyboardType: f.$4,
                                       maxLines: f.$5,
                                       decoration: InputDecoration(
-                                        labelText: f.$2,
+                                        labelText: context.tr(f.$2),
                                         prefixIcon: Icon(f.$3, size: 18),
                                         isDense: true,
                                       ),
@@ -1614,19 +1615,10 @@ class _Collapsible extends StatelessWidget {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Text(
-                        title,
+                        context.tr(title),
                         style: const TextStyle(
                             fontWeight: FontWeight.w800, fontSize: 15),
                       ),
-                      if (sub != null)
-                        Text(
-                          sub,
-                          style: TextStyle(
-                            fontSize: 11.5,
-                            height: 1.4,
-                            color: AppColors.text3Of(context),
-                          ),
-                        ),
                     ],
                   ),
                 ),
