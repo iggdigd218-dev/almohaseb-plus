@@ -79,6 +79,8 @@ class AppLocalizations {
   String get signInBtn => isEn ? 'Sign In' : 'تسجيل الدخول';
   String get registerNewBtn => isEn ? 'New Registration' : 'تسجيل جديد';
   String get googleAccountBtn => isEn ? 'Google Account' : 'حساب Google';
+  String get cancelBtn => isEn ? 'Cancel' : 'إلغاء';
+  String get confirmBtn => isEn ? 'Confirm' : 'تأكيد';
 
   // ───────── رسائل أخطاء تسجيل الدخول الصريحة ─────────
   static const String errNoInternetAr =

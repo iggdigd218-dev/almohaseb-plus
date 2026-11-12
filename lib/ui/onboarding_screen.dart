@@ -20,6 +20,7 @@ import '../core/app_error_mapper.dart';
 import '../core/cloud_config.dart';
 import '../core/device_names.dart';
 import '../core/l10n.dart';
+import '../core/security.dart';
 import '../core/sfx.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
@@ -368,7 +369,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
           actions: [
             TextButton(
               onPressed: busyCheck ? null : () => Navigator.of(dctx).pop(false),
-              child: Text(AppLocalizations.of(context).cancel),
+              child: Text(AppLocalizations.of(context).cancelBtn),
             ),
             FilledButton(
               onPressed: busyCheck

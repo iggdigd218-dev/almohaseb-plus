@@ -1583,7 +1583,6 @@ class _Collapsible extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final c = color ?? AppColors.primaryOf(context);
-    final sub = _subs[title];
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
       decoration: BoxDecoration(

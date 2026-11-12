@@ -19,6 +19,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/accounting.dart';
 import '../core/cloud_config.dart';
+import '../core/security.dart';
 import '../core/sfx.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
@@ -123,7 +124,6 @@ class _CreateWorkspaceScreenState extends ConsumerState<CreateWorkspaceScreen> {
     // (هوية الهاتف) إذا أدخل رقمًا بدل البريد، نولّد بريدًا داخليًا معياريًا
     // لمصادقة Firebase ونحفظ الرقم في بيانات المنشأة وفهرس phones_index.
     final email = AccountWorkspace.authEmailForIdentifier(rawIdentifier);
-    final isPhoneIdentity = !AccountWorkspace.looksLikeEmail(rawIdentifier);
     final password = _passwordCtrl.text.trim();
     final storeName = _storeNameCtrl.text.trim();
     final rawPhone = _phoneCtrl.text.trim().replaceAll(RegExp(r'[^\d]'), '');
@@ -385,7 +385,6 @@ class _CreateWorkspaceScreenState extends ConsumerState<CreateWorkspaceScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final primary = AppColors.primaryOf(context);
     return Scaffold(
       appBar: AppBar(
         title: Text(
