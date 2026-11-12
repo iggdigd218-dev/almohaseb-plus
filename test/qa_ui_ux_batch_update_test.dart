@@ -270,13 +270,13 @@ void main() {
           expect(find.text('أص'), findsNothing);
           expect(find.text('خم'), findsNothing);
 
-          // المتطلب 7-ج: ظهور «عليه» (وليس «عليكم») باللون الأحمر، و«له» باللون الأزرق
+          // المتطلب 7-ج: ظهور «عليه» (وليس «عليكم») باللون الأحمر، و«له» باللون الأخضر
           expect(find.text('عليكم'), findsNothing);
           expect(find.text('لكم'), findsNothing);
           final debtLabel = tester.widget<Text>(find.text('عليه').first);
           expect(debtLabel.style?.color, const Color(0xFFEF4444));
           final creditLabel = tester.widget<Text>(find.text('له').first);
-          expect(creditLabel.style?.color, const Color(0xFF0284C7));
+          expect(creditLabel.style?.color, const Color(0xFF10B981));
 
           // المتطلب 7-د: تلوين متناوب للبطاقات بين الأبيض والتركواز الفاتح الهادئ
           final containers = tester

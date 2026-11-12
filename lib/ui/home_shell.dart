@@ -1403,7 +1403,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
           children: [
             ListTile(
               leading: const Icon(Icons.receipt_long_outlined),
-              title: const Text('تسجيل عملية مالية'),
+              title: Text(ctx.tr('تسجيل عملية مالية')),
               onTap: () {
                 Navigator.pop(ctx);
                 openTxForm(context, ref);
@@ -1411,7 +1411,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
             ),
             ListTile(
               leading: const Icon(Icons.receipt_outlined),
-              title: const Text('سند قبض / صرف'),
+              title: Text(ctx.tr('سند قبض / صرف')),
               onTap: () {
                 Navigator.pop(ctx);
                 openVoucherForm(context, ref);
@@ -1419,7 +1419,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
             ),
             ListTile(
               leading: const Icon(Icons.person_add_alt_outlined),
-              title: const Text('حساب جديد'),
+              title: Text(ctx.tr('حساب جديد')),
               onTap: () {
                 Navigator.pop(ctx);
                 openAccountForm(context, ref);
@@ -1427,7 +1427,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
             ),
             ListTile(
               leading: const Icon(Icons.point_of_sale_outlined),
-              title: const Text('فتح نقطة البيع'),
+              title: Text(ctx.tr('فتح نقطة البيع')),
               onTap: () {
                 Navigator.pop(ctx);
                 _go(AppScreen.pos);
@@ -2493,14 +2493,14 @@ class _Drawer extends ConsumerWidget {
     final name = await showDialog<String>(
       context: context,
       builder: (ctx) => AlertDialog(
-        title: const Text('اسمك / اسم هذا الجهاز'),
+        title: Text(ctx.tr('اسمك / اسم هذا الجهاز')),
         content: TextField(
           controller: ctl,
           autofocus: true,
           maxLength: 30,
-          decoration: const InputDecoration(
-            hintText: 'مثال: أحمد — فرع الجملة',
-            helperText: 'يظهر أعلى الشاشة الرئيسية ولدى بقية أجهزة المجموعة',
+          decoration: InputDecoration(
+            hintText: ctx.tr('مثال: أحمد — فرع الجملة'),
+            helperText: ctx.tr('يظهر أعلى الشاشة الرئيسية ولدى بقية أجهزة المجموعة'),
             helperMaxLines: 2,
           ),
           onSubmitted: (v) => Navigator.pop(ctx, v),
@@ -2508,11 +2508,11 @@ class _Drawer extends ConsumerWidget {
         actions: [
           TextButton(
             onPressed: () => Navigator.pop(ctx),
-            child: const Text('إلغاء'),
+            child: Text(ctx.tr('إلغاء')),
           ),
           FilledButton(
             onPressed: () => Navigator.pop(ctx, ctl.text),
-            child: const Text('حفظ'),
+            child: Text(ctx.tr('حفظ')),
           ),
         ],
       ),
@@ -2751,12 +2751,12 @@ class _Drawer extends ConsumerWidget {
     final dark = Theme.of(context).brightness == Brightness.dark;
 
     final (roleLabel, roleColor, roleIcon) = switch (effectiveRole) {
-      UserRole.admin => ('مدير النظام', Colors.amber.shade300, Icons.security),
-      UserRole.agent => ('وكيل المدير', Colors.greenAccent.shade200, Icons.verified_user),
-      UserRole.accountant => ('محاسب', Colors.lightBlueAccent, Icons.calculate),
-      UserRole.cashier => ('كاشير / مبيعات', Colors.orangeAccent.shade200, Icons.point_of_sale),
-      UserRole.dataentry => ('إدخال وجرد', Colors.tealAccent, Icons.edit_note),
-      UserRole.viewer => ('عرض فقط', Colors.blueGrey.shade100, Icons.visibility_outlined),
+      UserRole.admin => (context.tr('مدير النظام', 'System Admin'), Colors.amber.shade300, Icons.security),
+      UserRole.agent => (context.tr('وكيل المدير', 'Deputy Admin'), Colors.greenAccent.shade200, Icons.verified_user),
+      UserRole.accountant => (context.tr('محاسب', 'Accountant'), Colors.lightBlueAccent, Icons.calculate),
+      UserRole.cashier => (context.tr('كاشير / مبيعات', 'Cashier / Sales'), Colors.orangeAccent.shade200, Icons.point_of_sale),
+      UserRole.dataentry => (context.tr('إدخال وجرد', 'Data Entry & Inventory'), Colors.tealAccent, Icons.edit_note),
+      UserRole.viewer => (context.tr('عرض فقط', 'View Only'), Colors.blueGrey.shade100, Icons.visibility_outlined),
     };
 
     return Drawer(
@@ -3096,7 +3096,7 @@ class _Drawer extends ConsumerWidget {
                               const SizedBox(width: 6),
                               Flexible(
                                 child: Text(
-                                  'وضع المبيعات (POS)',
+                                  context.tr('وضع المبيعات (POS)'),
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: TextStyle(
@@ -3160,7 +3160,7 @@ class _Drawer extends ConsumerWidget {
                               const SizedBox(width: 6),
                               Flexible(
                                 child: Text(
-                                  'وضع المحاسبة',
+                                  context.tr('وضع المحاسبة'),
                                   maxLines: 1,
                                   overflow: TextOverflow.ellipsis,
                                   style: TextStyle(
@@ -3280,7 +3280,7 @@ class _Drawer extends ConsumerWidget {
                                 const SizedBox(width: 14),
                                 Expanded(
                                   child: Text(
-                                    'المساعد الذكي (Gemini)',
+                                    context.tr('المساعد الذكي (Gemini)'),
                                     style: TextStyle(
                                       fontSize: 14,
                                       fontWeight: FontWeight.w800,
@@ -3368,17 +3368,23 @@ class _Drawer extends ConsumerWidget {
                               child: Column(
                                 crossAxisAlignment: CrossAxisAlignment.start,
                                 children: [
-                                  const Text(
-                                    'التحديثات',
-                                    style: TextStyle(
+                                  Text(
+                                    ctx.tr('التحديثات'),
+                                    style: const TextStyle(
                                       fontWeight: FontWeight.w800,
                                       fontSize: 13.5,
                                     ),
                                   ),
                                   Text(
                                     hasUpdate
-                                        ? 'يتوفر تحديث جديد: ${info?.latest}'
-                                        : '$appVersionLabel (محدث)',
+                                        ? ctx.tr(
+                                            'يتوفر تحديث جديد: ${info?.latest}',
+                                            'New update available: ${info?.latest}',
+                                          )
+                                        : ctx.tr(
+                                            '$appVersionLabel (محدث)',
+                                            '$appVersionLabel (Up to date)',
+                                          ),
                                     style: TextStyle(
                                       fontSize: 11,
                                       color: hasUpdate
@@ -3396,9 +3402,9 @@ class _Drawer extends ConsumerWidget {
                                   color: const Color(0xFFF59E0B),
                                   borderRadius: BorderRadius.circular(10),
                                 ),
-                                child: const Text(
-                                  'تحديث',
-                                  style: TextStyle(
+                                child: Text(
+                                  ctx.tr('تحديث'),
+                                  style: const TextStyle(
                                     color: Colors.white,
                                     fontSize: 10.5,
                                     fontWeight: FontWeight.w900,

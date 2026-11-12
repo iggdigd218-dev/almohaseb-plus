@@ -1133,6 +1133,9 @@ class CloudJoin {
       'workspaces',
       'devices',
     ];
+    final allowMediaSync =
+        (await repo.getSetting('allow_cloud_media_sync')) == '1' ||
+            SubscriptionGuard.lastState.features.allowCloudMediaSync;
     for (final t in tables) {
       final rows = await db.query(t);
       final filteredRows = t == 'devices'
@@ -1155,12 +1158,16 @@ class CloudJoin {
           row['expelled_at'] = '';
         }
         if (t == 'items') {
-          final imgPath = (row['image'] as String?)?.trim() ?? '';
-          if (imgPath.isNotEmpty) {
-            final b64 = await MediaPaths.encodeThumbBase64(imgPath);
-            if (b64.isNotEmpty) {
-              row['thumb_b64'] = b64;
+          if (allowMediaSync) {
+            final imgPath = (row['image'] as String?)?.trim() ?? '';
+            if (imgPath.isNotEmpty) {
+              final b64 = await MediaPaths.encodeThumbBase64(imgPath);
+              if (b64.isNotEmpty) {
+                row['thumb_b64'] = b64;
+              }
             }
+          } else {
+            row['image'] = '';
           }
         }
         outList.add(row);
@@ -1170,9 +1177,10 @@ class CloudJoin {
     snapshot['workspaceMode'] = 'member';
     snapshot['hostDeviceId'] = hostDevId;
     try {
-      final orgRows = await db.query('settings',
-          where:
-              "key IN ('businessName','businessNameEn','businessActivity','org.icon.b64','address','phone','whatsapp','managerName','voucherFooter','defaultVoucherNotes')");
+      final orgKeys = allowMediaSync
+          ? "('businessName','businessNameEn','businessActivity','org.icon.b64','address','phone','whatsapp','managerName','voucherFooter','defaultVoucherNotes')"
+          : "('businessName','businessNameEn','businessActivity','address','phone','whatsapp','managerName','voucherFooter','defaultVoucherNotes')";
+      final orgRows = await db.query('settings', where: 'key IN $orgKeys');
       snapshot['orgSettings'] = {
         for (final r in orgRows) '${r['key']}': r['value']
       };
@@ -2343,6 +2351,29 @@ class CloudJoin {
             '${r['revoked_at'] ?? ''}'.trim().isNotEmpty ||
             _isUnpairedValue(r['is_paired']) ||
             '${r['status'] ?? ''}' == 'expelled';
+        // حماية حاسمة ضد عودة العضو المطرود محلياً (Ghost Re-entry Guard):
+        // إذا كان المدير قد طرد هذا الجهاز وسجّل `deviceExpelled:$id` في الإعدادات المحلية،
+        // لا نسمح لنسخة سحابية قديمة في `/roster` بإعادة إدراجه في جدول `devices` المحلي
+        // إلا إذا انضم مجدداً بموافقة أحدث صريحة (`approved_at_ms` / `reinstated_at` > وقت الطرد).
+        final localExpelledIso =
+            (stSync['deviceExpelled:$id'] ?? stSync['deviceRevoked:$id'] ?? '')
+                .trim();
+        final localExpelledMs = parseSyncMs(localExpelledIso);
+        final remoteApprovedMs = [
+          parseSyncMs(r['approved_at_ms']),
+          parseSyncMs(r['reinstated_at']),
+          parseSyncMs(r['joined_at_ms']),
+        ].reduce((a, b) => a > b ? a : b);
+        if (localExpelledMs > 0 &&
+            (remoteApprovedMs == 0 ||
+                remoteApprovedMs <= localExpelledMs + 2000)) {
+          if (canManage) {
+            final encExpelled = Uri.encodeComponent(id);
+            unawaited(_delete('$root/roster/$encExpelled.json'));
+            unawaited(_delete('$root/devices/$encExpelled.json'));
+          }
+          continue;
+        }
         if (local == null && remoteExpelled) {
           // لا نعيد إدراج جهاز مطرود/محظور في جدول devices المحلي ولا ننشئ له مستخدم ظل
           continue;

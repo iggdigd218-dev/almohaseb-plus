@@ -2228,15 +2228,9 @@ class _PosScreenState extends ConsumerState<PosScreen>
 
   void _openPosSalesSummarySheet() {
     Sfx.click();
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      useSafeArea: true,
-      showDragHandle: true,
-      shape: RoundedRectangleBorder(borderRadius: AppRadius.sheetTop),
-      builder: (_) => const FractionallySizedBox(
-        heightFactor: 0.78,
-        child: _PosSalesSummarySheet(),
+    Navigator.of(context).push(
+      MaterialPageRoute<void>(
+        builder: (_) => const _PosSalesSummarySheet(),
       ),
     );
   }
@@ -5399,8 +5393,8 @@ class _ZeroButtons extends StatelessWidget {
 
 enum _SalesRangePreset { today, week, month, custom }
 
-/// نافذة تقرير وملخص مبيعات نقطة البيع (اليوم، هذا الأسبوع، هذا الشهر، أو نطاق تاريخ مخصص)
-/// محمية بصلاحية `can_view_sales_summary` ومعزولة تماماً عن العمليات الدفترية والسندات.
+/// شاشة مستقلة وكاملة لتقارير وملخص مبيعات نقطة البيع مع مخطط بياني زمني وفلاتر متقدمة
+/// محمية بصلاحية `can_view_sales_summary`.
 class _PosSalesSummarySheet extends ConsumerStatefulWidget {
   const _PosSalesSummarySheet();
 
@@ -5414,6 +5408,17 @@ class _PosSalesSummarySheetState extends ConsumerState<_PosSalesSummarySheet> {
   DateTimeRange? _customRange;
   bool _loading = true;
   Map<String, dynamic> _data = const {};
+
+  // الفلاتر المتعددة (Multi-dimensional filters)
+  String _invoiceType = 'all'; // 'all' | 'sale' | 'return'
+  String _paymentKind = 'all'; // 'all' | 'cash' | 'credit'
+  String _selectedCurrency = 'all';
+  int? _selectedSectionId;
+  int? _selectedCategoryId;
+  int? _selectedItemId;
+  String? _selectedDeviceId;
+  int? _selectedUserId;
+  String _breakdownTab = 'timeline'; // 'timeline' | 'section' | 'category' | 'item' | 'device' | 'user'
 
   @override
   void initState() {
@@ -5446,7 +5451,18 @@ class _PosSalesSummarySheetState extends ConsumerState<_PosSalesSummarySheet> {
     try {
       final repo = ref.read(repoProvider);
       final (from, to) = _effectiveDates();
-      final res = await repo.posSalesSummary(from: from, to: to);
+      final res = await repo.posSalesSummary(
+        from: from,
+        to: to,
+        sectionId: _selectedSectionId,
+        categoryId: _selectedCategoryId,
+        itemId: _selectedItemId,
+        deviceId: _selectedDeviceId,
+        userId: _selectedUserId,
+        paymentKind: _paymentKind,
+        invoiceType: _invoiceType,
+        currency: _selectedCurrency == 'all' ? null : _selectedCurrency,
+      );
       if (!mounted) return;
       setState(() {
         _data = res;
@@ -5478,8 +5494,33 @@ class _PosSalesSummarySheetState extends ConsumerState<_PosSalesSummarySheet> {
     await _load();
   }
 
+  void _resetAllFilters() {
+    setState(() {
+      _invoiceType = 'all';
+      _paymentKind = 'all';
+      _selectedCurrency = 'all';
+      _selectedSectionId = null;
+      _selectedCategoryId = null;
+      _selectedItemId = null;
+      _selectedDeviceId = null;
+      _selectedUserId = null;
+    });
+    _load();
+  }
+
+  bool get _hasActiveFilters =>
+      _invoiceType != 'all' ||
+      _paymentKind != 'all' ||
+      _selectedCurrency != 'all' ||
+      _selectedSectionId != null ||
+      _selectedCategoryId != null ||
+      _selectedItemId != null ||
+      _selectedDeviceId != null ||
+      _selectedUserId != null;
+
   @override
   Widget build(BuildContext context) {
+    final l10n = L10n.of(context);
     final allowed = _data['allowed'] == true;
     final invoiceCount = (_data['invoiceCount'] as int?) ?? 0;
     final returnCount = (_data['returnCount'] as int?) ?? 0;
@@ -5498,229 +5539,874 @@ class _PosSalesSummarySheetState extends ConsumerState<_PosSalesSummarySheet> {
       ...netByCur.keys,
       ...returnsByCur.keys,
     }.toList();
+    final availableCurrencies =
+        ((_data['availableCurrencies'] as List?) ?? const [])
+            .map((e) => '$e')
+            .toList();
+    final availableSections =
+        ((_data['availableSections'] as List?) ?? const [])
+            .whereType<Map>()
+            .map((m) => Map<String, Object?>.from(m))
+            .toList();
+    final availableCategories =
+        ((_data['availableCategories'] as List?) ?? const [])
+            .whereType<Map>()
+            .map((m) => Map<String, Object?>.from(m))
+            .toList();
+    final availableItems = ((_data['availableItems'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((m) => Map<String, Object?>.from(m))
+        .toList();
+    final availableDevices = ((_data['availableDevices'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((m) => Map<String, Object?>.from(m))
+        .toList();
+    final availableUsers = ((_data['availableUsers'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((m) => Map<String, Object?>.from(m))
+        .toList();
+    final timeline = ((_data['timeline'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((m) => Map<String, Object?>.from(m))
+        .toList();
+    final bySection = ((_data['bySection'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((m) => Map<String, Object?>.from(m))
+        .toList();
+    final byCategory = ((_data['byCategory'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((m) => Map<String, Object?>.from(m))
+        .toList();
+    final byItem = ((_data['byItem'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((m) => Map<String, Object?>.from(m))
+        .toList();
+    final byDevice = ((_data['byDevice'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((m) => Map<String, Object?>.from(m))
+        .toList();
+    final byUser = ((_data['byUser'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((m) => Map<String, Object?>.from(m))
+        .toList();
+    final invoices = ((_data['invoices'] as List?) ?? const [])
+        .whereType<Map>()
+        .map((m) => Map<String, Object?>.from(m))
+        .toList();
+
     final (from, to) = _effectiveDates();
     final rangeLabel =
         '${from.year}-${from.month.toString().padLeft(2, '0')}-${from.day.toString().padLeft(2, '0')}'
         ' ← '
         '${to.year}-${to.month.toString().padLeft(2, '0')}-${to.day.toString().padLeft(2, '0')}';
 
-    return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 18),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          Row(
+    return Scaffold(
+      backgroundColor: AppColors.bgOf(context),
+      appBar: AppBar(
+        title: Text(
+          l10n.tr(
+            'ملخص وتقارير مبيعات نقطة البيع',
+            'POS Sales Summary & Analytics',
+          ),
+          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w900),
+        ),
+        actions: [
+          if (_hasActiveFilters)
+            TextButton.icon(
+              onPressed: _resetAllFilters,
+              icon: const Icon(Icons.filter_alt_off_rounded, size: 18),
+              label: Text(l10n.tr('مسح الفلاتر', 'Clear Filters')),
+            ),
+          IconButton(
+            tooltip: l10n.tr('تحديث', 'Refresh'),
+            onPressed: _load,
+            icon: const Icon(Icons.refresh_rounded),
+          ),
+        ],
+      ),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(14, 10, 14, 16),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: AppColors.primarySoftOf(context),
-                  borderRadius: BorderRadius.circular(10),
-                ),
-                child: Icon(
-                  Icons.bar_chart_rounded,
-                  color: AppColors.primaryOf(context),
-                  size: 22,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+              // 1) شريط التاريخ السريع
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
                   children: [
-                    const Text(
-                      'ملخص وتقارير مبيعات نقطة البيع',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w900,
-                      ),
+                    ChoiceChip(
+                      label: Text(l10n.tr('اليوم', 'Today')),
+                      selected: _preset == _SalesRangePreset.today,
+                      onSelected: (_) {
+                        setState(() => _preset = _SalesRangePreset.today);
+                        _load();
+                      },
                     ),
-                    Text(
-                      'مبيعات الفواتير الفعلية فقط (بدون سندات القبض أو الديون الدفترية) • $rangeLabel',
-                      style: TextStyle(
-                        fontSize: 11.5,
-                        color: AppColors.text2Of(context),
+                    const SizedBox(width: 8),
+                    ChoiceChip(
+                      label: Text(l10n.tr('هذا الأسبوع', 'This Week')),
+                      selected: _preset == _SalesRangePreset.week,
+                      onSelected: (_) {
+                        setState(() => _preset = _SalesRangePreset.week);
+                        _load();
+                      },
+                    ),
+                    const SizedBox(width: 8),
+                    ChoiceChip(
+                      label: Text(l10n.tr('هذا الشهر', 'This Month')),
+                      selected: _preset == _SalesRangePreset.month,
+                      onSelected: (_) {
+                        setState(() => _preset = _SalesRangePreset.month);
+                        _load();
+                      },
+                    ),
+                    const SizedBox(width: 8),
+                    ActionChip(
+                      avatar: const Icon(Icons.date_range_rounded, size: 17),
+                      label: Text(
+                        _preset == _SalesRangePreset.custom
+                            ? '${l10n.tr('نطاق مخصص', 'Custom')} ($rangeLabel)'
+                            : l10n.tr(
+                                'تحديد نطاق تاريخ مخصص',
+                                'Custom Date Range',
+                              ),
                       ),
+                      onPressed: _pickCustomRange,
                     ),
                   ],
                 ),
               ),
-              IconButton(
-                onPressed: () => Navigator.pop(context),
-                icon: const Icon(Icons.close_rounded),
-              ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          Wrap(
-            spacing: 8,
-            runSpacing: 8,
-            children: [
-              ChoiceChip(
-                label: const Text('اليوم'),
-                selected: _preset == _SalesRangePreset.today,
-                onSelected: (_) {
-                  setState(() => _preset = _SalesRangePreset.today);
-                  _load();
-                },
-              ),
-              ChoiceChip(
-                label: const Text('هذا الأسبوع'),
-                selected: _preset == _SalesRangePreset.week,
-                onSelected: (_) {
-                  setState(() => _preset = _SalesRangePreset.week);
-                  _load();
-                },
-              ),
-              ChoiceChip(
-                label: const Text('هذا الشهر'),
-                selected: _preset == _SalesRangePreset.month,
-                onSelected: (_) {
-                  setState(() => _preset = _SalesRangePreset.month);
-                  _load();
-                },
-              ),
-              ActionChip(
-                avatar: const Icon(Icons.date_range_rounded, size: 17),
-                label: Text(
-                  _preset == _SalesRangePreset.custom
-                      ? 'نطاق مخصص ($rangeLabel)'
-                      : 'تحديد نطاق تاريخ مخصص',
+              const SizedBox(height: 8),
+              // 2) شريط الفلاتر المتعددة (طريقة الدفع، نوع الفاتورة، العملة، التصنيف، الجهاز، الكاشير)
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                child: Row(
+                  children: [
+                    ChoiceChip(
+                      label: Text(l10n.tr('الكل', 'All')),
+                      selected: _paymentKind == 'all' && _invoiceType == 'all',
+                      onSelected: (_) {
+                        setState(() {
+                          _paymentKind = 'all';
+                          _invoiceType = 'all';
+                        });
+                        _load();
+                      },
+                    ),
+                    const SizedBox(width: 6),
+                    ChoiceChip(
+                      label: Text(l10n.tr('نقداً', 'Cash')),
+                      selected: _paymentKind == 'cash',
+                      onSelected: (v) {
+                        setState(() => _paymentKind = v ? 'cash' : 'all');
+                        _load();
+                      },
+                    ),
+                    const SizedBox(width: 6),
+                    ChoiceChip(
+                      label: Text(l10n.tr('آجل', 'Credit')),
+                      selected: _paymentKind == 'credit',
+                      onSelected: (v) {
+                        setState(() => _paymentKind = v ? 'credit' : 'all');
+                        _load();
+                      },
+                    ),
+                    if (availableCurrencies.length > 1) ...[
+                      const SizedBox(width: 8),
+                      DropdownButtonHideUnderline(
+                        child: DropdownButton<String>(
+                          value: availableCurrencies.contains(_selectedCurrency)
+                              ? _selectedCurrency
+                              : 'all',
+                          isDense: true,
+                          items: [
+                            DropdownMenuItem(
+                              value: 'all',
+                              child: Text(l10n.tr('كل العملات', 'All Currencies')),
+                            ),
+                            for (final c in availableCurrencies)
+                              DropdownMenuItem(value: c, child: Text(c)),
+                          ],
+                          onChanged: (v) {
+                            setState(() => _selectedCurrency = v ?? 'all');
+                            _load();
+                          },
+                        ),
+                      ),
+                    ],
+                    if (availableSections.isNotEmpty) ...[
+                      const SizedBox(width: 8),
+                      DropdownButtonHideUnderline(
+                        child: DropdownButton<int?>(
+                          value: availableSections
+                                  .any((s) => s['id'] == _selectedSectionId)
+                              ? _selectedSectionId
+                              : null,
+                          hint: Text(l10n.tr('القسم', 'Section')),
+                          isDense: true,
+                          items: [
+                            DropdownMenuItem<int?>(
+                              value: null,
+                              child: Text(l10n.tr('كل الأقسام', 'All Sections')),
+                            ),
+                            for (final s in availableSections)
+                              DropdownMenuItem<int?>(
+                                value: s['id'] as int?,
+                                child: Text('${s['name'] ?? ''}'),
+                              ),
+                          ],
+                          onChanged: (v) {
+                            setState(() {
+                              _selectedSectionId = v;
+                              _selectedCategoryId = null;
+                              _selectedItemId = null;
+                            });
+                            _load();
+                          },
+                        ),
+                      ),
+                    ],
+                    if (availableCategories.isNotEmpty) ...[
+                      const SizedBox(width: 8),
+                      DropdownButtonHideUnderline(
+                        child: DropdownButton<int?>(
+                          value: availableCategories
+                                  .any((c) => c['id'] == _selectedCategoryId)
+                              ? _selectedCategoryId
+                              : null,
+                          hint: Text(l10n.tr('الفئة', 'Category')),
+                          isDense: true,
+                          items: [
+                            DropdownMenuItem<int?>(
+                              value: null,
+                              child:
+                                  Text(l10n.tr('كل الفئات', 'All Categories')),
+                            ),
+                            for (final c in availableCategories.where((c) =>
+                                _selectedSectionId == null ||
+                                c['sectionId'] == _selectedSectionId))
+                              DropdownMenuItem<int?>(
+                                value: c['id'] as int?,
+                                child: Text('${c['name'] ?? ''}'),
+                              ),
+                          ],
+                          onChanged: (v) {
+                            setState(() {
+                              _selectedCategoryId = v;
+                              _selectedItemId = null;
+                            });
+                            _load();
+                          },
+                        ),
+                      ),
+                    ],
+                    if (availableItems.isNotEmpty) ...[
+                      const SizedBox(width: 8),
+                      DropdownButtonHideUnderline(
+                        child: DropdownButton<int?>(
+                          value: availableItems
+                                  .any((it) => it['id'] == _selectedItemId)
+                              ? _selectedItemId
+                              : null,
+                          hint: Text(l10n.tr('الصنف', 'Product')),
+                          isDense: true,
+                          items: [
+                            DropdownMenuItem<int?>(
+                              value: null,
+                              child: Text(l10n.tr('كل الأصناف', 'All Products')),
+                            ),
+                            for (final it in availableItems.where((it) =>
+                                (_selectedSectionId == null ||
+                                    it['sectionId'] == _selectedSectionId) &&
+                                (_selectedCategoryId == null ||
+                                    it['categoryId'] == _selectedCategoryId)))
+                              DropdownMenuItem<int?>(
+                                value: it['id'] as int?,
+                                child: Text('${it['name'] ?? ''}'),
+                              ),
+                          ],
+                          onChanged: (v) {
+                            setState(() => _selectedItemId = v);
+                            _load();
+                          },
+                        ),
+                      ),
+                    ],
+                    if (availableDevices.isNotEmpty) ...[
+                      const SizedBox(width: 8),
+                      DropdownButtonHideUnderline(
+                        child: DropdownButton<String?>(
+                          value: availableDevices
+                                  .any((d) => d['id'] == _selectedDeviceId)
+                              ? _selectedDeviceId
+                              : null,
+                          hint: Text(l10n.tr('الجهاز', 'Device')),
+                          isDense: true,
+                          items: [
+                            DropdownMenuItem<String?>(
+                              value: null,
+                              child: Text(l10n.tr('كل الأجهزة', 'All Devices')),
+                            ),
+                            for (final d in availableDevices)
+                              DropdownMenuItem<String?>(
+                                value: '${d['id'] ?? ''}',
+                                child: Text('${d['name'] ?? ''}'),
+                              ),
+                          ],
+                          onChanged: (v) {
+                            setState(() => _selectedDeviceId = v);
+                            _load();
+                          },
+                        ),
+                      ),
+                    ],
+                    if (availableUsers.isNotEmpty) ...[
+                      const SizedBox(width: 8),
+                      DropdownButtonHideUnderline(
+                        child: DropdownButton<int?>(
+                          value: availableUsers
+                                  .any((u) => u['id'] == _selectedUserId)
+                              ? _selectedUserId
+                              : null,
+                          hint: Text(l10n.tr('الكاشير', 'Cashier')),
+                          isDense: true,
+                          items: [
+                            DropdownMenuItem<int?>(
+                              value: null,
+                              child: Text(
+                                l10n.tr('كل الموظفين', 'All Staff'),
+                              ),
+                            ),
+                            for (final u in availableUsers)
+                              DropdownMenuItem<int?>(
+                                value: u['id'] as int?,
+                                child: Text('${u['name'] ?? ''}'),
+                              ),
+                          ],
+                          onChanged: (v) {
+                            setState(() => _selectedUserId = v);
+                            _load();
+                          },
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
-                onPressed: _pickCustomRange,
               ),
+              const SizedBox(height: 10),
+              if (_loading)
+                const Expanded(
+                  child: Center(child: CircularProgressIndicator()),
+                )
+              else if (!allowed)
+                Expanded(
+                  child: EmptyState(
+                    icon: Icons.lock_outline_rounded,
+                    title: l10n.tr(
+                      'صلاحية عرض ملخص المبيعات غير مفعّلة لهذا الحساب',
+                      'Sales summary permission is not enabled for this account',
+                    ),
+                    message: l10n.tr(
+                      'يمكن لمدير المنشأة تفعيل صلاحية «عرض ملخص وتقارير المبيعات» من إدارة الصلاحيات.',
+                      'The workspace manager can enable sales summary access in permissions management.',
+                    ),
+                  ),
+                )
+              else
+                Expanded(
+                  child: ListView(
+                    children: [
+                      // 3) البطاقات الإحصائية التفاعلية القابلة للضغط (عدد فواتير البيع / فواتير المرتجع)
+                      Row(
+                        children: [
+                          Expanded(
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(14),
+                              onTap: () {
+                                setState(() {
+                                  _invoiceType =
+                                      _invoiceType == 'sale' ? 'all' : 'sale';
+                                  _breakdownTab = 'timeline';
+                                });
+                                _load();
+                              },
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(14),
+                                  border: Border.all(
+                                    color: _invoiceType == 'sale'
+                                        ? AppColors.primaryOf(context)
+                                        : Colors.transparent,
+                                    width: 2,
+                                  ),
+                                ),
+                                child: StatCard(
+                                  title: l10n.tr(
+                                    'عدد فواتير البيع',
+                                    'Sales Invoices',
+                                  ),
+                                  value: '$invoiceCount',
+                                  icon: Icons.receipt_long_rounded,
+                                  color: AppColors.primaryOf(context),
+                                ),
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: InkWell(
+                              borderRadius: BorderRadius.circular(14),
+                              onTap: () {
+                                setState(() {
+                                  _invoiceType = _invoiceType == 'return'
+                                      ? 'all'
+                                      : 'return';
+                                  _breakdownTab = 'timeline';
+                                });
+                                _load();
+                              },
+                              child: Container(
+                                decoration: BoxDecoration(
+                                  borderRadius: BorderRadius.circular(14),
+                                  border: Border.all(
+                                    color: _invoiceType == 'return'
+                                        ? const Color(0xFFD97706)
+                                        : Colors.transparent,
+                                    width: 2,
+                                  ),
+                                ),
+                                child: StatCard(
+                                  title: l10n.tr(
+                                    'فواتير المرتجع',
+                                    'Return Invoices',
+                                  ),
+                                  value: '$returnCount',
+                                  icon: Icons.assignment_return_rounded,
+                                  color: const Color(0xFFD97706),
+                                ),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 12),
+                      if (currencies.isEmpty && invoices.isEmpty)
+                        EmptyState(
+                          icon: Icons.receipt_long_outlined,
+                          title: l10n.tr(
+                            'لا توجد فواتير مبيعات مطابقة في هذه الفترة',
+                            'No matching sales invoices in this period',
+                          ),
+                          message: l10n.tr(
+                            'اختر فترة زمنية أخرى أو عدّل الفلاتر لعرض إحصائيات الفواتير.',
+                            'Choose another date range or adjust filters to view invoice statistics.',
+                          ),
+                        )
+                      else ...[
+                        // ملخص العملات (صافي المبيعات، نقداً، آجل، المرتجعات)
+                        for (final code in currencies) ...[
+                          Container(
+                            margin: const EdgeInsets.only(bottom: 12),
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(
+                              color: AppColors.surfaceOf(context),
+                              borderRadius: BorderRadius.circular(16),
+                              border:
+                                  Border.all(color: AppColors.borderOf(context)),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                Row(
+                                  children: [
+                                    Icon(
+                                      Icons.trending_up_rounded,
+                                      color: AppColors.primaryOf(context),
+                                    ),
+                                    const SizedBox(width: 8),
+                                    Expanded(
+                                      child: Text(
+                                        '${l10n.tr('صافي المبيعات', 'Net Sales')} ($code)',
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w900,
+                                          fontSize: 14.5,
+                                        ),
+                                      ),
+                                    ),
+                                    Text(
+                                      '${Fmt.money(netByCur[code] ?? 0)} $code',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w900,
+                                        fontSize: 18,
+                                        color: AppColors.textOf(context),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const Divider(height: 20),
+                                Row(
+                                  children: [
+                                    Expanded(
+                                      child: Text(
+                                        '${l10n.tr('نقداً', 'Cash')}: ${Fmt.money(cashByCur[code] ?? 0)} $code',
+                                        style: TextStyle(
+                                          fontSize: 12.5,
+                                          fontWeight: FontWeight.w700,
+                                          color: AppColors.greenOf(context),
+                                        ),
+                                      ),
+                                    ),
+                                    Expanded(
+                                      child: Text(
+                                        '${l10n.tr('آجل', 'Credit')}: ${Fmt.money(creditByCur[code] ?? 0)} $code',
+                                        style: TextStyle(
+                                          fontSize: 12.5,
+                                          fontWeight: FontWeight.w700,
+                                          color: AppColors.dangerOf(context),
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                if ((returnsByCur[code] ?? 0) > 0) ...[
+                                  const SizedBox(height: 6),
+                                  Text(
+                                    '${l10n.tr('إجمالي قبل المرتجع', 'Gross')}: ${Fmt.money(grossByCur[code] ?? 0)} $code • ${l10n.tr('المرتجعات', 'Returns')}: ${Fmt.money(returnsByCur[code] ?? 0)} $code',
+                                    style: TextStyle(
+                                      fontSize: 11.5,
+                                      color: AppColors.text2Of(context),
+                                    ),
+                                  ),
+                                ],
+                              ],
+                            ),
+                          ),
+                        ],
+                        // 4) المخطط البياني الزمني وتبويبات التحليل بالنسب المئوية (%)
+                        Container(
+                          margin: const EdgeInsets.only(bottom: 12),
+                          padding: const EdgeInsets.all(14),
+                          decoration: BoxDecoration(
+                            color: AppColors.surfaceOf(context),
+                            borderRadius: BorderRadius.circular(16),
+                            border:
+                                Border.all(color: AppColors.borderOf(context)),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.stretch,
+                            children: [
+                              SingleChildScrollView(
+                                scrollDirection: Axis.horizontal,
+                                child: Row(
+                                  children: [
+                                    for (final tab in [
+                                      (
+                                        'timeline',
+                                        l10n.tr(
+                                          'المخطط الزمني (%)',
+                                          'Timeline (%)',
+                                        ),
+                                        Icons.timeline_rounded
+                                      ),
+                                      (
+                                        'section',
+                                        l10n.tr('حسب القسم (%)', 'By Section (%)'),
+                                        Icons.storefront_outlined
+                                      ),
+                                      (
+                                        'category',
+                                        l10n.tr(
+                                          'حسب الفئة (%)',
+                                          'By Category (%)',
+                                        ),
+                                        Icons.category_outlined
+                                      ),
+                                      (
+                                        'item',
+                                        l10n.tr('حسب الصنف (%)', 'By Product (%)'),
+                                        Icons.inventory_2_outlined
+                                      ),
+                                      (
+                                        'device',
+                                        l10n.tr('حسب الجهاز (%)', 'By Device (%)'),
+                                        Icons.devices_rounded
+                                      ),
+                                      (
+                                        'user',
+                                        l10n.tr('حسب الموظف (%)', 'By Staff (%)'),
+                                        Icons.person_outline_rounded
+                                      ),
+                                    ])
+                                      Padding(
+                                        padding:
+                                            const EdgeInsetsDirectional.only(
+                                          end: 6,
+                                        ),
+                                        child: ChoiceChip(
+                                          avatar: Icon(tab.$3, size: 15),
+                                          label: Text(tab.$2),
+                                          selected: _breakdownTab == tab.$1,
+                                          onSelected: (_) => setState(
+                                            () => _breakdownTab = tab.$1,
+                                          ),
+                                        ),
+                                      ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 12),
+                              if (_breakdownTab == 'timeline')
+                                _buildTimelineChart(context, timeline, l10n)
+                              else if (_breakdownTab == 'section')
+                                _buildPercentageList(context, bySection, l10n)
+                              else if (_breakdownTab == 'category')
+                                _buildPercentageList(context, byCategory, l10n)
+                              else if (_breakdownTab == 'item')
+                                _buildPercentageList(context, byItem, l10n)
+                              else if (_breakdownTab == 'device')
+                                _buildPercentageList(context, byDevice, l10n)
+                              else
+                                _buildPercentageList(context, byUser, l10n),
+                            ],
+                          ),
+                        ),
+                        // 5) قائمة الفواتير المطابقة (عند النقر على عدد فواتير البيع أو المرتجع أو الفلترة)
+                        if (invoices.isNotEmpty) ...[
+                          Padding(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 4,
+                              vertical: 6,
+                            ),
+                            child: Text(
+                              '${l10n.tr('سجل الفواتير التفصيلي', 'Detailed Invoices')} (${invoices.length})',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w900,
+                                fontSize: 14,
+                              ),
+                            ),
+                          ),
+                          for (final inv in invoices.take(60))
+                            Container(
+                              margin: const EdgeInsets.only(bottom: 8),
+                              padding: const EdgeInsets.all(12),
+                              decoration: BoxDecoration(
+                                color: AppColors.surfaceOf(context),
+                                borderRadius: BorderRadius.circular(12),
+                                border: Border.all(
+                                  color: AppColors.borderOf(context),
+                                ),
+                              ),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Row(
+                                    children: [
+                                      Icon(
+                                        inv['isReturn'] == true
+                                            ? Icons.assignment_return_rounded
+                                            : Icons.receipt_long_rounded,
+                                        size: 18,
+                                        color: inv['isReturn'] == true
+                                            ? const Color(0xFFD97706)
+                                            : AppColors.primaryOf(context),
+                                      ),
+                                      const SizedBox(width: 6),
+                                      Expanded(
+                                        child: Text(
+                                          '#${inv['reference'] ?? inv['id']} • ${inv['accountName'] ?? ''}',
+                                          style: const TextStyle(
+                                            fontWeight: FontWeight.w800,
+                                            fontSize: 13,
+                                          ),
+                                        ),
+                                      ),
+                                      Text(
+                                        '${Fmt.money((inv['amount'] as num?)?.toDouble() ?? 0)} ${inv['currency'] ?? ''}',
+                                        style: TextStyle(
+                                          fontWeight: FontWeight.w900,
+                                          fontSize: 13.5,
+                                          color: AppColors.textOf(context),
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  if ('${inv['itemsSummary'] ?? ''}'
+                                      .trim()
+                                      .isNotEmpty) ...[
+                                    const SizedBox(height: 4),
+                                    Text(
+                                      '${inv['itemsSummary']}',
+                                      style: TextStyle(
+                                        fontSize: 11.5,
+                                        color: AppColors.text2Of(context),
+                                      ),
+                                    ),
+                                  ],
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    '${(inv['date'] as String? ?? '').replaceFirst('T', ' ').split('.').first} • ${inv['deviceName'] ?? ''} • ${inv['userName'] ?? ''}',
+                                    style: TextStyle(
+                                      fontSize: 10.5,
+                                      color: AppColors.text3Of(context),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ),
+                        ],
+                      ],
+                    ],
+                  ),
+                ),
             ],
           ),
-          const SizedBox(height: 14),
-          if (_loading)
-            const Expanded(
-              child: Center(child: CircularProgressIndicator()),
-            )
-          else if (!allowed)
-            const Expanded(
-              child: EmptyState(
-                icon: Icons.lock_outline_rounded,
-                title: 'صلاحية عرض ملخص المبيعات غير مفعّلة لهذا الحساب',
-                message:
-                    'يمكن لمدير المنشأة تفعيل صلاحية «عرض ملخص وتقارير المبيعات» من إدارة الصلاحيات.',
-              ),
-            )
-          else if (currencies.isEmpty)
-            const Expanded(
-              child: EmptyState(
-                icon: Icons.receipt_long_outlined,
-                title: 'لا توجد فواتير مبيعات في هذه الفترة',
-                message: 'اختر فترة زمنية أخرى لعرض إحصائيات الفواتير.',
-              ),
-            )
-          else
-            Expanded(
-              child: ListView(
+        ),
+      ),
+    );
+  }
+
+  Widget _buildTimelineChart(
+    BuildContext context,
+    List<Map<String, Object?>> timeline,
+    L10n l10n,
+  ) {
+    if (timeline.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        child: Center(
+          child: Text(
+            l10n.tr('لا توجد بيانات زمنية في هذه الفترة', 'No timeline data'),
+            style: TextStyle(color: AppColors.text2Of(context), fontSize: 12),
+          ),
+        ),
+      );
+    }
+    return Column(
+      children: [
+        for (final row in timeline) ...[
+          () {
+            final label = '${row['label'] ?? ''}';
+            final sales = ((row['sales'] as num?) ?? 0).toDouble();
+            final returns = ((row['returns'] as num?) ?? 0).toDouble();
+            final count = ((row['count'] as num?) ?? 0).toInt();
+            final retCount = ((row['returnCount'] as num?) ?? 0).toInt();
+            final pct = ((row['percent'] as num?) ?? 0).toDouble();
+            final isRetFocus = _invoiceType == 'return';
+            final val = isRetFocus ? returns : sales;
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
                   Row(
                     children: [
                       Expanded(
-                        child: StatCard(
-                          title: 'عدد فواتير البيع',
-                          value: '$invoiceCount',
-                          icon: Icons.receipt_long_rounded,
-                          color: AppColors.primaryOf(context),
+                        child: Text(
+                          '$label (${isRetFocus ? '$retCount مرتجع' : '$count فاتورة'})',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                       ),
-                      const SizedBox(width: 10),
-                      Expanded(
-                        child: StatCard(
-                          title: 'فواتير المرتجع',
-                          value: '$returnCount',
-                          icon: Icons.assignment_return_rounded,
-                          color: const Color(0xFFD97706),
+                      Text(
+                        '${Fmt.money(val)} (${pct.toStringAsFixed(1)}%)',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w900,
+                          color: AppColors.textOf(context),
                         ),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 12),
-                  for (final code in currencies) ...[
-                    Container(
-                      margin: const EdgeInsets.only(bottom: 12),
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: AppColors.surfaceOf(context),
-                        borderRadius: BorderRadius.circular(16),
-                        border: Border.all(color: AppColors.borderOf(context)),
-                      ),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          Row(
-                            children: [
-                              Icon(
-                                Icons.trending_up_rounded,
-                                color: AppColors.primaryOf(context),
-                              ),
-                              const SizedBox(width: 8),
-                              Expanded(
-                                child: Text(
-                                  'صافي المبيعات ($code)',
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.w900,
-                                    fontSize: 14.5,
-                                  ),
-                                ),
-                              ),
-                              Text(
-                                '${Fmt.money(netByCur[code] ?? 0)} $code',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.w900,
-                                  fontSize: 18,
-                                  color: AppColors.primaryOf(context),
-                                ),
-                              ),
-                            ],
-                          ),
-                          const Divider(height: 20),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  'نقداً: ${Fmt.money(cashByCur[code] ?? 0)} $code',
-                                  style: TextStyle(
-                                    fontSize: 12.5,
-                                    fontWeight: FontWeight.w700,
-                                    color: AppColors.greenOf(context),
-                                  ),
-                                ),
-                              ),
-                              Expanded(
-                                child: Text(
-                                  'آجل: ${Fmt.money(creditByCur[code] ?? 0)} $code',
-                                  style: TextStyle(
-                                    fontSize: 12.5,
-                                    fontWeight: FontWeight.w700,
-                                    color: AppColors.dangerOf(context),
-                                  ),
-                                ),
-                              ),
-                            ],
-                          ),
-                          if ((returnsByCur[code] ?? 0) > 0) ...[
-                            const SizedBox(height: 6),
-                            Text(
-                              'إجمالي قبل المرتجع: ${Fmt.money(grossByCur[code] ?? 0)} $code • المرتجعات: ${Fmt.money(returnsByCur[code] ?? 0)} $code',
-                              style: TextStyle(
-                                fontSize: 11.5,
-                                color: AppColors.text2Of(context),
-                              ),
-                            ),
-                          ],
-                        ],
-                      ),
+                  const SizedBox(height: 4),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(6),
+                    child: LinearProgressIndicator(
+                      value: (pct / 100.0).clamp(0.0, 1.0),
+                      minHeight: 8,
+                      backgroundColor: AppColors.borderOf(context),
+                      color: isRetFocus
+                          ? const Color(0xFFD97706)
+                          : AppColors.primaryOf(context),
                     ),
-                  ],
+                  ),
                 ],
               ),
-            ),
+            );
+          }(),
         ],
-      ),
+      ],
+    );
+  }
+
+  Widget _buildPercentageList(
+    BuildContext context,
+    List<Map<String, Object?>> list,
+    L10n l10n,
+  ) {
+    if (list.isEmpty) {
+      return Padding(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        child: Center(
+          child: Text(
+            l10n.tr('لا توجد بيانات مطابقة', 'No matching data'),
+            style: TextStyle(color: AppColors.text2Of(context), fontSize: 12),
+          ),
+        ),
+      );
+    }
+    return Column(
+      children: [
+        for (final row in list) ...[
+          () {
+            final name = '${row['name'] ?? ''}';
+            final amt = ((row['amount'] as num?) ?? 0).toDouble();
+            final count = ((row['count'] as num?) ?? 0).toInt();
+            final pct = ((row['percent'] as num?) ?? 0).toDouble();
+            return Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '$name ($count)',
+                          style: const TextStyle(
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                      Text(
+                        '${Fmt.money(amt)} (${pct.toStringAsFixed(1)}%)',
+                        style: TextStyle(
+                          fontSize: 12,
+                          fontWeight: FontWeight.w900,
+                          color: AppColors.textOf(context),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 4),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(6),
+                    child: LinearProgressIndicator(
+                      value: (pct / 100.0).clamp(0.0, 1.0),
+                      minHeight: 8,
+                      backgroundColor: AppColors.borderOf(context),
+                      color: AppColors.primaryOf(context),
+                    ),
+                  ),
+                ],
+              ),
+            );
+          }(),
+        ],
+      ],
     );
   }
 }

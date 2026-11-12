@@ -3,6 +3,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/accounting.dart';
 import '../core/format.dart';
+import '../core/l10n.dart';
 import '../core/models.dart';
 import '../core/sfx.dart';
 import '../data/providers.dart';
@@ -45,15 +46,15 @@ class AccountsScreen extends ConsumerWidget {
               child: list.when(
                 skipLoadingOnReload: true,
                 skipLoadingOnRefresh: true,
-                loading: () => const Center(
+                loading: () => Center(
                   child: Padding(
-                    padding: EdgeInsets.all(24),
+                    padding: const EdgeInsets.all(24),
                     child: Column(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        CircularProgressIndicator(),
-                        SizedBox(height: 12),
-                        Text('جارٍ تحميل الحسابات…'),
+                        const CircularProgressIndicator(),
+                        const SizedBox(height: 12),
+                        Text(context.tr('جارٍ تحميل الحسابات…')),
                       ],
                     ),
                   ),
@@ -66,7 +67,7 @@ class AccountsScreen extends ConsumerWidget {
                       children: [
                         EmptyState(
                           icon: Icons.error_outline,
-                          title: 'تعذّر تحميل الحسابات',
+                          title: context.tr('تعذّر تحميل الحسابات'),
                           message: '$e'.length > 200
                               ? '${'$e'.substring(0, 200)}…'
                               : '$e',
@@ -75,28 +76,18 @@ class AccountsScreen extends ConsumerWidget {
                         FilledButton.icon(
                           onPressed: () => bump(ref),
                           icon: const Icon(Icons.refresh),
-                          label: const Text('إعادة المحاولة'),
+                          label: Text(context.tr('إعادة المحاولة')),
                         ),
                       ],
                     ),
                   ),
                 ),
                 data: (rawItems) {
-                  // تطبيق فلتر الرصيد (الكل، عليكم، لكم، مسدد)
-                  //
-                  // (دفعة الواجهات) الحكم على الرصيد يُحسب بمنازل عملة **كل
-                  // حساب** لا بهامش ثابت: حساب بعملة بلا منازل (ريال) برصيد
-                  // 0.4 كان يُصنّف «عليه» بالهامش الثابت، بينما البطاقة تعرضه
-                  // «0» — أي تناقض بين الفلتر وما يراه المستخدم. التقريب بمنازل
-                  // العملة يجعل الحكم مطابقاً للرقم المعروض، ويصحّ للحسابات
-                  // متعددة العملات لأن كل حساب يُقاس بعملته هو.
                   final decimals = <String, int>{
                     for (final c in curs)
                       c.code.trim().toUpperCase(): c.decimal,
                   };
                   final items = rawItems.where((it) {
-                    // الموجب = «عليه» (مدين، مستحق لنا) والسالب = «له»،
-                    // مطابقاً لـ accounting.dart و account_detail و Dashboard.
                     final dec =
                         decimals[it.account.currency.trim().toUpperCase()];
                     final bal = Fmt.roundMoney(it.balance, dec ?? 2);
@@ -118,17 +109,17 @@ class AccountsScreen extends ConsumerWidget {
                       title: filter.query.isEmpty &&
                               filter.kind == null &&
                               balanceFilter == _BalanceFilter.all
-                          ? 'لا توجد حسابات بعد'
-                          : 'لا نتائج مطابقة',
+                          ? context.tr('لا توجد حسابات بعد')
+                          : context.tr('لا نتائج مطابقة'),
                       message: filter.query.isEmpty &&
                               filter.kind == null &&
                               balanceFilter == _BalanceFilter.all
-                          ? 'أضف أول حساب لعميل أو مورد'
-                          : 'جرّب تغيير كلمة البحث أو الفلاتر',
+                          ? context.tr('أضف أول حساب لعميل أو مورد')
+                          : context.tr('جرّب تغيير كلمة البحث أو الفلاتر'),
                       action: FilledButton.icon(
                         onPressed: () => openAccountForm(context, ref),
                         icon: const Icon(Icons.person_add_alt_1_rounded),
-                        label: const Text('إضافة حساب جديد'),
+                        label: Text(context.tr('إضافة حساب جديد')),
                       ),
                     );
                   }
@@ -200,14 +191,16 @@ class _EnhancedFilterBarState extends ConsumerState<_EnhancedFilterBar> {
     super.dispose();
   }
 
-  String _balanceFilterLabel(_BalanceFilter bf) => switch (bf) {
-        _BalanceFilter.all => 'الكل',
-        _BalanceFilter.debt => 'عليه',
-        _BalanceFilter.credit => 'له',
-        _BalanceFilter.settled => 'مسدد',
+  String _balanceFilterLabel(BuildContext context, _BalanceFilter bf) =>
+      switch (bf) {
+        _BalanceFilter.all => context.tr('الكل'),
+        _BalanceFilter.debt => context.tr('عليه'),
+        _BalanceFilter.credit => context.tr('له'),
+        _BalanceFilter.settled => context.tr('مسدد'),
       };
 
   String _summaryLabel(
+    BuildContext context,
     AccountFilter filter,
     List<CurrencyDef> currencies,
     _BalanceFilter balanceFilter,
@@ -217,15 +210,15 @@ class _EnhancedFilterBarState extends ConsumerState<_EnhancedFilterBar> {
       final c = currencies
           .where((x) => x.code == filter.currency)
           .firstOrNull;
-      parts.add(c != null ? '${c.name} ${c.flag}' : filter.currency!);
+      parts.add(c != null ? '${context.tr(c.name)} ${c.flag}' : filter.currency!);
     } else {
-      parts.add('كل العملات');
+      parts.add(context.tr('كل العملات'));
     }
     if (balanceFilter != _BalanceFilter.all) {
-      parts.add(_balanceFilterLabel(balanceFilter));
+      parts.add(_balanceFilterLabel(context, balanceFilter));
     }
     if (filter.kind != null) {
-      parts.add(filter.kind!.label);
+      parts.add(context.tr(filter.kind!.label));
     }
     return parts.join(' • ');
   }
@@ -263,7 +256,7 @@ class _EnhancedFilterBarState extends ConsumerState<_EnhancedFilterBar> {
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            'تصفية وفرز العملاء والحسابات',
+                            ctx.tr('تصفية وفرز العملاء والحسابات'),
                             style:
                                 Theme.of(ctx).textTheme.titleMedium?.copyWith(
                                       fontWeight: FontWeight.w800,
@@ -276,13 +269,13 @@ class _EnhancedFilterBarState extends ConsumerState<_EnhancedFilterBar> {
                             bNotifier.state = _BalanceFilter.all;
                             Navigator.pop(ctx);
                           },
-                          child: const Text('إعادة ضبط'),
+                          child: Text(ctx.tr('إعادة ضبط')),
                         ),
                       ],
                     ),
                     const Divider(height: 16),
                     Text(
-                      'العملة',
+                      ctx.tr('العملة'),
                       style: TextStyle(
                         fontSize: 12.5,
                         fontWeight: FontWeight.w800,
@@ -296,14 +289,14 @@ class _EnhancedFilterBarState extends ConsumerState<_EnhancedFilterBar> {
                       children: [
                         _chip(
                           ctx,
-                          'كل العملات',
+                          ctx.tr('كل العملات'),
                           f.currency == null,
                           () => n.state = f.copyWith(clearCurrency: true),
                         ),
                         for (final c in currencies)
                           _chip(
                             ctx,
-                            '${c.name} ${c.flag}',
+                            '${ctx.tr(c.name)} ${c.flag}',
                             f.currency == c.code,
                             () => n.state = f.copyWith(
                               currency: f.currency == c.code ? null : c.code,
@@ -314,7 +307,7 @@ class _EnhancedFilterBarState extends ConsumerState<_EnhancedFilterBar> {
                     ),
                     const SizedBox(height: 14),
                     Text(
-                      'حالة الرصيد',
+                      ctx.tr('حالة الرصيد'),
                       style: TextStyle(
                         fontSize: 12.5,
                         fontWeight: FontWeight.w800,
@@ -328,27 +321,27 @@ class _EnhancedFilterBarState extends ConsumerState<_EnhancedFilterBar> {
                       children: [
                         _chip(
                           ctx,
-                          'الكل',
+                          ctx.tr('الكل'),
                           bf == _BalanceFilter.all,
                           () => bNotifier.state = _BalanceFilter.all,
                         ),
                         _chip(
                           ctx,
-                          'عليه',
+                          ctx.tr('عليه'),
                           bf == _BalanceFilter.debt,
                           () => bNotifier.state = _BalanceFilter.debt,
                           color: const Color(0xFFEF4444),
                         ),
                         _chip(
                           ctx,
-                          'له',
+                          ctx.tr('له'),
                           bf == _BalanceFilter.credit,
                           () => bNotifier.state = _BalanceFilter.credit,
-                          color: const Color(0xFF0284C7),
+                          color: const Color(0xFF10B981),
                         ),
                         _chip(
                           ctx,
-                          'مسدد',
+                          ctx.tr('مسدد'),
                           bf == _BalanceFilter.settled,
                           () => bNotifier.state = _BalanceFilter.settled,
                         ),
@@ -356,7 +349,7 @@ class _EnhancedFilterBarState extends ConsumerState<_EnhancedFilterBar> {
                     ),
                     const SizedBox(height: 14),
                     Text(
-                      'نوع الحساب',
+                      ctx.tr('نوع الحساب'),
                       style: TextStyle(
                         fontSize: 12.5,
                         fontWeight: FontWeight.w800,
@@ -370,14 +363,14 @@ class _EnhancedFilterBarState extends ConsumerState<_EnhancedFilterBar> {
                       children: [
                         _chip(
                           ctx,
-                          'الكل',
+                          ctx.tr('الكل'),
                           f.kind == null,
                           () => n.state = f.copyWith(clearKind: true),
                         ),
                         ...AccountKind.values.map((k) {
                           return _chip(
                             ctx,
-                            '${k.icon} ${k.label}',
+                            '${k.icon} ${ctx.tr(k.label)}',
                             f.kind == k,
                             () => n.state = f.copyWith(
                               kind: f.kind == k ? null : k,
@@ -392,7 +385,7 @@ class _EnhancedFilterBarState extends ConsumerState<_EnhancedFilterBar> {
                       width: double.infinity,
                       child: FilledButton(
                         onPressed: () => Navigator.pop(ctx),
-                        child: const Text('تم'),
+                        child: Text(ctx.tr('تم')),
                       ),
                     ),
                   ],
@@ -416,7 +409,6 @@ class _EnhancedFilterBarState extends ConsumerState<_EnhancedFilterBar> {
         balanceFilter != _BalanceFilter.all ||
         filter.kind != null;
 
-    // (المتطلب 5) صف علوي واحد مضغوط وأنيق يجمع بادج التصفية والفرز الموحّد + أيقونة البحث المتمددة عند النقر + أيقونة (+) بدون نص.
     return Padding(
       padding: const EdgeInsets.fromLTRB(14, 8, 14, 6),
       child: Row(
@@ -429,12 +421,12 @@ class _EnhancedFilterBarState extends ConsumerState<_EnhancedFilterBar> {
                 controller: _searchCtrl,
                 style: const TextStyle(fontSize: 13.5),
                 decoration: InputDecoration(
-                  hintText: 'بحث بالاسم أو الهاتف أو الملاحظات…',
+                  hintText: context.tr('بحث بالاسم أو الهاتف أو الملاحظات…'),
                   hintStyle: const TextStyle(fontSize: 13),
                   prefixIcon: const Icon(Icons.search, size: 19),
                   suffixIcon: IconButton(
                     icon: const Icon(Icons.close, size: 18),
-                    tooltip: 'إغلاق البحث',
+                    tooltip: context.tr('إغلاق البحث'),
                     onPressed: () {
                       _searchCtrl.clear();
                       n.state = filter.copyWith(query: '');
@@ -457,7 +449,6 @@ class _EnhancedFilterBarState extends ConsumerState<_EnhancedFilterBar> {
               ),
             ),
           ] else ...[
-            // بادج الفلترة والفرز الموحّد
             Expanded(
               child: InkWell(
                 key: const ValueKey('accounts_unified_filter_badge'),
@@ -494,7 +485,7 @@ class _EnhancedFilterBarState extends ConsumerState<_EnhancedFilterBar> {
                       const SizedBox(width: 8),
                       Expanded(
                         child: Text(
-                          'تصفية وفرز: ${_summaryLabel(filter, currencies, balanceFilter)}',
+                          '${context.tr('تصفية وفرز')}: ${_summaryLabel(context, filter, currencies, balanceFilter)}',
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: TextStyle(
@@ -517,7 +508,6 @@ class _EnhancedFilterBarState extends ConsumerState<_EnhancedFilterBar> {
               ),
             ),
             const SizedBox(width: 8),
-            // بادج أيقونة البحث المصغّرة (يتمدد لإدخال النص عند النقر فقط)
             Material(
               color: isDark ? const Color(0xFF1E293B) : const Color(0xFFF1F5F9),
               borderRadius: BorderRadius.circular(12),
@@ -546,7 +536,6 @@ class _EnhancedFilterBarState extends ConsumerState<_EnhancedFilterBar> {
             ),
           ],
           const SizedBox(width: 8),
-          // زر إضافة حساب جديد كأيقونة (+) فقط بدون نص
           SizedBox(
             width: 38,
             height: 38,
@@ -652,21 +641,21 @@ class _AccountCard extends StatelessWidget {
       orElse: () => kDefaultCurrencies.first,
     );
 
-    // (المتطلب 7-ج) موجب = عليه (أحمر واضح)، سالب = له (أزرق).
+    // (المهمة 2) الأرقام دائماً باللون الأسود، وعبارة «عليه» بالأحمر و«له» بالأخضر،
+    // مع المربع الصغير ذي السهم الأبيض بجانب المبلغ.
     final shown = Fmt.roundMoney(item.balance, c.decimal);
     final isDebt = shown > 0;
     final isCredit = shown < 0;
     final accent = _avatarColor(a.name);
 
     const debtRed = Color(0xFFEF4444);
-    const creditBlue = Color(0xFF0284C7);
+    const creditGreen = Color(0xFF10B981);
     final statusColor = isDebt
         ? debtRed
         : (isCredit
-            ? creditBlue
+            ? creditGreen
             : (isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B)));
 
-    // (المتطلب 7-د) تلوين متناوب للبطاقات بين الأبيض والتركواز الفاتح الهادئ.
     final cardBg = index.isEven
         ? (isDark ? const Color(0xFF1E293B) : Colors.white)
         : (isDark ? const Color(0xFF132A2E) : const Color(0xFFE6F7F5));
@@ -704,7 +693,6 @@ class _AccountCard extends StatelessWidget {
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
             child: Row(
               children: [
-                // (المتطلب 7-ب) أيقونة رأس الشخص القياسية داخل الدائرة بدلاً من الحروف الأولى من الاسم.
                 Container(
                   width: 44,
                   height: 44,
@@ -729,7 +717,6 @@ class _AccountCard extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 12),
-                // اسم العميل ومعلوماته
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -747,8 +734,11 @@ class _AccountCard extends StatelessWidget {
                       Text(
                         [
                           if (a.phone.isNotEmpty) a.phone,
-                          if (txCount > 0) '$txCount حركة' else 'لا حركات',
-                          c.name,
+                          if (txCount > 0)
+                            context.tr('$txCount حركة')
+                          else
+                            context.tr('لا حركات'),
+                          context.tr(c.name),
                         ].join(' • '),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
@@ -763,41 +753,51 @@ class _AccountCard extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 10),
-                // (المتطلب 7-ج) الرصيد الواضح: «عليه» بالأحمر الواضح، و«له» بالأزرق.
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.end,
+                Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
-                    if (hidden)
-                      const Text(
-                        '••••••',
-                        style: TextStyle(
-                          fontSize: 15,
-                          fontWeight: FontWeight.w800,
-                          letterSpacing: 2,
-                        ),
-                      )
-                    else
-                      Text(
-                        isDebt
-                            ? '+ ${Fmt.moneyFor(item.balance, c)} ${c.symbol}'
-                            : (isCredit
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.end,
+                      children: [
+                        if (hidden)
+                          const Text(
+                            '••••••',
+                            style: TextStyle(
+                              fontSize: 15,
+                              fontWeight: FontWeight.w800,
+                              letterSpacing: 2,
+                            ),
+                          )
+                        else
+                          Text(
+                            isDebt || isCredit
                                 ? '${Fmt.moneyFor(item.balance.abs(), c)} ${c.symbol}'
-                                : '0 ${c.symbol}'),
-                        style: TextStyle(
-                          fontSize: 15.5,
-                          fontWeight: FontWeight.w900,
-                          color: statusColor,
+                                : '0 ${c.symbol}',
+                            style: TextStyle(
+                              fontSize: 15.5,
+                              fontWeight: FontWeight.w900,
+                              color: AppColors.textOf(context),
+                            ),
+                          ),
+                        const SizedBox(height: 2),
+                        Text(
+                          isDebt
+                              ? context.tr('عليه')
+                              : (isCredit
+                                  ? context.tr('له')
+                                  : context.tr('مسدد')),
+                          style: TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.w700,
+                            color: statusColor,
+                          ),
                         ),
-                      ),
-                    const SizedBox(height: 2),
-                    Text(
-                      isDebt ? 'عليه' : (isCredit ? 'له' : 'مسدد'),
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w700,
-                        color: statusColor,
-                      ),
+                      ],
                     ),
+                    if (isDebt || isCredit) ...[
+                      const SizedBox(width: 8),
+                      NatureArrowSquare(isDebit: isDebt, size: 22),
+                    ],
                   ],
                 ),
               ],
@@ -808,4 +808,5 @@ class _AccountCard extends StatelessWidget {
     );
   }
 }
+
 

@@ -829,7 +829,6 @@ class _TxFormState extends ConsumerState<TxForm> {
                     initialDate: _date,
                     firstDate: DateTime(2015),
                     lastDate: DateTime(2100),
-                    locale: const Locale('ar'),
                   );
                   if (d != null) setState(() => _date = d);
                 },

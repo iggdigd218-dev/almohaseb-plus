@@ -2011,7 +2011,10 @@ class Repo {
       }
 
       // حفظ العملية المرافقة (مثل الدفعة المقدمة في البيع الجزئي) داخل نفس المعاملة الذرية
+      // مع فارق زمني رتيب (+1ms) لضمان عدم تطابق الطابع الزمني وترتيب الرفع الحتمي.
       if (companionTx != null && companionTx.amount > 0) {
+        final compNowDt = nowDt.add(const Duration(milliseconds: 1));
+        final compNow = compNowDt.toIso8601String();
         var compRef = companionTx.reference.trim();
         if (compRef.isEmpty) {
           compRef = await _nextSequence(txn, 'counter_tx', table: 'transactions');
@@ -2019,11 +2022,12 @@ class Repo {
         final compToSave = companionTx.copyWith(
           reference: compRef,
           syncState: newSync,
+          createdAt: compNowDt,
         );
         final compMap = compToSave.toMap();
         compMap['workspace_id'] = requireWorkspaceId;
         compMap['id'] = newGlobalId();
-        compMap['updated_at'] = now;
+        compMap['updated_at'] = compNow;
         final compId = await txn.insert('transactions', compMap);
         final compSaved = Map<String, Object?>.from(compMap)..['id'] = compId;
         await rec.record(
@@ -2031,6 +2035,7 @@ class Repo {
           entityId: '$compId',
           opType: OpKind.create,
           payload: compSaved..['items'] = const <Map<String, Object?>>[],
+          explicitTime: compNowDt,
         );
         await logActivityTx(
           txn,
@@ -2142,11 +2147,20 @@ class Repo {
     }
   }
 
-  /// ملخص المبيعات الفعلية لفواتير نقطة البيع فقط (نقدية + آجلة - مرتجعات) ضمن نطاق زمني محدد.
-  /// محمي بصلاحية `can_view_sales_summary`.
+  /// ملخص المبيعات الفعلية لفواتير نقطة البيع فقط (نقدية + آجلة - مرتجعات) ضمن نطاق زمني محدد
+  /// مع دعم الفلاتر المتعددة (القسم، الفئة، الصنف، الجهاز، الموظف، طريقة الدفع، نوع الفاتورة، العملة)
+  /// والمخطط الزمني والنسب المئوية. محمي بصلاحية `can_view_sales_summary`.
   Future<Map<String, dynamic>> posSalesSummary({
     DateTime? from,
     DateTime? to,
+    int? sectionId,
+    int? categoryId,
+    int? itemId,
+    String? deviceId,
+    int? userId,
+    String? paymentKind, // 'all' | 'cash' | 'credit'
+    String? invoiceType, // 'all' | 'sale' | 'return'
+    String? currency,
   }) async {
     final allowed = await can('can_view_sales_summary') ||
         (await effectivePermissions()).canViewSalesSummary;
@@ -2160,6 +2174,13 @@ class Repo {
         'netByCurrency': <String, double>{},
         'cashByCurrency': <String, double>{},
         'creditByCurrency': <String, double>{},
+        'timeline': <Map<String, Object?>>[],
+        'bySection': <Map<String, Object?>>[],
+        'byCategory': <Map<String, Object?>>[],
+        'byItem': <Map<String, Object?>>[],
+        'byDevice': <Map<String, Object?>>[],
+        'byUser': <Map<String, Object?>>[],
+        'invoices': <Map<String, Object?>>[],
       };
     }
     final db = await _db;
@@ -2192,6 +2213,76 @@ class Repo {
       'SELECT t.* FROM transactions t WHERE ${whereParts.join(' AND ')} ORDER BY t.date DESC, t.id DESC',
       args,
     );
+
+    // جلب بيانات الفهرسة المساعدة (الأقسام، الفئات، الأصناف، الأجهزة، المستخدمين، وبنود الفواتير)
+    final secRows = await db.query('sections');
+    final sectionNames = <int, String>{
+      for (final r in secRows)
+        if (r['id'] is int) r['id'] as int: '${r['name'] ?? 'عام'}',
+    };
+    final catRows = await db.query('item_categories',
+        where: "COALESCE(deleted_at,'') = ''");
+    final categoryNames = <int, String>{
+      for (final r in catRows)
+        if (r['id'] is int) r['id'] as int: '${r['name'] ?? 'عام'}',
+    };
+    final categorySection = <int, int?>{
+      for (final r in catRows)
+        if (r['id'] is int) r['id'] as int: r['section_id'] as int?,
+    };
+    final itemRows =
+        await db.query('items', where: "COALESCE(deleted_at,'') = ''");
+    final itemMeta = <int, Map<String, Object?>>{
+      for (final r in itemRows)
+        if (r['id'] is int) r['id'] as int: r,
+    };
+    final devRows = await db.query('devices',
+        where: "COALESCE(revoked_at,'') = '' AND COALESCE(expelled_at,'') = ''");
+    final deviceNames = <String, String>{
+      for (final r in devRows)
+        '${r['id'] ?? ''}': '${r['name'] ?? r['id'] ?? 'جهاز'}',
+    };
+    final usrRows =
+        await db.query('users', where: "COALESCE(deleted_at,'') = ''");
+    final userNames = <int, String>{
+      for (final r in usrRows)
+        if (r['id'] is int) r['id'] as int: '${r['name'] ?? 'موظف'}',
+    };
+    final accRows = await db.query('accounts');
+    final accountNames = <int, String>{
+      for (final r in accRows)
+        if (r['id'] is int) r['id'] as int: '${r['name'] ?? ''}',
+    };
+
+    final txIds = rows.map((r) => r['id']).whereType<int>().toList();
+    final linesByTx = <int, List<Map<String, Object?>>>{};
+    final opMetaByTx = <int, ({String deviceId, int? userId})>{};
+    if (txIds.isNotEmpty) {
+      final allLines = await db.query('transaction_items');
+      for (final l in allLines) {
+        final tid = l['tx_id'] as int?;
+        if (tid != null) {
+          (linesByTx[tid] ??= <Map<String, Object?>>[]).add(l);
+        }
+      }
+      try {
+        final txOpRows = await db.query(
+          'operations',
+          columns: ['entity_id', 'device_id', 'user_id'],
+          where: "entity_type = 'tx' AND op_type = 'create'",
+        );
+        for (final opRow in txOpRows) {
+          final tid = int.tryParse('${opRow['entity_id'] ?? ''}');
+          if (tid != null && !opMetaByTx.containsKey(tid)) {
+            opMetaByTx[tid] = (
+              deviceId: '${opRow['device_id'] ?? ''}',
+              userId: opRow['user_id'] as int?,
+            );
+          }
+        }
+      } catch (_) {}
+    }
+
     var invoiceCount = 0;
     var returnCount = 0;
     final grossByCur = <String, double>{};
@@ -2199,6 +2290,27 @@ class Repo {
     final netByCur = <String, double>{};
     final cashByCur = <String, double>{};
     final creditByCur = <String, double>{};
+    final allCurrencies = <String>{};
+
+    final singleDay = from != null &&
+        to != null &&
+        from.year == to.year &&
+        from.month == to.month &&
+        from.day == to.day;
+    final timelineMap =
+        <String, ({double sales, double returns, int count, int retCount})>{};
+    final sectionTotals = <int?, ({String name, double amount, int count})>{};
+    final categoryTotals = <int?, ({String name, double amount, int count})>{};
+    final itemTotals =
+        <int?, ({String name, double amount, double qty, int count})>{};
+    final deviceTotals = <String, ({String name, double amount, int count})>{};
+    final userTotals = <int?, ({String name, double amount, int count})>{};
+    final filteredInvoices = <Map<String, Object?>>[];
+
+    final filterPay = (paymentKind ?? 'all').trim();
+    final filterType = (invoiceType ?? 'all').trim();
+    final filterCur = (currency ?? '').trim();
+    final filterDev = (deviceId ?? '').trim();
 
     for (final r in rows) {
       final t = Tx.fromMap(r);
@@ -2206,25 +2318,262 @@ class Repo {
       final isRet = desc.startsWith('مرتجع ') ||
           t.category == 'مرتجع مبيعات' ||
           t.notes.contains('[ORIG_TX:');
+      final isSale = !isRet &&
+          (t.type == OpType.revenue ||
+              (t.type == OpType.debit &&
+                  t.accountKind != AccountKind.supplier));
+      if (!isRet && !isSale) continue;
+
+      allCurrencies.add(t.currency);
+      if (filterCur.isNotEmpty && filterCur != 'all' && t.currency != filterCur) {
+        continue;
+      }
+      final isCash =
+          t.type == OpType.revenue || t.type == OpType.outflow || t.accountId == null;
+      if (filterPay == 'cash' && !isCash) continue;
+      if (filterPay == 'credit' && isCash) continue;
+      if (filterType == 'sale' && isRet) continue;
+      if (filterType == 'return' && !isRet) continue;
+
+      final tid = t.id ?? 0;
+      final opInfo = opMetaByTx[tid];
+      final txDevId = (opInfo?.deviceId.isNotEmpty == true)
+          ? opInfo!.deviceId
+          : requireDeviceId;
+      final txUserId = opInfo?.userId ?? _currentUserId;
+      if (filterDev.isNotEmpty && filterDev != 'all' && txDevId != filterDev) {
+        continue;
+      }
+      if (userId != null && txUserId != userId) {
+        continue;
+      }
+
+      final txLines = linesByTx[tid] ?? const <Map<String, Object?>>[];
+      double effectiveAmount = t.amount;
+      final matchedLines = <Map<String, Object?>>[];
+
+      if (sectionId != null || categoryId != null || itemId != null) {
+        if (txLines.isEmpty) continue;
+        double matchedSum = 0;
+        for (final l in txLines) {
+          final lid = l['item_id'] as int?;
+          final im = lid != null ? itemMeta[lid] : null;
+          final lCatId = im?['category_id'] as int?;
+          final lSecId =
+              (im?['section_id'] as int?) ?? (lCatId != null ? categorySection[lCatId] : null);
+          if (itemId != null && lid != itemId) continue;
+          if (categoryId != null && lCatId != categoryId) continue;
+          if (sectionId != null && lSecId != sectionId) continue;
+          matchedLines.add(l);
+          final lineTotal = ((l['total'] as num?) ??
+                  (((l['quantity'] as num?) ?? 1) *
+                      ((l['unit_price'] as num?) ?? 0)))
+              .toDouble();
+          matchedSum += lineTotal;
+        }
+        if (matchedLines.isEmpty) continue;
+        effectiveAmount = matchedSum > 0 ? matchedSum : t.amount;
+      } else {
+        matchedLines.addAll(txLines);
+      }
+
       if (isRet) {
         returnCount++;
-        returnsByCur[t.currency] = (returnsByCur[t.currency] ?? 0) + t.amount;
-        netByCur[t.currency] = (netByCur[t.currency] ?? 0) - t.amount;
-      } else if (t.type == OpType.revenue ||
-          (t.type == OpType.debit && t.accountKind != AccountKind.supplier)) {
+        returnsByCur[t.currency] =
+            (returnsByCur[t.currency] ?? 0) + effectiveAmount;
+        netByCur[t.currency] = (netByCur[t.currency] ?? 0) - effectiveAmount;
+      } else {
         invoiceCount++;
-        grossByCur[t.currency] = (grossByCur[t.currency] ?? 0) + t.amount;
-        netByCur[t.currency] = (netByCur[t.currency] ?? 0) + t.amount;
-        if (t.type == OpType.revenue) {
-          cashByCur[t.currency] = (cashByCur[t.currency] ?? 0) + t.amount;
+        grossByCur[t.currency] =
+            (grossByCur[t.currency] ?? 0) + effectiveAmount;
+        netByCur[t.currency] = (netByCur[t.currency] ?? 0) + effectiveAmount;
+        if (isCash) {
+          cashByCur[t.currency] =
+              (cashByCur[t.currency] ?? 0) + effectiveAmount;
         } else {
-          creditByCur[t.currency] = (creditByCur[t.currency] ?? 0) + t.amount;
+          creditByCur[t.currency] =
+              (creditByCur[t.currency] ?? 0) + effectiveAmount;
         }
       }
+
+      final bucketKey = singleDay
+          ? '${t.date.hour.toString().padLeft(2, '0')}:00'
+          : '${t.date.year.toString().padLeft(4, '0')}-${t.date.month.toString().padLeft(2, '0')}-${t.date.day.toString().padLeft(2, '0')}';
+      final prevBucket = timelineMap[bucketKey] ??
+          (sales: 0.0, returns: 0.0, count: 0, retCount: 0);
+      timelineMap[bucketKey] = (
+        sales: prevBucket.sales + (isRet ? 0.0 : effectiveAmount),
+        returns: prevBucket.returns + (isRet ? effectiveAmount : 0.0),
+        count: prevBucket.count + (isRet ? 0 : 1),
+        retCount: prevBucket.retCount + (isRet ? 1 : 0),
+      );
+
+      final devLabel = deviceNames[txDevId] ??
+          (txDevId == requireDeviceId ? 'هذا الجهاز' : txDevId);
+      final prevDev =
+          deviceTotals[txDevId] ?? (name: devLabel, amount: 0.0, count: 0);
+      deviceTotals[txDevId] = (
+        name: devLabel,
+        amount: prevDev.amount + (isRet ? 0.0 : effectiveAmount),
+        count: prevDev.count + 1,
+      );
+
+      final usrLabel =
+          (txUserId != null ? userNames[txUserId] : null) ?? 'المدير / الكاشير';
+      final prevUsr =
+          userTotals[txUserId] ?? (name: usrLabel, amount: 0.0, count: 0);
+      userTotals[txUserId] = (
+        name: usrLabel,
+        amount: prevUsr.amount + (isRet ? 0.0 : effectiveAmount),
+        count: prevUsr.count + 1,
+      );
+
+      if (!isRet) {
+        if (matchedLines.isEmpty) {
+          final prevSec =
+              sectionTotals[null] ?? (name: 'عام', amount: 0.0, count: 0);
+          sectionTotals[null] = (
+            name: 'عام',
+            amount: prevSec.amount + effectiveAmount,
+            count: prevSec.count + 1,
+          );
+        } else {
+          for (final l in matchedLines) {
+            final lid = l['item_id'] as int?;
+            final im = lid != null ? itemMeta[lid] : null;
+            final lCatId = im?['category_id'] as int?;
+            final lSecId = (im?['section_id'] as int?) ??
+                (lCatId != null ? categorySection[lCatId] : null);
+            final qty = ((l['quantity'] as num?) ?? 1).toDouble();
+            final lineAmt = ((l['total'] as num?) ??
+                    (qty * ((l['unit_price'] as num?) ?? 0)))
+                .toDouble();
+            final secName =
+                (lSecId != null ? sectionNames[lSecId] : null) ?? 'عام';
+            final prevSec = sectionTotals[lSecId] ??
+                (name: secName, amount: 0.0, count: 0);
+            sectionTotals[lSecId] = (
+              name: secName,
+              amount: prevSec.amount + lineAmt,
+              count: prevSec.count + 1,
+            );
+            final catName =
+                (lCatId != null ? categoryNames[lCatId] : null) ?? 'عام';
+            final prevCat = categoryTotals[lCatId] ??
+                (name: catName, amount: 0.0, count: 0);
+            categoryTotals[lCatId] = (
+              name: catName,
+              amount: prevCat.amount + lineAmt,
+              count: prevCat.count + 1,
+            );
+            final itName = '${l['name'] ?? im?['name'] ?? 'صنف'}';
+            final prevIt = itemTotals[lid] ??
+                (name: itName, amount: 0.0, qty: 0.0, count: 0);
+            itemTotals[lid] = (
+              name: itName,
+              amount: prevIt.amount + lineAmt,
+              qty: prevIt.qty + qty,
+              count: prevIt.count + 1,
+            );
+          }
+        }
+      }
+
+      final accName = t.accountId != null
+          ? (accountNames[t.accountId!] ?? 'عميل نقدي')
+          : 'عميل نقدي';
+      final itemsSummary = matchedLines
+          .map((l) =>
+              '${l['name'] ?? 'صنف'} × ${((l['quantity'] as num?) ?? 1).toStringAsFixed(0)}')
+          .join('، ');
+      filteredInvoices.add({
+        'id': tid,
+        'reference': t.reference.isNotEmpty ? t.reference : '$tid',
+        'date': t.date.toIso8601String(),
+        'amount': effectiveAmount,
+        'currency': t.currency,
+        'isReturn': isRet,
+        'isCash': isCash,
+        'accountName': accName.isEmpty ? 'عميل نقدي' : accName,
+        'deviceName': devLabel,
+        'userName': usrLabel,
+        'description': t.description,
+        'itemsSummary': itemsSummary,
+      });
     }
+
     for (final k in netByCur.keys.toList()) {
       if ((netByCur[k] ?? 0) < 0) netByCur[k] = 0;
     }
+
+    final sortedBucketKeys = timelineMap.keys.toList()..sort();
+    double totalTimelineBase = 0;
+    for (final k in sortedBucketKeys) {
+      final b = timelineMap[k]!;
+      totalTimelineBase +=
+          filterType == 'return' ? b.returns : (b.sales + b.returns);
+    }
+    final timeline = <Map<String, Object?>>[
+      for (final k in sortedBucketKeys)
+        () {
+          final b = timelineMap[k]!;
+          final focusVal = filterType == 'return' ? b.returns : b.sales;
+          final pct = totalTimelineBase > 0
+              ? ((focusVal / totalTimelineBase) * 100.0).clamp(0.0, 100.0)
+              : 0.0;
+          return <String, Object?>{
+            'label': k,
+            'sales': b.sales,
+            'returns': b.returns,
+            'net': (b.sales - b.returns) < 0 ? 0.0 : (b.sales - b.returns),
+            'count': b.count,
+            'returnCount': b.retCount,
+            'percent': pct,
+          };
+        }(),
+    ];
+
+    List<Map<String, Object?>> buildRankedBreakdown<K>(
+      Map<K, ({String name, double amount, int count})> src,
+    ) {
+      final total =
+          src.values.fold<double>(0.0, (s, e) => s + (e.amount > 0 ? e.amount : 0));
+      final list = <Map<String, Object?>>[
+        for (final e in src.entries)
+          if (e.value.amount > 0 || e.value.count > 0)
+            {
+              'id': e.key,
+              'name': e.value.name,
+              'amount': e.value.amount,
+              'count': e.value.count,
+              'percent': total > 0
+                  ? ((e.value.amount / total) * 100.0).clamp(0.0, 100.0)
+                  : 0.0,
+            },
+      ];
+      list.sort(
+          (a, b) => ((b['amount'] as double)).compareTo(a['amount'] as double));
+      return list;
+    }
+
+    final totalItemAmt = itemTotals.values
+        .fold<double>(0.0, (s, e) => s + (e.amount > 0 ? e.amount : 0));
+    final byItemList = <Map<String, Object?>>[
+      for (final e in itemTotals.entries)
+        if (e.value.amount > 0 || e.value.count > 0)
+          {
+            'id': e.key,
+            'name': e.value.name,
+            'amount': e.value.amount,
+            'qty': e.value.qty,
+            'count': e.value.count,
+            'percent': totalItemAmt > 0
+                ? ((e.value.amount / totalItemAmt) * 100.0).clamp(0.0, 100.0)
+                : 0.0,
+          },
+    ]..sort(
+        (a, b) => ((b['amount'] as double)).compareTo(a['amount'] as double));
+
     return {
       'allowed': true,
       'invoiceCount': invoiceCount,
@@ -2234,6 +2583,45 @@ class Repo {
       'netByCurrency': netByCur,
       'cashByCurrency': cashByCur,
       'creditByCurrency': creditByCur,
+      'timeline': timeline,
+      'bySection': buildRankedBreakdown(sectionTotals),
+      'byCategory': buildRankedBreakdown(categoryTotals),
+      'byItem': byItemList,
+      'byDevice': buildRankedBreakdown(deviceTotals),
+      'byUser': buildRankedBreakdown(userTotals),
+      'invoices': filteredInvoices,
+      'availableCurrencies': allCurrencies.toList(),
+      'availableSections': [
+        for (final r in secRows)
+          if (r['id'] is int) {'id': r['id'], 'name': '${r['name'] ?? 'عام'}'},
+      ],
+      'availableCategories': [
+        for (final r in catRows)
+          if (r['id'] is int)
+            {
+              'id': r['id'],
+              'name': '${r['name'] ?? 'عام'}',
+              'sectionId': r['section_id'],
+            },
+      ],
+      'availableItems': [
+        for (final r in itemRows)
+          if (r['id'] is int)
+            {
+              'id': r['id'],
+              'name': '${r['name'] ?? ''}',
+              'categoryId': r['category_id'],
+              'sectionId': r['section_id'],
+            },
+      ],
+      'availableDevices': [
+        for (final r in devRows)
+          {'id': '${r['id'] ?? ''}', 'name': '${r['name'] ?? r['id'] ?? 'جهاز'}'},
+      ],
+      'availableUsers': [
+        for (final r in usrRows)
+          if (r['id'] is int) {'id': r['id'], 'name': '${r['name'] ?? 'موظف'}'},
+      ],
     };
   }
 
@@ -4977,6 +5365,10 @@ class Repo {
             "(entity_type = 'device' AND entity_id = ?) OR (entity_type = 'user' AND op_type != 'delete' AND entity_id = ?)",
         whereArgs: [deviceId, '${userId ?? ''}'],
       );
+    } catch (_) {}
+    // حفظ وسم الطرد محلياً في جدول الإعدادات لمنع إعادة إدراج العضو المطرود من نسخة سحابية قديمة في syncRoster
+    try {
+      await setSetting('deviceExpelled:$deviceId', now);
     } catch (_) {}
     try {
       await queueOperation(
@@ -8264,26 +8656,32 @@ class Repo {
         itemToSave = it.copyWith(sectionId: sid);
       }
     }
-    final thumbB64 = itemToSave.image.trim().isNotEmpty
-        ? await MediaPaths.encodeThumbBase64(itemToSave.image)
-        : '';
+    final allowMediaSync = (await getSetting('allow_cloud_media_sync')) == '1';
+    final thumbB64 =
+        (allowMediaSync && itemToSave.image.trim().isNotEmpty)
+            ? await MediaPaths.encodeThumbBase64(itemToSave.image)
+            : '';
     // (W-1 ذرّية) الحفظ وعملية المزامنة وحركة التسوية في معاملة واحدة:
     // لا يبقى صنف محفوظ بلا عملية مزامنة (فيظل شبحاً محلياً) والعكس.
     final isCreate = itemToSave.id == null;
-    // (سلسلة التدقيق) قراءة الكمية القديمة قبل التحديث لتوثيق أي تغيير
-    // بحركة تسوية مخزنية — تُقرأ خارج المعاملة ثم تُطبَّق داخلها.
+    // (سلسلة التدقيق) قراءة الكمية القديمة والصورة القديمة قبل التحديث لتوثيق أي تغيير
+    // بحركة تسوية مخزنية أو حذف ملف الصورة القديم عند إزالتها.
     double prevQty = itemToSave.quantity;
+    String prevImage = '';
     if (!isCreate) {
-      final prevQtyRow = await db.query('items',
-          columns: ['quantity'],
+      final prevRow = await db.query('items',
+          columns: ['quantity', 'image'],
           where: 'id = ?',
           whereArgs: [itemToSave.id],
           limit: 1);
-      if (prevQtyRow.isNotEmpty) {
+      if (prevRow.isNotEmpty) {
         prevQty =
-            ((prevQtyRow.first['quantity'] as num?) ?? prevQty).toDouble();
+            ((prevRow.first['quantity'] as num?) ?? prevQty).toDouble();
+        prevImage = '${prevRow.first['image'] ?? ''}'.trim();
       }
     }
+    final imageCleared =
+        !isCreate && prevImage.isNotEmpty && itemToSave.image.trim().isEmpty;
     if (isCreate && itemToSave.plu == null) {
       // (2026-09-24) رقم الترقيم السريع: يُعيَّن مرة واحدة عند الإضافة
       // من أعلى رقم موجود + 1، ثم يثبت للأبد (لا إعادة ترتيب ولا تدوير).
@@ -8364,7 +8762,12 @@ class Repo {
         final qtyChanged = (itemToSave.quantity - prevQty).abs() > 0.0001;
         final payload = Map<String, Object?>.from(map)
           ..['__qty_changed'] = qtyChanged ? 1 : 0;
-        if (thumbB64.isNotEmpty) payload['thumb_b64'] = thumbB64;
+        if (thumbB64.isNotEmpty) {
+          payload['thumb_b64'] = thumbB64;
+        } else if (imageCleared) {
+          payload['thumb_b64'] = '';
+          payload['image_cleared'] = 1;
+        }
         if (creatorName.isNotEmpty) payload['created_by_name'] = creatorName;
         await rec.record(
           entityType: EntityKind.item,
@@ -8394,6 +8797,14 @@ class Repo {
         }
       }
     });
+    if (imageCleared && prevImage.isNotEmpty) {
+      try {
+        final f = File(MediaPaths.toAbsolute(prevImage));
+        if (f.existsSync()) {
+          await f.delete();
+        }
+      } catch (_) {}
+    }
     // تنبيه داخلي عند انخفاض المخزون عن حد التنبيه (بعد التزام العملية).
     if (lowStock != null) {
       await notify(

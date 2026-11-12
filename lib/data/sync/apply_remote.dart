@@ -1436,6 +1436,10 @@ extension ApplyRemoteOp on Repo {
         if (localImg.isNotEmpty) {
           row['image'] = localImg;
         }
+      } else if (op.payload['image_cleared'] == 1 ||
+          (op.payload.containsKey('thumb_b64') &&
+              '${op.payload['thumb_b64'] ?? ''}'.trim().isEmpty)) {
+        row['image'] = '';
       }
     }
 
