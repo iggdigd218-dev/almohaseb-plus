@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 /// - `AppLocalizations.of(context)` للوصول السريع للنصوص المترجمة.
 /// - `tr(context, ar, en)` و `context.tr(ar, en)` لترجمة أي نص ثنائي اللغة مباشرةً.
 /// - قاموس ترجمة شامل لعناوين الشاشات، القوائم، الأزرار، والإعدادات.
+typedef L10n = AppLocalizations;
+
 class AppLocalizations {
   final Locale locale;
   const AppLocalizations(this.locale);
@@ -61,6 +63,9 @@ class AppLocalizations {
     }
     return ar;
   }
+
+  /// اختصار مباشر لترجمة النصوص الثنائية (ar, en).
+  String tr(String ar, [String? en]) => text(ar, en);
 
   // ───────── النصوص الأساسية ─────────
   String get appTitle => isEn ? 'Al-Mohaseb' : 'المحاسب';
