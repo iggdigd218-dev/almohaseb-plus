@@ -793,7 +793,7 @@ Map<String, bool> defaultPerms(UserRole role) {
       return {
         'add_tx': true,
         'edit_tx': true,
-        'delete_tx': true,
+        'delete_tx': false,
         'view_reports': true,
         'can_view_sales_summary': true,
         'export': true,
@@ -880,9 +880,14 @@ class AppUser {
   /// هل يحتاج التبديل إلى هذا المستخدم كلمة مرور؟
   bool get locked => password.isNotEmpty;
 
-  /// المدير والوكيل لهما كل شيء دائمًا — كما في `can()`.
+  /// هل يملك دور المدير أو وكيل المدير حصراً؟
+  bool get isManagerOrAgent =>
+      role == UserRole.admin || role == UserRole.agent;
+
+  /// المدير والوكيل لهما كل شيء دائمًا — وحذف العمليات محصور بهما فقط.
   bool can(String perm) {
     if (role == UserRole.admin || role == UserRole.agent) return true;
+    if (perm == 'delete_tx' || perm == 'can_delete_tx') return false;
     if (perm == 'can_discount') {
       return canApplyDiscount || (permissions['can_discount'] ?? false);
     }

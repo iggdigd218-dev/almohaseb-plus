@@ -8,6 +8,7 @@ import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/accounting.dart';
+import '../core/l10n.dart';
 import '../core/shell_nav.dart';
 import '../core/desktop.dart';
 import '../core/media_paths.dart';
@@ -337,7 +338,8 @@ class _HomeShellState extends ConsumerState<HomeShell>
       await Future<void>.delayed(const Duration(milliseconds: 900));
       if (!mounted) return;
       final repo = ref.read(repoProvider);
-      final summary = await DailyHarvestService.checkAndNotify(repo);
+      final summary =
+          await DailyHarvestService.checkAndNotify(repo, enforceEndOfDay: true);
       if (summary == null || !summary.shouldShow || !mounted) return;
       ref.invalidate(notificationsProvider);
       ref.invalidate(unreadCountProvider);
@@ -1648,7 +1650,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
                     for (var i = 0; i < entries.length; i++)
                       _RailTile(
                         icon: entries[i].$2,
-                        label: entries[i].$3,
+                        label: context.tr(entries[i].$3),
                         selected: i == selectedIdx,
                         extended: _railExtended,
                         onTap: () => _go(entries[i].$1),
@@ -1657,7 +1659,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
                     // «المزيد» يفتح القائمة الجانبية بكل الأقسام الأخرى.
                     _RailTile(
                       icon: Icons.apps_rounded,
-                      label: 'كل الأقسام',
+                      label: context.tr('كل الأقسام'),
                       selected: false,
                       extended: _railExtended,
                       onTap: () => _scaffoldKey.currentState?.openDrawer(),
@@ -1710,6 +1712,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
 
   @override
   Widget build(BuildContext context) {
+    ref.watch(appLocaleProvider);
     ref.watch(hideBalancesProvider);
     final desktop = isDesktopLayout(context);
 
@@ -1770,7 +1773,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
                   : '';
               Widget titleText;
               if (_screen != AppScreen.dashboard) {
-                titleText = Text(_screen.title, overflow: TextOverflow.ellipsis);
+                titleText = Text(context.tr(_screen.title), overflow: TextOverflow.ellipsis);
               } else {
                 final bizName =
                     (st['businessName'] ?? st['org.name'] ?? '').trim();
@@ -1781,7 +1784,7 @@ class _HomeShellState extends ConsumerState<HomeShell>
                 } else if (devName != null && devName.isNotEmpty) {
                   titleText = Text(devName, overflow: TextOverflow.ellipsis);
                 } else {
-                  titleText = const Text('المحاسب');
+                  titleText = Text(context.tr('المحاسب'));
                 }
               }
               final defaultAppLogo = Image.asset(
@@ -2092,7 +2095,7 @@ class _MarkedBottomBar extends ConsumerWidget {
           children: [
             Expanded(
               child: _BottomItem(
-                label: 'الرئيسية',
+                label: context.tr('الرئيسية'),
                 tone: AppTone.blue,
                 selected: currentScreen == AppScreen.dashboard,
                 icon: (sel, fg) => Icon(
@@ -2105,7 +2108,7 @@ class _MarkedBottomBar extends ConsumerWidget {
             ),
             Expanded(
               child: _BottomItem(
-                label: 'العملاء',
+                label: context.tr('العملاء'),
                 tone: AppTone.blue,
                 selected: currentScreen == AppScreen.accounts,
                 icon: (sel, fg) => Icon(
@@ -2123,7 +2126,7 @@ class _MarkedBottomBar extends ConsumerWidget {
             ),
             Expanded(
               child: _BottomItem(
-                label: 'الحركات',
+                label: context.tr('الحركات'),
                 tone: AppTone.green,
                 selected: currentScreen == AppScreen.transactions,
                 icon: (sel, fg) => _MarkedReceiptIcon(selected: sel),
@@ -2132,7 +2135,7 @@ class _MarkedBottomBar extends ConsumerWidget {
             ),
             Expanded(
               child: _BottomItem(
-                label: 'التقارير',
+                label: context.tr('التقارير'),
                 tone: AppTone.violet,
                 selected: currentScreen == AppScreen.reports,
                 icon: (sel, fg) => _MarkedBarChartIcon(selected: sel),
@@ -2392,7 +2395,7 @@ class _CenterOperationButton extends StatelessWidget {
             Transform.translate(
               offset: const Offset(0, -5),
               child: Text(
-                'عملية',
+                context.tr('عملية'),
                 style: TextStyle(
                   fontSize: 11,
                   fontWeight: FontWeight.w800,
@@ -2551,7 +2554,7 @@ class _Drawer extends ConsumerWidget {
         builder: (ctx) => Padding(
           padding: const EdgeInsets.fromLTRB(16, 14, 16, 6),
           child: Text(
-            title,
+            ctx.tr(title),
             style: TextStyle(
               color: AppColors.text3Of(ctx),
               fontSize: 11,
@@ -3489,7 +3492,7 @@ class _DrawerTile extends StatelessWidget {
                 const SizedBox(width: 14),
                 Expanded(
                   child: Text(
-                    screen.title,
+                    context.tr(screen.title),
                     style: TextStyle(
                       fontSize: 14,
                       fontWeight: active ? FontWeight.w800 : FontWeight.w700,

@@ -357,6 +357,9 @@ class AppDatabase {
                   ? 'YER'
                   : (st['defaultCurrency'] ?? 'YER').trim(),
               'phone': (st['phone'] ?? st['whatsapp'] ?? '').trim(),
+              'passwordHash':
+                  (st['account.passwordHash'] ?? st['password_hash'] ?? '')
+                      .trim(),
               'accountsCount': '$accountsCount',
               'hasCompletedOnboarding':
                   (st['has_completed_onboarding'] ?? st['onboardingCompleted'] ?? '0')
@@ -2601,7 +2604,7 @@ class AppDatabase {
   static Future<void> _seed(Database db) async {
     final now = DateTime.now().toIso8601String();
     for (final c in const [
-      ['YER', 'الريال اليمني', 'ر.ي', 0],
+      ['YER', 'محلي', 'محلي', 0],
       ['USD', 'الدولار الأمريكي', r'$', 2],
       ['SAR', 'الريال السعودي', 'ر.س', 2],
     ]) {

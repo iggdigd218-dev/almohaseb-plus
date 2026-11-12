@@ -340,7 +340,7 @@ class DeviceCard extends StatelessWidget {
           'ربط العضو عبر السحابة');
     }
     if (!expelled && !isSelf && !isOwnerDevice) {
-      add('expel', Icons.person_remove, Colors.red, 'طرد من المجموعة');
+      add('expel', Icons.person_remove, Colors.red, 'إزالة من المجموعة');
     }
     // (للمالك أو الوكيل المخوّل) «حذف نهائي من السجل» متاح لكل جهاز عدا
     // جهازك أنت (لا تنتحر) وجهاز مالك المساحة (الهوية الثابتة) — بلا شرط

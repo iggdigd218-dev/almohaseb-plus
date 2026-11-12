@@ -58,14 +58,6 @@ class LanguageSelectorCard extends ConsumerWidget {
                 ),
               ],
             ),
-            const SizedBox(height: 4),
-            Text(
-              l10n.languageSubtitle,
-              style: TextStyle(
-                fontSize: 11.5,
-                color: AppColors.text3Of(context),
-              ),
-            ),
             const SizedBox(height: 10),
             Row(
               children: [
@@ -180,14 +172,6 @@ class ThemeModeSelectorCard extends ConsumerWidget {
                   ),
                 ),
               ],
-            ),
-            const SizedBox(height: 4),
-            Text(
-              'يُحفظ اختيارك بشكل دائم، ولا يتأثر الوضع النهاري بإعدادات الجهاز الليلية.',
-              style: TextStyle(
-                fontSize: 12,
-                color: AppColors.text3Of(context),
-              ),
             ),
             const SizedBox(height: 8),
             RadioListTile<ThemeMode>(
@@ -372,12 +356,6 @@ class AppearanceScreen extends ConsumerWidget {
                           style: TextStyle(
                               fontWeight: FontWeight.w700, fontSize: 14.5)),
                     ],
-                  ),
-                  const SizedBox(height: 4),
-                  Text(
-                    'لكل نوع تفاعل صوت مميز — اضغط أي زر لتجربته.',
-                    style: TextStyle(
-                        fontSize: 12, color: AppColors.text3Of(context)),
                   ),
                   const SizedBox(height: 10),
                   Wrap(

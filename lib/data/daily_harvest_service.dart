@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/accounting.dart';
 import '../core/format.dart';
@@ -48,9 +49,11 @@ class DailyHarvestSummary {
       itemsCount > 0 && totalSales > 0 && invoiceCount > 0;
 }
 
-/// خدمة إشعار الحصاد اليومي الذكي (داخلي + خارجي + سجل التنبيهات).
+/// خدمة إشعار ملخص المبيعات اليومية (داخلي + خارجي + سجل التنبيهات).
 class DailyHarvestService {
   DailyHarvestService._();
+
+  static const String kLastShownPrefsKey = 'daily_sales_summary.last_shown_date';
 
   static String formatDateKey(DateTime dt) =>
       '${dt.year.toString().padLeft(4, '0')}-'
@@ -77,28 +80,25 @@ class DailyHarvestService {
     }
 
     final scopeLabel = isManager ? 'مبيعات اليوم' : 'حصيلة مبيعاتك اليوم';
+    const unifiedTitle = 'إجمالي مبيعاتك اليومية';
     switch (level) {
       case DailyHarvestLevel.high:
         return (
           level,
-          isManager
-              ? 'حصاد اليوم المميز للمنشأة'
-              : 'حصادك اليومي المميز',
-          'ما شاء الله! يوم مميز ومبارك؛ وصلت $scopeLabel إلى $formattedAmount عبر $invoiceCount عملية.. خطوة رائعة نحو مزيد من النجاح والبركة!',
+          unifiedTitle,
+          'إنجاز يومي مميز؛ وصلت $scopeLabel إلى $formattedAmount عبر $invoiceCount عملية.. خطوة رائعة نحو مزيد من النجاح والتقدم!',
         );
       case DailyHarvestLevel.good:
         return (
           level,
-          isManager
-              ? 'حصاد اليوم المبارك للمنشأة'
-              : 'حصادك اليومي المبارك',
-          'حصاد طيب ومبارك! تحققت اليوم مبيعات بقيمة $formattedAmount عبر $invoiceCount عملية.. استمرارية ممتازة وجهد مثمر، بارك الله في رزقكم!',
+          unifiedTitle,
+          'أداء يومي ممتاز؛ تحققت اليوم مبيعات بقيمة $formattedAmount عبر $invoiceCount عملية.. استمرارية متميزة وجهد مثمر!',
         );
       case DailyHarvestLevel.calm:
         return (
           level,
-          isManager ? 'ملخص حصاد اليوم' : 'ملخص حصادك اليومي',
-          'بداية طيبة بحصيلة مبيعات بلغت $formattedAmount اليوم عبر $invoiceCount عملية.. كل عملية هي مكسب وثقة جديدة، وغداً يوم أجمل وأوسع رزقاً بإذن الله!',
+          unifiedTitle,
+          'ملخص مبيعات اليوم بلغ $formattedAmount عبر $invoiceCount عملية.. كل عملية هي مكسب وثقة جديدة نحو غدٍ أكثر نجاحاً!',
         );
     }
   }
@@ -324,18 +324,34 @@ class DailyHarvestService {
     DateTime? date,
     bool force = false,
     bool? isManagerOverride,
+    bool enforceEndOfDay = false,
   }) async {
+    final target = date ?? DateTime.now();
+    // عند التفعيل التلقائي من الواجهة (enforceEndOfDay = true): لا تظهر إلا في نهاية اليوم (بعد الساعة 6 مساءً)
+    if (enforceEndOfDay && !force && target.hour < 18) {
+      return null;
+    }
+
     final summary = await evaluate(
       repo,
-      date: date,
+      date: target,
       isManagerOverride: isManagerOverride,
     );
     if (!summary.shouldShow) return null;
 
     final roleKey = summary.isManager ? 'manager' : 'member';
     final settingKey = 'daily_harvest.shown.${summary.dateKey}.$roleKey';
+    final prefsKey = '$kLastShownPrefsKey.$roleKey';
 
     if (!force) {
+      try {
+        final prefs = await SharedPreferences.getInstance();
+        if (prefs.getString(prefsKey) == summary.dateKey) {
+          return null;
+        }
+      } catch (e) {
+        debugPrint('DailyHarvestService.checkAndNotify prefs read error: $e');
+      }
       try {
         final already = await repo.getSetting(settingKey);
         if (already == '1') return null;
@@ -353,6 +369,8 @@ class DailyHarvestService {
         entityId: summary.dateKey,
       );
       await repo.setSetting(settingKey, '1');
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(prefsKey, summary.dateKey);
     } catch (e) {
       debugPrint('DailyHarvestService.checkAndNotify notify error: $e');
     }
@@ -460,7 +478,7 @@ class DailyHarvestService {
                     ),
                     onPressed: () => Navigator.of(ctx).pop(),
                     child: const Text(
-                      'الحمد لله، إغلاق',
+                      'إغلاق',
                       style: TextStyle(fontWeight: FontWeight.w800),
                     ),
                   ),

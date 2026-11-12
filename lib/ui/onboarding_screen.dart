@@ -20,6 +20,7 @@ import '../core/app_error_mapper.dart';
 import '../core/cloud_config.dart';
 import '../core/device_names.dart';
 import '../core/l10n.dart';
+import '../core/security.dart';
 import '../core/sfx.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
@@ -318,6 +319,147 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     }
   }
 
+  /// بوابة أمان إلزامية قبل فتح أو حذف منشأة محفوظة على الجهاز:
+  /// تطلب بصمة الجهاز/قفل الشاشة أولاً (إن كانت متاحة)، أو كلمة مرور المنشأة.
+  Future<bool> _authenticateForSavedWorkspaceAction(
+    WorkspaceInfo ws, {
+    required String reason,
+  }) async {
+    try {
+      if (await Security.biometricsAvailable()) {
+        final ok = await Security.authenticate(reason: reason);
+        if (ok) return true;
+      }
+    } catch (e) {
+      debugPrint('biometricsAvailable/authenticate warning: $e');
+    }
+
+    if (!mounted) return false;
+    final pwCtrl = TextEditingController();
+    String? errText;
+    bool busyCheck = false;
+
+    final verified = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (dctx) => StatefulBuilder(
+        builder: (ctx, setDialogState) => AlertDialog(
+          title: Text(reason, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w800)),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Text(
+                'المنشأة: ${ws.storeName}',
+                style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
+              ),
+              const SizedBox(height: 10),
+              TextField(
+                controller: pwCtrl,
+                obscureText: true,
+                autofocus: true,
+                decoration: InputDecoration(
+                  labelText: AppLocalizations.of(context).passwordLabel,
+                  errorText: errText,
+                  prefixIcon: const Icon(Icons.lock_outline_rounded),
+                ),
+              ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: busyCheck ? null : () => Navigator.of(dctx).pop(false),
+              child: Text(AppLocalizations.of(context).cancelBtn),
+            ),
+            FilledButton(
+              onPressed: busyCheck
+                  ? null
+                  : () async {
+                      final pw = pwCtrl.text.trim();
+                      if (pw.length < 4) {
+                        setDialogState(() {
+                          errText = 'يرجى إدخال كلمة المرور الصحيحة';
+                        });
+                        return;
+                      }
+                      setDialogState(() {
+                        busyCheck = true;
+                        errText = null;
+                      });
+                      try {
+                        final localOk =
+                            await AccountWorkspace.verifyLocalWorkspacePassword(
+                          ws.workspaceId,
+                          pw,
+                        );
+                        if (localOk == true) {
+                          if (dctx.mounted) Navigator.of(dctx).pop(true);
+                          return;
+                        }
+                        if (localOk == false) {
+                          setDialogState(() {
+                            busyCheck = false;
+                            errText = AppLocalizations.of(context).errInvalidCredentials;
+                          });
+                          return;
+                        }
+
+                        // في حال عدم وجود بصمة كلمة مرور محلية بعد، نتحقق سحابياً
+                        final repo = ref.read(repoProvider);
+                        final st = await repo.settings();
+                        final backendUrl = effectiveBackendUrl(st['cloudBackendUrl']);
+                        final authIdentity = ws.ownerEmail.isNotEmpty
+                            ? ws.ownerEmail
+                            : ws.phone;
+                        if (ws.ownerEmail.contains('@')) {
+                          try {
+                            await FirebaseAuthRest.signInWithEmailPassword(
+                              email: ws.ownerEmail,
+                              password: pw,
+                            );
+                            if (dctx.mounted) Navigator.of(dctx).pop(true);
+                            return;
+                          } catch (_) {}
+                        }
+                        if (backendUrl.isNotEmpty && authIdentity.isNotEmpty) {
+                          final cloudMatch =
+                              await AccountWorkspace.verifyWorkspacePasswordInCloud(
+                            backendUrl: backendUrl,
+                            emailOrPhone: authIdentity,
+                            password: pw,
+                          );
+                          if (cloudMatch != null) {
+                            if (dctx.mounted) Navigator.of(dctx).pop(true);
+                            return;
+                          }
+                        }
+                        setDialogState(() {
+                          busyCheck = false;
+                          errText = AppLocalizations.of(context).errInvalidCredentials;
+                        });
+                      } catch (e) {
+                        setDialogState(() {
+                          busyCheck = false;
+                          errText = AppLocalizations.of(context).errInvalidCredentials;
+                        });
+                      }
+                    },
+              child: busyCheck
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Text('تأكيد'),
+            ),
+          ],
+        ),
+      ),
+    );
+    pwCtrl.dispose();
+    return verified == true;
+  }
+
   /// فتح منشأة محفوظة مسبقاً على هذا الجهاز مباشرة بقاعدة بياناتها المعزولة.
   Future<void> _openSavedDeviceWorkspace(
     WorkspaceInfo ws, {
@@ -325,6 +467,13 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   }) async {
     if (_busy && !fromInternalFlow) return;
     Sfx.click();
+    if (!fromInternalFlow) {
+      final authed = await _authenticateForSavedWorkspaceAction(
+        ws,
+        reason: 'تأكيد الهوية للدخول إلى المنشأة',
+      );
+      if (!authed || !mounted) return;
+    }
     setState(() => _busy = true);
     try {
       final repo = ref.read(repoProvider);
@@ -377,6 +526,11 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   Future<void> _deleteSavedDeviceWorkspace(WorkspaceInfo ws) async {
     if (_busy) return;
     Sfx.click();
+    final authed = await _authenticateForSavedWorkspaceAction(
+      ws,
+      reason: 'تأكيد الهوية لحذف المنشأة',
+    );
+    if (!authed || !mounted) return;
     final confirmed = await confirmDialog(
       context,
       title: 'حذف المنشأة نهائياً',
@@ -806,33 +960,50 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
     });
 
     try {
-      // 1) فحص فوري للمنشآت المحفوظة محلياً على الجهاز لنفس البريد الإلكتروني
-      if (isEmailInput) {
-        try {
-          final localMatches =
-              await AccountWorkspace.findLocalWorkspacesOnDevice(
-            filterEmail: email,
+      // 1) فحص المنشآت المحفوظة محلياً لنفس البريد الإلكتروني أو رقم الهاتف مع التحقق الصارم من كلمة المرور
+      WorkspaceInfo? localCandidate;
+      try {
+        final localMatches =
+            await AccountWorkspace.findLocalWorkspacesOnDevice(
+          filterEmail: rawInput,
+        );
+        if (localMatches.isNotEmpty) {
+          localCandidate = localMatches.first;
+          final localPwValid =
+              await AccountWorkspace.verifyLocalWorkspacePassword(
+            localCandidate.workspaceId,
+            password,
           );
-          if (localMatches.isNotEmpty) {
+          if (localPwValid == true) {
             await _openSavedDeviceWorkspace(
-              localMatches.first,
+              localCandidate,
               fromInternalFlow: true,
             );
             return;
           }
-        } catch (e) {
-          debugPrint('findLocalWorkspacesOnDevice warning: $e');
+          if (localPwValid == false) {
+            if (!mounted) return;
+            setState(
+              () => _authError = AppLocalizations.of(context).errInvalidCredentials,
+            );
+            Sfx.error();
+            return;
+          }
         }
+      } catch (e) {
+        debugPrint('findLocalWorkspacesOnDevice warning: $e');
       }
 
       final repo = ref.read(repoProvider);
       final st0 = await repo.settings();
       final backendUrl = effectiveBackendUrl(st0['cloudBackendUrl']);
 
-      // 2) المصادقة الرسمية عبر Firebase Auth أولاً (المسار الأساسي دائمًا).
+      // 2) المصادقة الرسمية عبر Firebase Auth أولاً (يدعم البريد الإلكتروني أو رقم الهاتف المرتبط).
       String authEmail = isEmailInput
           ? email
-          : AccountWorkspace.internalEmailForPhone(rawInput);
+          : (localCandidate != null && localCandidate.ownerEmail.contains('@')
+              ? localCandidate.ownerEmail.toLowerCase()
+              : AccountWorkspace.internalEmailForPhone(rawInput));
       if (!isEmailInput && backendUrl.isNotEmpty) {
         try {
           final found =

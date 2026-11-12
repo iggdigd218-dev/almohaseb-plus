@@ -72,8 +72,9 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
     // (2026-09-22) التحكم يظهر حسب صلاحية العضو: التعديل/الأرشفة
     // بإذن تعديل العمليات، والحذف النهائي بإذن الحذف — المدير يرى الكل.
     final me = ref.watch(currentUserProvider).valueOrNull;
-    final canEdit = me == null || me.can('edit_tx');
-    final canDelete = me == null || me.can('delete_tx');
+    final isOwner = ref.watch(isOwnerProvider).valueOrNull ?? false;
+    final canEdit = isOwner || me == null || me.can('edit_tx');
+    final canDelete = isOwner || (me?.can('delete_tx') ?? true);
     final cachedAccount = _latestAccount ??
         ref
             .watch(allAccountsProvider)

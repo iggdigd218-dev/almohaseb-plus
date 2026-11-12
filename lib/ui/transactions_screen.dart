@@ -1154,17 +1154,20 @@ class _TxCard extends ConsumerWidget {
               subtitle: const Text('معاينة وإعادة التوليد'),
               onTap: () => Navigator.pop(context, 'image'),
             ),
-            ListTile(
-              leading: Icon(
-                Icons.delete_outline,
-                color: AppColors.dangerOf(context),
+            if (ref.read(isOwnerProvider).valueOrNull == true ||
+                (ref.read(currentUserProvider).valueOrNull?.can('delete_tx') ??
+                    true))
+              ListTile(
+                leading: Icon(
+                  Icons.delete_outline,
+                  color: AppColors.dangerOf(context),
+                ),
+                title: Text(
+                  'حذف العملية',
+                  style: TextStyle(color: AppColors.dangerOf(context)),
+                ),
+                onTap: () => Navigator.pop(context, 'delete'),
               ),
-              title: Text(
-                'حذف العملية',
-                style: TextStyle(color: AppColors.dangerOf(context)),
-              ),
-              onTap: () => Navigator.pop(context, 'delete'),
-            ),
             const SizedBox(height: 8),
           ],
         ),
