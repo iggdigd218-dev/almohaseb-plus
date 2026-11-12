@@ -11,6 +11,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../core/device_names.dart';
+import '../core/l10n.dart';
 import '../core/models.dart';
 import '../core/theme.dart';
 import '../core/sfx.dart';
@@ -80,10 +81,10 @@ class _State extends ConsumerState<GroupManagementScreen> {
       error: (e, _) => Scaffold(
         appBar: widget.embedded
             ? null
-            : AppBar(title: const Text('إدارة المجموعة')),
+            : AppBar(title: Text(context.tr('إدارة المجموعة'))),
         body: EmptyState(
           icon: Icons.error_outline,
-          title: 'خطأ',
+          title: context.tr('خطأ'),
           message: '$e',
         ),
       ),
@@ -101,20 +102,20 @@ class _State extends ConsumerState<GroupManagementScreen> {
           return Scaffold(
             appBar: widget.embedded
                 ? null
-                : AppBar(title: const Text('إدارة المجموعة')),
-            body: const EmptyState(
+                : AppBar(title: Text(context.tr('إدارة المجموعة'))),
+            body: EmptyState(
               icon: Icons.block,
-              title: 'غير مصرّح',
-              message:
-                  'هذه الشاشة للمدير (مالك المجموعة) أو وكيل المدير فقط.\nاطلب من المدير منحك صلاحية إدارة المستخدمين.',
+              title: context.tr('غير مصرّح'),
+              message: context.tr(
+                'هذه الشاشة للمدير (مالك المجموعة) أو وكيل المدير فقط.\nاطلب من المدير منحك صلاحية إدارة المستخدمين.',
+              ),
             ),
           );
         }
         final actionRow = [
           const Center(child: SeatUsageBadge()),
-          // (3.98.34) «ربط جهاز جديد» انتقل من الزر العائم إلى شريط العنوان.
           IconButton(
-            tooltip: 'ربط جهاز جديد',
+            tooltip: context.tr('ربط جهاز جديد'),
             icon: const Icon(Icons.qr_code_2),
             onPressed: () async {
               if (await _ensureGoogleLinked(context) && context.mounted) {
@@ -128,7 +129,7 @@ class _State extends ConsumerState<GroupManagementScreen> {
           appBar: widget.embedded
               ? null
               : AppBar(
-                  title: const Text('أجهزة وأعضاء المجموعة'),
+                  title: Text(context.tr('أجهزة وأعضاء المجموعة')),
                   actions: actionRow,
                 ),
           body: widget.embedded
@@ -151,10 +152,10 @@ class _State extends ConsumerState<GroupManagementScreen> {
                           Icon(Icons.hub_outlined,
                               size: 18, color: AppColors.primaryOf(context)),
                           const SizedBox(width: 8),
-                          const Expanded(
+                          Expanded(
                             child: Text(
-                              'أجهزة وأعضاء المجموعة',
-                              style: TextStyle(
+                              context.tr('أجهزة وأعضاء المجموعة'),
+                              style: const TextStyle(
                                 fontSize: 14,
                                 fontWeight: FontWeight.w800,
                               ),
@@ -428,12 +429,12 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                                             ? syncedOwner
                                             : (rawOwn.isNotEmpty && isCustomDeviceName(rawOwn)
                                                 ? rawOwn
-                                                : 'المدير'))
+                                                : context.tr('المدير')))
                                         : (rawOwn.isNotEmpty && isCustomDeviceName(rawOwn)
                                             ? rawOwn
                                             : (rawOwn.isNotEmpty
                                                 ? rawOwn
-                                                : 'جهاز وكيل المدير'));
+                                                : context.tr('جهاز وكيل المدير')));
                                     final badge = Container(
                                       padding: const EdgeInsets.symmetric(
                                           horizontal: 8, vertical: 2),
@@ -444,7 +445,9 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                                         borderRadius: BorderRadius.circular(12),
                                       ),
                                       child: Text(
-                                        amITheOwner ? 'المالك 👑' : 'الوكيل 🛡️',
+                                        amITheOwner
+                                            ? context.tr('المالك 👑')
+                                            : context.tr('الوكيل 🛡️'),
                                         style: const TextStyle(
                                           color: Colors.white,
                                           fontSize: 11,
@@ -508,7 +511,9 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                     children: [
                       Expanded(
                         child: Text(
-                          'أجهزة الأعضاء المرتبطة (${memberDevices.length})',
+                          context.tr(
+                            'أجهزة الأعضاء المرتبطة (${memberDevices.length})',
+                          ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                           style: const TextStyle(
@@ -540,14 +545,16 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                             Icon(Icons.devices_other,
                                 size: 44, color: Colors.grey.shade400),
                             const SizedBox(height: 10),
-                            const Text(
-                              'لا توجد أجهزة أعضاء مرتبطة بعد',
-                              style: TextStyle(
+                            Text(
+                              context.tr('لا توجد أجهزة أعضاء مرتبطة بعد'),
+                              style: const TextStyle(
                                   fontWeight: FontWeight.bold, fontSize: 14),
                             ),
                             const SizedBox(height: 6),
                             Text(
-                              'اضغط على زر "إضافة جهاز جديد" أدناه لربط أجهزة الموظفين والكاشير عبر رمز QR أو PIN',
+                              context.tr(
+                                'اضغط على زر "إضافة جهاز جديد" أدناه لربط أجهزة الموظفين والكاشير عبر رمز QR أو PIN',
+                              ),
                               textAlign: TextAlign.center,
                               style: TextStyle(
                                   fontSize: 12, color: Colors.grey.shade600),
@@ -765,16 +772,20 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                         onExpel: () async {
                           final ok = await confirmDialog(
                             context,
-                            title: 'إزالة من المجموعة',
+                            title: context.tr('إزالة من المجموعة'),
                             message:
                                 'سيتم إخراج "${d['name']}" من المجموعة فوراً وإلغاء ارتباطه السحابي والمحلي (ويمكنك إعادة إضافته مستقبلاً في أي وقت).',
-                            confirmText: 'إخراج العضو',
+                            confirmText: context.tr('إخراج العضو'),
                             danger: true,
                           );
                           if (ok == true) {
                             try {
                               final targetDevId = d['id'] as String;
                               await repo.expelDevice(targetDevId);
+                              if (mounted) {
+                                ref.invalidate(devicesProvider);
+                              }
+                              safeBump();
                               try {
                                 final stExpel = await repo.settings();
                                 final bUrl = effectiveBackendUrl(
@@ -794,13 +805,20 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                                   reason: 'removed_by_manager',
                                 );
                                 await engine.broadcastRosterChange();
-                              } catch (_) {}
+                              } catch (e) {
+                                debugPrint('Cloud expel broadcast warning: $e');
+                              }
                               Sfx.success();
+                              if (mounted) {
+                                ref.invalidate(devicesProvider);
+                              }
                               safeBump();
                               if (context.mounted) {
                                 showSnack(
                                   context,
-                                  '✅ تمت إزالة العضو من المجموعة فوراً.',
+                                  context.tr(
+                                    '✅ تمت إزالة العضو من المجموعة فوراً.',
+                                  ),
                                 );
                               }
                             } catch (e) {
@@ -809,7 +827,7 @@ class _DevicesTabState extends ConsumerState<_DevicesTab> {
                               if (context.mounted) {
                                 showSnack(
                                   context,
-                                  'تعذّر إزالة العضو: $e',
+                                  '${context.tr('تعذّر إزالة العضو')}: $e',
                                   error: true,
                                 );
                               }
@@ -864,19 +882,18 @@ class _PairHubSheetState extends ConsumerState<_PairHubSheet> {
             ),
             const SizedBox(height: 14),
             Text(
-              'ربط جهاز أو حساب جديد',
+              context.tr('ربط جهاز أو حساب جديد'),
               textAlign: TextAlign.center,
               style: Theme.of(context).textTheme.titleLarge,
             ),
             const SizedBox(height: 16),
-            // (دفعة 58) الاقتران سحابي حصرياً — أزيلت طرق LAN (QR بعنوان IP،
-            // الإدخال اليدوي IP+منفذ، كود التفعيل المحلي) نهائياً.
             _HubTile(
               icon: Icons.cloud_sync_outlined,
               color: const Color(0xFF0EA5E9),
-              title: 'ربط عضو عبر السحابة',
-              subtitle:
-                  'يُنشئ دعوة سحابية (QR + رمز PIN صالح 15 دقيقة) — يمسحها العضو أو يُدخل الرمز، وبعد موافقتك تُستبدل بياناته بنسخة المجموعة.',
+              title: context.tr('ربط عضو عبر السحابة'),
+              subtitle: context.tr(
+                'يُنشئ دعوة سحابية (QR + رمز PIN صالح 15 دقيقة) — يمسحها العضو أو يُدخل الرمز، وبعد موافقتك تُستبدل بياناته بنسخة المجموعة.',
+              ),
               onTap: () {
                 final rootContext =
                     Navigator.of(context, rootNavigator: true).context;

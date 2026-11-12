@@ -4,6 +4,7 @@ import 'package:printing/printing.dart';
 
 import '../core/accounting.dart';
 import '../core/format.dart';
+import '../core/l10n.dart';
 import '../core/models.dart';
 import '../core/thermal_invoice_doc.dart';
 import '../core/theme.dart';
@@ -36,7 +37,7 @@ class TransactionsScreen extends ConsumerWidget {
               child: FilledButton.icon(
                 onPressed: () => openTxForm(context, ref),
                 icon: const Icon(Icons.add, size: 18),
-                label: const Text('إضافة عملية'),
+                label: Text(context.tr('إضافة عملية')),
               ),
             ),
           ),
@@ -44,15 +45,15 @@ class TransactionsScreen extends ConsumerWidget {
           child: page.when(
             skipLoadingOnReload: true,
             skipLoadingOnRefresh: true,
-            loading: () => const Center(
+            loading: () => Center(
               child: Padding(
-                padding: EdgeInsets.all(24),
+                padding: const EdgeInsets.all(24),
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    CircularProgressIndicator(),
-                    SizedBox(height: 12),
-                    Text('جارٍ تحميل العمليات…'),
+                    const CircularProgressIndicator(),
+                    const SizedBox(height: 12),
+                    Text(context.tr('جارٍ تحميل العمليات…')),
                   ],
                 ),
               ),
@@ -65,7 +66,7 @@ class TransactionsScreen extends ConsumerWidget {
                   children: [
                     EmptyState(
                       icon: Icons.error_outline,
-                      title: 'تعذّر تحميل العمليات',
+                      title: context.tr('تعذّر تحميل العمليات'),
                       message:
                           '$e'.length > 200 ? '${'$e'.substring(0, 200)}…' : '$e',
                     ),
@@ -73,7 +74,7 @@ class TransactionsScreen extends ConsumerWidget {
                     FilledButton.icon(
                       onPressed: () => bump(ref),
                       icon: const Icon(Icons.refresh),
-                      label: const Text('إعادة المحاولة'),
+                      label: Text(context.tr('إعادة المحاولة')),
                     ),
                   ],
                 ),
@@ -83,13 +84,13 @@ class TransactionsScreen extends ConsumerWidget {
               if (p.items.isEmpty) {
                 return EmptyState(
                   icon: Icons.receipt_long_outlined,
-                  title: 'لا توجد عمليات مطابقة',
-                  message: 'غيّر معايير البحث أو سجّل عملية جديدة.',
+                  title: context.tr('لا توجد عمليات مطابقة'),
+                  message: context.tr('غيّر معايير البحث أو سجّل عملية جديدة.'),
                   action: canAdd
                       ? FilledButton.icon(
                           onPressed: () => openTxForm(context, ref),
                           icon: const Icon(Icons.add),
-                          label: const Text('إضافة عملية'),
+                          label: Text(context.tr('إضافة عملية')),
                         )
                       : null,
                 );
@@ -171,7 +172,7 @@ class _TxFilterBarState extends ConsumerState<_TxFilterBar> {
           TextField(
             controller: _q,
             decoration: InputDecoration(
-              hintText: 'بحث بالبيان أو المرجع أو الحساب...',
+              hintText: context.tr('بحث بالبيان أو المرجع أو الحساب...'),
               prefixIcon: const Icon(Icons.search),
               isDense: true,
               suffixIcon: f.query.isEmpty
@@ -187,18 +188,14 @@ class _TxFilterBarState extends ConsumerState<_TxFilterBar> {
             onChanged: (v) => _set(f.copyWith(query: v)),
           ),
           const SizedBox(height: 8),
-          // صف مدمج: زر «تصفية» واحد يفتح كل خيارات الفلترة في نافذة سفلية،
-          // مع عدد الفلاتر النشطة وزر مسح — بدل صف أزرار مزدحم.
           Row(
             children: [
               Expanded(
                 child: OutlinedButton.icon(
-                  // 🔒 البحث المتقدم ميزة مدفوعة — يبقى الزر ظاهراً
-                  // ويقود لشاشة الشراء عند القفل.
                   onPressed: () async {
                     final ok = await ensureFeatureUnlocked(context, ref,
                         featureKey: 'advanced_search',
-                        featureName: 'البحث الشامل المتقدم',
+                        featureName: context.tr('البحث الشامل المتقدم'),
                         description:
                             'فلترة عميقة بالحساب والعملة والنوع والفترة '
                             'الزمنية للوصول لأي عملية في ثوانٍ.');
@@ -213,8 +210,8 @@ class _TxFilterBarState extends ConsumerState<_TxFilterBar> {
                   ),
                   label: Text(
                     f.isActive
-                        ? 'الفلاتر مفعّلة (${_activeCount(f)}) — اضغط للتعديل'
-                        : 'تصفية وبحث متقدّم',
+                        ? '${context.tr('الفلاتر مفعّلة')} (${_activeCount(f)})'
+                        : context.tr('تصفية وبحث متقدّم'),
                     style: TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w700,
@@ -242,7 +239,7 @@ class _TxFilterBarState extends ConsumerState<_TxFilterBar> {
               if (f.isActive) ...[
                 const SizedBox(width: 8),
                 IconButton(
-                  tooltip: 'مسح كل الفلاتر',
+                  tooltip: context.tr('مسح كل الفلاتر'),
                   icon: const Icon(Icons.filter_alt_off_outlined, size: 20),
                   color: AppColors.dangerOf(context),
                   onPressed: () {
@@ -331,7 +328,6 @@ class _TxFilterBarState extends ConsumerState<_TxFilterBar> {
       context: context,
       firstDate: DateTime(2015),
       lastDate: DateTime(2100),
-      locale: const Locale('ar'),
       initialDateRange: f.from != null && f.to != null
           ? DateTimeRange(start: f.from!, end: f.to!)
           : null,
@@ -502,7 +498,10 @@ class _SheetList extends StatelessWidget {
         children: [
           Padding(
             padding: const EdgeInsets.all(16),
-            child: Text(title, style: Theme.of(context).textTheme.titleMedium),
+            child: Text(
+              context.tr(title),
+              style: Theme.of(context).textTheme.titleMedium,
+            ),
           ),
           const Divider(height: 1),
           Flexible(
@@ -510,7 +509,7 @@ class _SheetList extends StatelessWidget {
               shrinkWrap: true,
               itemCount: items.length,
               itemBuilder: (context, i) => ListTile(
-                title: Text(items[i].label),
+                title: Text(context.tr(items[i].label)),
                 onTap: () => Navigator.pop(context, items[i].value),
               ),
             ),
@@ -601,7 +600,8 @@ class _Totals extends ConsumerWidget {
                 children: [
                   Expanded(
                     child: StatCard(
-                      title: 'وارد ($code) • ${period.label}',
+                      title:
+                          '${context.tr('وارد')} ($code) • ${context.tr(period.label)}',
                       value: hidden
                           ? '••••'
                           : Fmt.money(page.inflowByCurrency[code] ?? 0),
@@ -613,7 +613,8 @@ class _Totals extends ConsumerWidget {
                   const SizedBox(width: 10),
                   Expanded(
                     child: StatCard(
-                      title: 'صادر ($code) • ${period.label}',
+                      title:
+                          '${context.tr('صادر')} ($code) • ${context.tr(period.label)}',
                       value: hidden
                           ? '••••'
                           : Fmt.money(page.outflowByCurrency[code] ?? 0),
@@ -629,7 +630,7 @@ class _Totals extends ConsumerWidget {
           Row(
             children: [
               Text(
-                '${page.items.length} عملية',
+                context.tr('${page.items.length} عملية'),
                 style: TextStyle(
                   fontSize: 12.5,
                   fontWeight: FontWeight.w700,
@@ -653,7 +654,7 @@ class _Totals extends ConsumerWidget {
                       ),
                       const SizedBox(width: 4),
                       Text(
-                        'الفترة: ${period.label}',
+                        '${context.tr('الفترة')}: ${context.tr(period.label)}',
                         style: TextStyle(
                           fontSize: 12,
                           fontWeight: FontWeight.w700,
@@ -702,26 +703,24 @@ class _TxCard extends ConsumerWidget {
       _ => AppColors.violetOf(context),
     };
 
-    // (المتطلب 1) عرض «عميل نقدي» بدلاً من الشرطة «—» عندما لا ترتبط العملية بحساب عميل مسجل.
+    final cashCustomer = context.tr('عميل نقدي');
     final title = isTransfer
-        ? '${account?.name.trim().isNotEmpty == true ? account!.name : 'عميل نقدي'}  ←  ${toAccount?.name.trim().isNotEmpty == true ? toAccount!.name : 'عميل نقدي'}'
+        ? '${account?.name.trim().isNotEmpty == true ? account!.name : cashCustomer}  ←  ${toAccount?.name.trim().isNotEmpty == true ? toAccount!.name : cashCustomer}'
         : (account?.name.trim().isNotEmpty == true
             ? account!.name
-            : 'عميل نقدي');
+            : cashCustomer);
 
-    // (المتطلب 7-د) تلوين متناوب للبطاقات بين الأبيض والتركواز الفاتح الهادئ.
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final cardBg = index.isEven
         ? (isDark ? const Color(0xFF1E293B) : Colors.white)
         : (isDark ? const Color(0xFF132A2E) : const Color(0xFFE6F7F5));
 
-    // (المتطلب 3) ملخص الأصناف (أول صنفين + +N) أو البيان بجانب اسم المنفّذ.
     final hasItemsSummary = itemsSummary.trim().isNotEmpty;
     final detailsLine = hasItemsSummary
         ? itemsSummary.trim()
         : (tx.description.trim().isNotEmpty
             ? tx.description.trim()
-            : tx.type.label);
+            : context.tr(tx.type.label));
     final cleanExecutor = executorName.trim();
 
     return Card(
@@ -844,7 +843,7 @@ class _TxCard extends ConsumerWidget {
                     style: TextStyle(
                       fontWeight: FontWeight.w800,
                       fontSize: 15.5,
-                      color: color,
+                      color: AppColors.textOf(context),
                     ),
                   ),
                   const SizedBox(height: 2),

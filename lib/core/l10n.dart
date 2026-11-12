@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 /// - `AppLocalizations.of(context)` للوصول السريع للنصوص المترجمة.
 /// - `tr(context, ar, en)` و `context.tr(ar, en)` لترجمة أي نص ثنائي اللغة مباشرةً.
 /// - قاموس ترجمة شامل لعناوين الشاشات، القوائم، الأزرار، والإعدادات.
+typedef L10n = AppLocalizations;
+
 class AppLocalizations {
   final Locale locale;
   const AppLocalizations(this.locale);
@@ -35,8 +37,35 @@ class AppLocalizations {
   String text(String ar, [String? en]) {
     if (!isEn) return ar;
     if (en != null && en.isNotEmpty) return en;
-    return _arToEnDictionary[ar] ?? ar;
+    final direct = _arToEnDictionary[ar];
+    if (direct != null) return direct;
+    final trimmed = ar.trim();
+    final trimmedHit = _arToEnDictionary[trimmed];
+    if (trimmedHit != null) return trimmedHit;
+    if (trimmed.startsWith('المنشأة: ')) {
+      return 'Workspace: ${trimmed.substring('المنشأة: '.length)}';
+    }
+    if (trimmed.startsWith('تصفية وفرز: ')) {
+      final rest = trimmed.substring('تصفية وفرز: '.length);
+      return 'Filter & Sort: ${_arToEnDictionary[rest] ?? rest}';
+    }
+    if (trimmed.startsWith('أجهزة الأعضاء المرتبطة')) {
+      return trimmed.replaceFirst(
+        'أجهزة الأعضاء المرتبطة',
+        'Linked Member Devices',
+      );
+    }
+    if (trimmed.startsWith('طلبات الانضمام المعلقة')) {
+      return trimmed.replaceFirst(
+        'طلبات الانضمام المعلقة',
+        'Pending Join Requests',
+      );
+    }
+    return ar;
   }
+
+  /// اختصار مباشر لترجمة النصوص الثنائية (ar, en).
+  String tr(String ar, [String? en]) => text(ar, en);
 
   // ───────── النصوص الأساسية ─────────
   String get appTitle => isEn ? 'Al-Mohaseb' : 'المحاسب';
@@ -107,14 +136,24 @@ class AppLocalizations {
     'فواتير المبيعات': 'Sales Invoices',
     'المخزون والأصناف': 'Inventory & Items',
     'إدارة المخزون': 'Inventory Management',
+    'إدارة المنتجات': 'Products Management',
+    'إدارة المنتجات والأصناف': 'Products & Items Management',
     'تعديلات المخزون': 'Stock Adjustments',
     'العملاء': 'Customers',
     'الحسابات': 'Accounts',
     'الموردون': 'Suppliers',
+    'الديون': 'Debts',
+    'المبيعات': 'Sales',
+    'المعاملات': 'Transactions',
     'العمليات': 'Transactions',
     'الحركات': 'Transactions',
     'عملية': 'New Op',
     'عملية جديدة': 'New Transaction',
+    'إضافة عملية': 'Add Transaction',
+    'تسجيل عملية مالية': 'Record Financial Transaction',
+    'سند قبض / صرف': 'Receipt / Payment Voucher',
+    'حساب جديد': 'New Account',
+    'فتح نقطة البيع': 'Open Point of Sale',
     'السندات': 'Vouchers',
     'التقارير': 'Reports',
     'التنبيهات': 'Alerts',
@@ -122,6 +161,7 @@ class AppLocalizations {
     'الإشعارات': 'Notifications',
     'إدارة المجموعة': 'Group Management',
     'أجهزة وأعضاء المجموعة': 'Group Devices & Members',
+    'أجهزة الأعضاء المرتبطة': 'Linked Member Devices',
     'الأجهزة والربط': 'Devices & Pairing',
     'الإعدادات': 'Settings',
     'حول التطبيق': 'About App',
@@ -133,12 +173,73 @@ class AppLocalizations {
     'النسخ الاحتياطي': 'Backup & Restore',
     'النسخ الاحتياطي (.nexora)': 'Backup & Restore',
     'سلة المحذوفات': 'Recycle Bin',
+    'سلة المهملات': 'Recycle Bin',
     'الإحصائيات المتقدمة': 'Advanced Analytics',
     'الدعم والمساعدة': 'Support & Help',
     'إدارة الحساب والاشتراك': 'Account & Subscription',
     'الملف الشخصي والمنشأة': 'Profile & Workspace',
     'إدارة الموظفين': 'Staff Management',
     'المستخدمون والصلاحيات': 'Users & Permissions',
+    'وضع المحاسبة': 'Accounting Mode',
+    'وضع المبيعات (POS)': 'Sales Mode (POS)',
+    'المبيعات والمنتجات': 'Sales & Products',
+    'الدفاتر والمحاسبة': 'Ledgers & Accounting',
+    'المنشأة والنظام': 'Workspace & System',
+    'التحديثات': 'Updates',
+    'تحديث': 'Update',
+    'اسمك / اسم هذا الجهاز': 'Your Name / This Device Name',
+    'مثال: أحمد — فرع الجملة': 'e.g. Ahmed — Wholesale Branch',
+    'يظهر أعلى الشاشة الرئيسية ولدى بقية أجهزة المجموعة':
+        'Displayed at the top of the home screen and on other group devices',
+    'يرجى إدخال كلمة المرور الصحيحة': 'Please enter the correct password',
+    'لك': 'To You',
+    'عليك': 'You Owe',
+    'اسحب البطاقة يميناً أو يساراً للتنقل بين العملات':
+        'Swipe the card left or right to switch currencies',
+    'تصفية وفرز: كل العملات': 'Filter & Sort: All Currencies',
+    'كل العملات': 'All Currencies',
+    'تصفية وبحث متقدّم': 'Advanced Filter & Search',
+    'تصدير PDF': 'Export PDF',
+    'نسخ CSV': 'Copy CSV',
+    'المالك 👑': 'Owner 👑',
+    'المالك': 'Owner',
+    'الوكيل 🛡️': 'Deputy 🛡️',
+    'الوكيل': 'Deputy',
+    'وكيل': 'Deputy',
+    'مدير': 'Admin',
+    'المدير': 'Admin',
+    'محاسب': 'Accountant',
+    'كاشير': 'Cashier',
+    'موظف إدخال': 'Data Entry',
+    'مشاهد': 'Viewer',
+    'عضو': 'Member',
+    'غائب (غير متصل)': 'Offline (Disconnected)',
+    'متصل سحابياً ☁️': 'Cloud Connected ☁️',
+    'آخر مزامنة ☁️': 'Last Sync ☁️',
+    'آخر ظهور': 'Last Seen',
+    'البصمة': 'Fingerprint',
+    'تعيين الدور والصلاحيات': 'Assign Role & Permissions',
+    'إدارة صلاحيات الجهاز': 'Manage Device Permissions',
+    'تعديل اسم العضو': 'Edit Member Name',
+    'حظر الجهاز': 'Block Device',
+    'إعادة السماح (إلغاء الحظر)': 'Unblock Device (Reinstate)',
+    'إزالة من المجموعة': 'Remove from Group',
+    'حذف نهائي من السجل': 'Permanently Delete from History',
+    'اختيار من المعرض (Gallery)': 'Choose from Gallery',
+    'التقاط صورة (Camera)': 'Take Photo (Camera)',
+    'حذف الصورة الحالية': 'Delete Current Image',
+    'ملخص وتقارير مبيعات نقطة البيع': 'POS Sales Summary & Analytics',
+    'ملخص المبيعات': 'Sales Summary',
+    'ملخص وتقارير المبيعات': 'Sales Summary & Reports',
+    'عدد فواتير البيع': 'Sales Invoices Count',
+    'فواتير المرتجع': 'Return Invoices',
+    'اليوم': 'Today',
+    'هذا الأسبوع': 'This Week',
+    'هذا الشهر': 'This Month',
+    'تحديد نطاق تاريخ مخصص': 'Select Custom Date Range',
+    'الرصيد الحالي': 'Current Balance',
+    'إجمالي عليه': 'Total Debit (Owes)',
+    'إجمالي له': 'Total Credit (Owed)',
     'بيانات المؤسسة': 'Business Profile',
     'الاسم التجاري والنشاط وبيانات التواصل والعنوان':
         'Trade name, business activity, contact info & address',
@@ -200,7 +301,6 @@ class AppLocalizations {
     'مشاركة': 'Share',
     'طباعة': 'Print',
     'معاينة': 'Preview',
-    'إزالة من المجموعة': 'Remove from Group',
     'إخراج العضو': 'Remove Member',
     'هل تريد بالتأكيد تسجيل الخروج من الحساب؟':
         'Are you sure you want to sign out of this account?',

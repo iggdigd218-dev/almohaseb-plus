@@ -7,6 +7,7 @@ import 'package:flutter/services.dart';
 
 import '../core/accounting.dart';
 import '../core/format.dart';
+import '../core/l10n.dart';
 import '../core/models.dart';
 import '../core/pdf_fonts.dart';
 import '../core/theme.dart';
@@ -193,7 +194,7 @@ class _ScopeBar extends ConsumerWidget {
                         const SizedBox(width: 8),
                         Expanded(
                           child: Text(
-                            'تصفية وعرض التقارير',
+                            ctx.tr('تصفية وعرض التقارير'),
                             style: Theme.of(ctx).textTheme.titleMedium?.copyWith(
                                   fontWeight: FontWeight.w800,
                                 ),
@@ -215,13 +216,13 @@ class _ScopeBar extends ConsumerWidget {
                             );
                             Navigator.pop(ctx);
                           },
-                          child: const Text('إعادة ضبط'),
+                          child: Text(ctx.tr('إعادة ضبط')),
                         ),
                       ],
                     ),
                     const Divider(height: 16),
                     Text(
-                      'نوع التقرير والتصنيفات',
+                      ctx.tr('نوع التقرير والتصنيفات'),
                       style: TextStyle(
                         fontSize: 12.5,
                         fontWeight: FontWeight.w800,
@@ -237,7 +238,7 @@ class _ScopeBar extends ConsumerWidget {
                         return ChoiceChip(
                           selected: selected,
                           label: Text(
-                            t.label,
+                            ctx.tr(t.label),
                             style: TextStyle(
                               fontSize: 12.5,
                               fontWeight: selected
@@ -521,7 +522,6 @@ class _ScopeBar extends ConsumerWidget {
                   context: context,
                   firstDate: DateTime(2015),
                   lastDate: DateTime(2100),
-                  locale: const Locale('ar'),
                   initialDateRange: DateTimeRange(start: s.from, end: s.to),
                 );
                 if (r != null) {
@@ -616,8 +616,8 @@ class _ScopeBar extends ConsumerWidget {
                     Flexible(
                       child: Text(
                         activeCount > 0
-                            ? 'تصفية وعرض ($activeCount)'
-                            : 'تصفية وعرض',
+                            ? '${context.tr('تصفية وعرض')} ($activeCount)'
+                            : context.tr('تصفية وعرض'),
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(
@@ -1126,9 +1126,9 @@ class _ReportView extends ConsumerWidget {
             Expanded(
               child: _InteractiveReportCard(
                 cardKey: const ValueKey('report_card_sales'),
-                title: ReportSummaryCard.sales.label,
+                title: context.tr(ReportSummaryCard.sales.label),
                 value: salesVal,
-                subBadge: 'عدد العمليات: $txCount',
+                subBadge: context.tr('عدد العمليات: $txCount'),
                 icon: Icons.point_of_sale_rounded,
                 color: const Color(0xFF10B981),
                 selected: selectedCard == ReportSummaryCard.sales,
@@ -1139,7 +1139,7 @@ class _ReportView extends ConsumerWidget {
             Expanded(
               child: _InteractiveReportCard(
                 cardKey: const ValueKey('report_card_owed_to_us'),
-                title: ReportSummaryCard.owedToUs.label,
+                title: context.tr(ReportSummaryCard.owedToUs.label),
                 value: owedToUsVal,
                 icon: Icons.call_received_rounded,
                 color: const Color(0xFF0284C7),
@@ -1155,7 +1155,7 @@ class _ReportView extends ConsumerWidget {
             Expanded(
               child: _InteractiveReportCard(
                 cardKey: const ValueKey('report_card_owed_by_us'),
-                title: ReportSummaryCard.owedByUs.label,
+                title: context.tr(ReportSummaryCard.owedByUs.label),
                 value: owedByUsVal,
                 icon: Icons.call_made_rounded,
                 color: const Color(0xFFEF4444),
@@ -1167,7 +1167,7 @@ class _ReportView extends ConsumerWidget {
             Expanded(
               child: _InteractiveReportCard(
                 cardKey: const ValueKey('report_card_net'),
-                title: ReportSummaryCard.net.label,
+                title: context.tr(ReportSummaryCard.net.label),
                 value: netVal,
                 icon: Icons.account_balance_wallet_rounded,
                 color: const Color(0xFF7C3AED),
@@ -1230,10 +1230,10 @@ class _ReportView extends ConsumerWidget {
                   const SizedBox(height: 14),
                 ],
                 if (table.rows.isEmpty)
-                  const EmptyState(
+                  EmptyState(
                     icon: Icons.bar_chart_outlined,
-                    title: 'لا بيانات في هذه الفترة',
-                    message: 'وسّع الفترة أو غيّر المرشّحات.',
+                    title: context.tr('لا بيانات في هذه الفترة'),
+                    message: context.tr('وسّع الفترة أو غيّر المرشّحات.'),
                   )
                 else
                   Card(
@@ -1247,7 +1247,7 @@ class _ReportView extends ConsumerWidget {
                             .map(
                               (h) => DataColumn(
                                 label: Text(
-                                  h,
+                                  context.tr(h),
                                   style: const TextStyle(
                                     fontWeight: FontWeight.w800,
                                     fontSize: 12.5,
@@ -1263,7 +1263,7 @@ class _ReportView extends ConsumerWidget {
                                     .map(
                                       (c) => DataCell(
                                         Text(
-                                          c.isEmpty ? '—' : c,
+                                          c.isEmpty ? '—' : context.tr(c),
                                           style:
                                               const TextStyle(fontSize: 12.5),
                                         ),
@@ -1284,8 +1284,6 @@ class _ReportView extends ConsumerWidget {
                         onPressed: table.rows.isEmpty
                             ? null
                             : () async {
-                                // (دفعة 65-ب) التصدير مسموح دائماً —
-                                // الحساب المقيد يُصدّر بختم مائي.
                                 final stamp = await featureNeedsStamp(
                                     ref, Feature.reportsExport);
                                 if (context.mounted) {
@@ -1294,7 +1292,7 @@ class _ReportView extends ConsumerWidget {
                                 }
                               },
                         icon: const Icon(Icons.picture_as_pdf_outlined),
-                        label: const Text('تصدير PDF'),
+                        label: Text(context.tr('تصدير PDF')),
                       ),
                     ),
                     const SizedBox(width: 10),
@@ -1304,7 +1302,7 @@ class _ReportView extends ConsumerWidget {
                             ? null
                             : () => _copyCsv(context, table),
                         icon: const Icon(Icons.table_view_outlined),
-                        label: const Text('نسخ CSV'),
+                        label: Text(context.tr('نسخ CSV')),
                       ),
                     ),
                   ],

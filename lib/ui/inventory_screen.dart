@@ -15,6 +15,7 @@ import 'package:share_plus/share_plus.dart';
 import '../core/format.dart';
 import '../core/category_tree.dart';
 import '../core/icon_catalog.dart';
+import '../core/l10n.dart';
 import '../core/media_paths.dart';
 import '../core/models.dart';
 import '../core/pdf_fonts.dart';
@@ -3714,12 +3715,12 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
     }
   }
 
-  /// اختيار صورة الصنف (معرض الجهاز) — تُضغط بدقة Retina حادة (350×350 بجودة 80٪)
-  /// وتُحفظ كمسار نسبي داخل المستندات لتوحيد صور الأصناف عبر السحابة بحجم خفيف (10–15KB).
-  Future<void> _pickImage() async {
+  /// اختيار صورة الصنف (من المعرض أو الكاميرا) — تُضغط بدقة Retina حادة (350×350 بجودة 80٪)
+  /// وتُحفظ كمسار نسبي داخل المستندات.
+  Future<void> _pickImage([ImageSource source = ImageSource.gallery]) async {
     try {
       final picked = await ImagePicker().pickImage(
-        source: ImageSource.gallery,
+        source: source,
         maxWidth: 350,
         maxHeight: 350,
         imageQuality: 80,
@@ -3730,6 +3731,83 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
         setState(() => _image = rel);
       }
     } catch (_) {}
+  }
+
+  Future<void> _showImageOptionsSheet() async {
+    final hasCurrentImage = (_image ?? '').trim().isNotEmpty;
+    await showModalBottomSheet<void>(
+      context: context,
+      useSafeArea: true,
+      showDragHandle: true,
+      shape: RoundedRectangleBorder(borderRadius: AppRadius.sheetTop),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.fromLTRB(12, 4, 12, 16),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              ListTile(
+                leading: Icon(
+                  Icons.photo_library_outlined,
+                  color: AppColors.primaryOf(ctx),
+                ),
+                title: Text(
+                  L10n.of(ctx).tr(
+                    'اختيار من المعرض (Gallery)',
+                    'Choose from Gallery',
+                  ),
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _pickImage(ImageSource.gallery);
+                },
+              ),
+              ListTile(
+                leading: Icon(
+                  Icons.photo_camera_outlined,
+                  color: AppColors.primaryOf(ctx),
+                ),
+                title: Text(
+                  L10n.of(ctx).tr(
+                    'التقاط صورة (Camera)',
+                    'Take a Photo (Camera)',
+                  ),
+                  style: const TextStyle(fontWeight: FontWeight.w700),
+                ),
+                onTap: () {
+                  Navigator.pop(ctx);
+                  _pickImage(ImageSource.camera);
+                },
+              ),
+              if (hasCurrentImage) ...[
+                const Divider(height: 8),
+                ListTile(
+                  leading: Icon(
+                    Icons.delete_outline_rounded,
+                    color: AppColors.dangerOf(ctx),
+                  ),
+                  title: Text(
+                    L10n.of(ctx).tr(
+                      'حذف الصورة الحالية',
+                      'Delete Current Image',
+                    ),
+                    style: TextStyle(
+                      fontWeight: FontWeight.w800,
+                      color: AppColors.dangerOf(ctx),
+                    ),
+                  ),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    setState(() => _image = '');
+                  },
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
   }
 
   @override
@@ -3966,10 +4044,10 @@ class _ItemFormState extends ConsumerState<_ItemForm> {
                 ),
                 const SizedBox(width: 8),
                 Tooltip(
-                  message: hasImage ? 'تغيير صورة الصنف' : 'إضافة صورة للصنف',
+                  message: hasImage ? 'تغيير أو حذف صورة الصنف' : 'إضافة صورة للصنف',
                   child: InkWell(
                     borderRadius: BorderRadius.circular(11),
-                    onTap: _pickImage,
+                    onTap: _showImageOptionsSheet,
                     child: Container(
                       width: 36,
                       height: 36,

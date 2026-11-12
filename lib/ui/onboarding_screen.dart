@@ -350,7 +350,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Text(
-                'المنشأة: ${ws.storeName}',
+                ctx.tr('المنشأة: ${ws.storeName}', 'Workspace: ${ws.storeName}'),
                 style: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 10),
@@ -378,7 +378,10 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
                       final pw = pwCtrl.text.trim();
                       if (pw.length < 4) {
                         setDialogState(() {
-                          errText = 'يرجى إدخال كلمة المرور الصحيحة';
+                          errText = ctx.tr(
+                            'يرجى إدخال كلمة المرور الصحيحة',
+                            'Please enter the correct password',
+                          );
                         });
                         return;
                       }
