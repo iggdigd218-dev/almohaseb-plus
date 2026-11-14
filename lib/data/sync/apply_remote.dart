@@ -1281,11 +1281,15 @@ extension ApplyRemoteOp on Repo {
 
     final existing = await txn.query(table,
         where: '$primaryKey = ?', whereArgs: [op.entityId], limit: 1);
-    final latest = await txn.query('operations',
-        where: 'entity_type = ? AND entity_id = ?',
-        whereArgs: [op.entityType.name, op.entityId],
-        orderBy: 'version DESC, timestamp DESC',
-        limit: 1);
+    final latest = await txn.query(
+      'operations',
+      where: 'entity_type = ? AND entity_id = ?',
+      whereArgs: [op.entityType.name, op.entityId],
+      orderBy:
+          'COALESCE(NULLIF(CAST(server_time AS INTEGER), 0), 0) DESC, '
+          'version DESC, timestamp DESC, id DESC',
+      limit: 1,
+    );
     final localLatest =
         latest.isEmpty ? null : SyncOperation.fromMap(latest.first);
 
@@ -2013,49 +2017,45 @@ extension ApplyRemoteOp on Repo {
               );
             }
           }
-          // تطبيق فرق الكمية (Delta) عند إدراج حركة مخزون جديدة واردة من جهاز آخر
+          // (S5) تطبيق فرق الكمية (Delta) ذرياً دون ابتلاع الأخطاء حتى تتراجع المعاملة بالكامل عند التعثر
           if (op.entityType == EntityKind.stockMove) {
-            try {
-              final itemId = insertRow['item_id'];
-              final moveId = insertRow['id'] ?? op.entityId;
-              final moveQty = (insertRow['quantity'] as num?)?.toDouble() ?? 0.0;
-              final kindStr = '${insertRow['kind'] ?? 'sale'}'.trim();
-              if (itemId != null && moveQty != 0) {
-                // تُطبَّق حركة المخزون دائماً كفرق تراكمي (Delta) على الرصيد المحلي الحالي،
-                // ولا تُتخطى إلا إذا كان الصنف غير موجود محلياً وأُنشئ لتوّه بلقطة شملت هذه الحركة.
-                final alreadyAppliedByItemOp = _snapshotAppliedMoveIds
-                    .remove('${op.workspaceId}:$moveId');
+            final itemId = insertRow['item_id'];
+            final moveId = insertRow['id'] ?? op.entityId;
+            final moveQty = (insertRow['quantity'] as num?)?.toDouble() ?? 0.0;
+            final kindStr = '${insertRow['kind'] ?? 'sale'}'.trim();
+            if (itemId != null && moveQty != 0) {
+              final alreadyAppliedByItemOp = _snapshotAppliedMoveIds
+                  .remove('${op.workspaceId}:$moveId');
 
-                final itRows = await txn.query(
+              final itRows = await txn.query(
+                'items',
+                columns: ['quantity'],
+                where: 'id = ?',
+                whereArgs: [itemId],
+                limit: 1,
+              );
+              if (itRows.isNotEmpty && !alreadyAppliedByItemOp) {
+                final curQty =
+                    (itRows.first['quantity'] as num?)?.toDouble() ?? 0.0;
+                final double newQty;
+                if (kindStr == 'adjust') {
+                  newQty = moveQty;
+                } else {
+                  final sign = (kindStr == 'purchase' ||
+                          kindStr == 'return' ||
+                          kindStr == 'returnIn')
+                      ? 1.0
+                      : -1.0;
+                  newQty = curQty + sign * moveQty;
+                }
+                await txn.update(
                   'items',
-                  columns: ['quantity'],
+                  {'quantity': newQty, 'updated_at': now},
                   where: 'id = ?',
                   whereArgs: [itemId],
-                  limit: 1,
                 );
-                if (itRows.isNotEmpty && !alreadyAppliedByItemOp) {
-                  final curQty =
-                      (itRows.first['quantity'] as num?)?.toDouble() ?? 0.0;
-                  final double newQty;
-                  if (kindStr == 'adjust') {
-                    newQty = moveQty;
-                  } else {
-                    final sign = (kindStr == 'purchase' ||
-                            kindStr == 'return' ||
-                            kindStr == 'returnIn')
-                        ? 1.0
-                        : -1.0;
-                    newQty = curQty + sign * moveQty;
-                  }
-                  await txn.update(
-                    'items',
-                    {'quantity': newQty, 'updated_at': now},
-                    where: 'id = ?',
-                    whereArgs: [itemId],
-                  );
-                }
               }
-            } catch (_) {}
+            }
           }
         }
         if (op.entityType == EntityKind.user) {
@@ -2104,41 +2104,35 @@ extension ApplyRemoteOp on Repo {
         break;
       case OpKind.delete_:
         if (op.entityType == EntityKind.stockMove && existing.isNotEmpty) {
-          try {
-            final oldMove = existing.first;
-            final itemId = oldMove['item_id'];
-            final moveQty = (oldMove['quantity'] as num?)?.toDouble() ?? 0.0;
-            final kindStr = '${oldMove['kind'] ?? 'sale'}'.trim();
-            if (itemId != null && moveQty != 0 && kindStr != 'adjust') {
-              final itRows = await txn.query(
+          final oldMove = existing.first;
+          final itemId = oldMove['item_id'];
+          final moveQty = (oldMove['quantity'] as num?)?.toDouble() ?? 0.0;
+          final kindStr = '${oldMove['kind'] ?? 'sale'}'.trim();
+          if (itemId != null && moveQty != 0 && kindStr != 'adjust') {
+            final itRows = await txn.query(
+              'items',
+              columns: ['quantity'],
+              where: 'id = ?',
+              whereArgs: [itemId],
+              limit: 1,
+            );
+            if (itRows.isNotEmpty) {
+              final curQty =
+                  (itRows.first['quantity'] as num?)?.toDouble() ?? 0.0;
+              final sign = (kindStr == 'purchase' ||
+                      kindStr == 'return' ||
+                      kindStr == 'returnIn')
+                  ? 1.0
+                  : -1.0;
+              final newQty = curQty - sign * moveQty;
+              await txn.update(
                 'items',
-                columns: ['quantity'],
+                {'quantity': newQty, 'updated_at': now},
                 where: 'id = ?',
                 whereArgs: [itemId],
-                limit: 1,
               );
-              if (itRows.isNotEmpty) {
-                final curQty =
-                    (itRows.first['quantity'] as num?)?.toDouble() ?? 0.0;
-                // (دفعة التدقيق) «return» (مرتجع بيع) إشارته موجبة كالشراء
-                // وفق StockKind.qtySign — إنشاؤه يزيد المخزون فحذفه يجب أن
-                // يخصم. كانت الإشارة السالبة تجعل حذف المرتجع الوارد من
-                // جهاز آخر يزيد الكمية بدل تخفيضها.
-                final sign = (kindStr == 'purchase' ||
-                        kindStr == 'return' ||
-                        kindStr == 'returnIn')
-                    ? 1.0
-                    : -1.0;
-                final newQty = curQty - sign * moveQty;
-                await txn.update(
-                  'items',
-                  {'quantity': newQty, 'updated_at': now},
-                  where: 'id = ?',
-                  whereArgs: [itemId],
-                );
-              }
             }
-          } catch (_) {}
+          }
         }
         final delTime = (op.deviceTime.isNotEmpty) ? op.deviceTime : (op.timestamp.isNotEmpty ? op.timestamp : now);
         if (op.entityType == EntityKind.user) {
