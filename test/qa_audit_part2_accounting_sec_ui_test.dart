@@ -579,7 +579,7 @@ void main() {
       expect(en.text('إيراد تشغيلي'), equals('Operating Revenue'));
       expect(en.text('مصروف تشغيلي'), equals('Operating Expense'));
       expect(en.text('صافي الربح التشغيلي'), equals('Net Operating Profit'));
-      expect(en.text('عدد العمليات: 5'), equals('Tx Count: 5'));
+      expect(en.text('عدد العمليات: 5'), equals('Transactions: 5'));
     });
 
     test('تطابق رقم الإصدار في app_version.dart و pubspec.yaml', () {
@@ -587,6 +587,133 @@ void main() {
       expect(kAppBuild, equals(364));
       final pub = File('pubspec.yaml').readAsStringSync();
       expect(pub, contains('version: 3.98.49+364'));
+    });
+
+    test('منع الفصل الوهمي لمعرفات 64-بت (Snowflake) والشفاء الذاتي للأصناف المفصولة والكميات المصفرّة', () async {
+      final resolver = ConflictResolver();
+      const origId = 1881078209686363648;
+      const splitId = 1881793993336740638;
+      const tCreate = '2026-11-10T08:00:00.000Z';
+      const tRename = '2026-11-12T10:00:00.000Z';
+
+      // 1. صنف في اللقطة بالاسم المعدّل الأحدث A10e وكمية 5
+      await db.insert('items', {
+        'id': origId,
+        'plu': 101,
+        'workspace_id': 'default',
+        'name': 'A10e',
+        'sku': '10176',
+        'unit': 'حبة',
+        'buy_price': 2000.0,
+        'sell_price': 3000.0,
+        'quantity': 5.0,
+        'min_quantity': 1.0,
+        'is_active': 1,
+        'is_deleted': 0,
+        'created_at': tCreate,
+        'updated_at': tRename,
+      });
+
+      // وصول عملية التأسيس التاريخية القديمة بالاسم القديم "شاشة A10e" وكمية 0
+      await repo.applyRemoteOperation(
+        db,
+        const SyncOperation(
+          id: 'op-hist-create-a10e',
+          workspaceId: 'default',
+          deviceId: 'DEV-HOST',
+          userId: 1,
+          opType: OpKind.create,
+          entityType: EntityKind.item,
+          entityId: '$origId',
+          payload: {
+            'id': origId,
+            'plu': 101,
+            'name': 'شاشة A10e',
+            'sku': '10176',
+            'unit': 'حبة',
+            'buy_price': 2000.0,
+            'sell_price': 3000.0,
+            'quantity': 0.0,
+            'created_at': tCreate,
+            'updated_at': tCreate,
+          },
+          timestamp: tCreate,
+          deviceTime: tCreate,
+          version: 1,
+          parentOpId: '',
+        ),
+        resolver,
+      );
+
+      // لا ينشأ أي تعارض وهمي ولا تتغير الكمية أو الاسم الأحدث
+      expect(await repo.pendingItemConflicts(), isEmpty);
+      final afterReplay = (await repo.items()).singleWhere((i) => i.id == origId);
+      expect(afterReplay.name, equals('A10e'));
+      expect(afterReplay.quantity, equals(5.0));
+
+      // 2. محاكاة وجود فصل وهمي سابق في قاعدة البيانات مع تصفير الكمية
+      await db.update('items', {'name': 'شاشة A10e', 'quantity': 0.0},
+          where: 'id = ?', whereArgs: [origId]);
+      await db.insert('items', {
+        'id': splitId,
+        'plu': 102,
+        'workspace_id': 'default',
+        'name': 'A10e',
+        'sku': '10176',
+        'unit': 'حبة',
+        'buy_price': 2000.0,
+        'sell_price': 3000.0,
+        'quantity': 0.0,
+        'min_quantity': 1.0,
+        'is_active': 1,
+        'is_deleted': 0,
+        'created_at': tCreate,
+        'updated_at': tRename,
+      });
+      await db.insert('operations', {
+        'id': 'op-update-a10e-rename-restock',
+        'workspace_id': 'default',
+        'device_id': 'DEV-HOST',
+        'user_id': 1,
+        'op_type': 'update',
+        'entity_type': 'item',
+        'entity_id': '$origId',
+        'payload': '{"id":$origId,"name":"A10e","sku":"10176","quantity":5.0,"__qty_changed":1,"updated_at":"$tRename"}',
+        'timestamp': tRename,
+        'device_time': tRename,
+        'version': 2,
+        'parent_op_id': 'op-hist-create-a10e',
+        'synced': 1,
+      });
+      await db.insert('operations', {
+        'id': 'op-bogus-split-ayman',
+        'workspace_id': 'default',
+        'device_id': 'DEV-AYMAN',
+        'user_id': 2,
+        'op_type': 'create',
+        'entity_type': 'item',
+        'entity_id': '$splitId',
+        'payload': '{"id":$splitId,"name":"A10e","__conflict_resolved":true,"__reassigned_from_id":$origId}',
+        'timestamp': tRename,
+        'device_time': tRename,
+        'version': 1,
+        'parent_op_id': '',
+        'synced': 1,
+      });
+      await db.insert('settings', {
+        'key': 'item_conflict:${origId}_$splitId',
+        'value': '{"key":"item_conflict:${origId}_$splitId","conflictType":"id","originalCollidingId":$origId,"sharedSku":"10176","item1Id":$origId,"item1Name":"شاشة A10e","item1Creator":"ايمن","item2Id":$splitId,"item2Name":"A10e","item2Creator":"فخامة المدير","status":"pending","createdAt":"$tRename"}',
+      });
+
+      // بمجرد استدعاء pendingItemConflicts أو items يتم الشفاء الذاتي الفوري
+      final conflictsAfterHeal = await repo.pendingItemConflicts();
+      expect(conflictsAfterHeal, isEmpty);
+
+      final itemsAfterHeal = await repo.items();
+      expect(itemsAfterHeal.any((i) => i.id == splitId), isFalse);
+      final healedOrig = itemsAfterHeal.singleWhere((i) => i.id == origId);
+      expect(healedOrig.name, equals('A10e'));
+      expect(healedOrig.quantity, equals(5.0));
     });
   });
 }

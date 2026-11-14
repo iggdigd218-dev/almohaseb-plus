@@ -267,6 +267,12 @@ class Repo {
       }
       unawaited(authSvc.restoreSession());
     } catch (_) {}
+
+    // شفاء ذاتي فوري لأي أصناف أو تعارضات وهمية ناتجة عن فصل معرفات 64-بت ومطابقة أرصدة المخزون
+    try {
+      await ApplyRemoteOp.autoHealFalseItemIdSplits(db, repo: this);
+      await ApplyRemoteOp.reconcileInventoryQuantities(db);
+    } catch (_) {}
   }
 
   String? get deviceId => _deviceId;
@@ -2867,11 +2873,16 @@ class Repo {
             }
           }
 
+          final origGrossUnit = hasIdMatch
+              ? (origPriceById[line.itemId!] ?? line.unitPrice)
+              : (origPriceByName[nameKey] ?? line.unitPrice);
+          if (line.unitPrice > origGrossUnit + Fmt.moneyEpsilon) {
+            throw ArgumentError(
+              'سعر الوحدة المرتجع للصنف "${line.name}" يتجاوز سعر بيعه الأصلي في الفاتورة #$origRef.',
+            );
+          }
           var effUnitPrice = line.unitPrice;
           if (discountRatio < 1.0 - 1e-6) {
-            final origGrossUnit = hasIdMatch
-                ? (origPriceById[line.itemId!] ?? line.unitPrice)
-                : (origPriceByName[nameKey] ?? line.unitPrice);
             final expectedNetUnit = origGrossUnit * discountRatio;
             if ((line.unitPrice - origGrossUnit).abs() <= Fmt.moneyEpsilon ||
                 line.unitPrice > expectedNetUnit + 0.01) {
@@ -8829,6 +8840,9 @@ class Repo {
     bool includeDeleted = false,
   }) async {
     final db = await _db;
+    try {
+      await ApplyRemoteOp.autoHealFalseItemIdSplits(db, repo: this);
+    } catch (_) {}
     final where = <String>[];
     final args = <Object?>[];
     if (!includeArchived) where.add('i.archived = 0');
@@ -9211,6 +9225,9 @@ class Repo {
   /// جميع سجلات تعارض الأصناف المسجّلة (المعلقة والمعالجة).
   Future<List<OfflineItemConflict>> allItemConflicts() async {
     final db = await _db;
+    try {
+      await ApplyRemoteOp.autoHealFalseItemIdSplits(db, repo: this);
+    } catch (_) {}
     final rows = await db.query(
       'settings',
       where: "key LIKE 'item_conflict:%'",
