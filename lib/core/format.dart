@@ -45,11 +45,13 @@ class Fmt {
   /// القيم غير المنتهية (NaN/Infinity) تُردّ إلى صفر بدل أن تتفشى في
   /// كل الحسابات اللاحقة.
   static double roundMoney(double v, [int decimals = 2]) {
-    if (!v.isFinite) return 0;
+    if (!v.isFinite || v.abs() < 1e-9) return 0.0;
     final d = decimals < 0
         ? 0
         : (decimals > 6 ? 6 : decimals);
-    return double.parse(v.toStringAsFixed(d));
+    final nudged = v >= 0 ? v + 1e-12 : v - 1e-12;
+    final parsed = double.parse(nudged.toStringAsFixed(d));
+    return parsed == 0 ? 0.0 : parsed;
   }
 
   /// هل المبلغان متساويان حسابيّاً (بتسامح)؟

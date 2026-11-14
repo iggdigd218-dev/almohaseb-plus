@@ -423,6 +423,7 @@ class AppLocalizations {
     'إجمالي المصروفات': 'Total Expenses',
     'صافي الأرباح / الخسائر': 'Net Profit / Loss',
     'صافي الربح/الخسارة': 'Net Profit / Loss',
+    'صافي المستحق': 'Net Balance',
     'الإيرادات التشغيلية': 'Operating Revenue',
     'مصروف تشغيلي': 'Operating Expense',
     'إيراد تشغيلي': 'Operating Revenue',

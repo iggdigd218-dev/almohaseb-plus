@@ -100,7 +100,7 @@ void main() {
           updatedAt: now,
         ),
       );
-      await db.insert('tx_items', {
+      await db.insert('transaction_items', {
         'tx_id': invId,
         'item_id': itemId,
         'name': 'صنف تجريبي',
@@ -201,7 +201,7 @@ void main() {
           updatedAt: now,
         ),
       );
-      await db.insert('tx_items', {
+      await db.insert('transaction_items', {
         'tx_id': invId,
         'item_id': deletedOldId,
         'name': 'شاشة',

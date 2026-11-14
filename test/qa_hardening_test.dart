@@ -156,9 +156,12 @@ void main() {
       expect(Security.verify('secret123', h2), isTrue);
       expect(Security.verify('wrong', h1), isFalse);
       // التحقق من التوافق الرجعي مع تجزئات v2$ القديمة وتصنيفها لإعادة التجزئة
-      const legacyV2Salt = 'somesalt';
-      final legacyV2Hash =
-          'v2\$$legacyV2Salt\$${sha256.convert(utf8.encode('nexora::$legacyV2Salt::secret123'))}';
+      final saltBytes = utf8.encode('0123456789abcdef');
+      var digest = sha256.convert([...saltBytes, ...utf8.encode('secret123')]).bytes;
+      for (var i = 1; i < 10000; i++) {
+        digest = sha256.convert([...saltBytes, ...digest]).bytes;
+      }
+      final legacyV2Hash = 'v2\$${base64Encode(saltBytes)}\$${Security.hex(digest)}';
       expect(Security.verify('secret123', legacyV2Hash), isTrue);
       expect(Security.needsRehash(legacyV2Hash), isTrue);
     });

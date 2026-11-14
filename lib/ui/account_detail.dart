@@ -46,14 +46,16 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
 
   Future<void> _loadAccountData() async {
     final repo = ref.read(repoProvider);
-    final acc = await repo.account(accountId);
-    final list = await repo.transactions(accountId: accountId);
-    final posIds = await repo.posInvoiceTxIds();
+    final results = await Future.wait<Object?>([
+      repo.account(accountId),
+      repo.transactions(accountId: accountId),
+      repo.posInvoiceTxIds(),
+    ]);
     if (mounted) {
       setState(() {
-        _latestAccount = acc;
-        _latestTxs = list;
-        _posTxIds = posIds;
+        _latestAccount = results[0] as Account?;
+        _latestTxs = results[1] as List<Tx>;
+        _posTxIds = results[2] as Set<int>;
       });
     }
   }
@@ -86,7 +88,9 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
 
     return FutureBuilder<Account?>(
       initialData: cachedAccount,
-      future: ref.read(repoProvider).account(accountId),
+      future: cachedAccount != null
+          ? Future<Account?>.value(cachedAccount)
+          : ref.read(repoProvider).account(accountId),
       builder: (context, snap) {
         final a = _latestAccount ?? snap.data ?? cachedAccount;
         if (a == null) {
