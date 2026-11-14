@@ -1,0 +1,37 @@
+{
+  "version": "3.98.50+365",
+  "minSupported": "3.13.0",
+  "sha256": "eca31a85014d3cb3f8d3e970f6ceff9fe2d878546c7e686f25a67ae196a6c647",
+  "sha256Variants": {
+    "arm64": "eca31a85014d3cb3f8d3e970f6ceff9fe2d878546c7e686f25a67ae196a6c647",
+    "armv7": "50d7d340549fb1c46ad49b3a6add01e390a37daef48ec3e25a0994e9b816da28"
+  },
+  "releaseUrl": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/tag/latest",
+  "download_url": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/Almohaseb-Plus-arm64.apk",
+  "downloads": {
+    "android": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/Almohaseb-Plus-arm64.apk",
+    "androidVariants": {
+      "arm64": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/Almohaseb-Plus-arm64.apk",
+      "armv7": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/nexora-armv7.apk"
+    },
+    "windows": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/NexoraSetup.exe"
+  },
+  "downloadsMirror": {
+    "android": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.50-365/Almohaseb-Plus-arm64.apk",
+    "androidVariants": {
+      "arm64": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.50-365/Almohaseb-Plus-arm64.apk",
+      "armv7": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.50-365/nexora-armv7.apk"
+    },
+    "windows": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.50-365/NexoraSetup.exe"
+  },
+  "downloadsFallbackGithub": {
+    "android": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/Almohaseb-Plus-arm64.apk",
+    "androidVariants": {
+      "arm64": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/Almohaseb-Plus-arm64.apk",
+      "armv7": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/nexora-armv7.apk"
+    },
+    "windows": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/NexoraSetup.exe"
+  },
+  "publishedAt": "2026-11-14T18:13:38Z",
+  "notes": "• تعارض الأصناف والباركود (أوفلاين): منع ضياع أو مسح أي صنف أو فاتورة عند الإدخال أوفلاين، مع فصل الصنف الأصغر برقم جديد وتحديث فواتيره وحركاته تلقائياً.\n• معالجة فورية وإشعارات ذكية: تنبيه مفصّل للجهازين باسم كل صنف والمُدخِل، مع 3 خيارات حل (توليد باركود، دمج الصنفين والكميات، أو اعتماد الفصل مع اختيار الصنف في نقطة البيع).\n• حسابات العملاء والمخزون: تفعيل قائمة خيارات وإجراءات العمليات داخل كشف حساب العميل، ودعم الفئات الفرعية متعددة المستويات (شجرة مفتوحة العمق)."
+}
