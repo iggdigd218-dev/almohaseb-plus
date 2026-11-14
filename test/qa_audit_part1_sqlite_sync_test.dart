@@ -222,7 +222,7 @@ void main() {
   test('S2: ConflictResolver unifies server_time -> timestamp -> version -> deviceId',
       () {
     final resolver = ConflictResolver();
-    final olderServerNewerClock = SyncOperation(
+    const olderServerNewerClock = SyncOperation(
       id: 'op-1',
       workspaceId: 'default',
       deviceId: 'DEV-Z',
@@ -237,7 +237,7 @@ void main() {
       serverTime: '1700000001000',
       version: 1,
     );
-    final newerServerOlderClock = SyncOperation(
+    const newerServerOlderClock = SyncOperation(
       id: 'op-2',
       workspaceId: 'default',
       deviceId: 'DEV-A',
