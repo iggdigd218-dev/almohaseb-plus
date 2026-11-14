@@ -498,11 +498,14 @@ void main() {
     // سجل تعارض مسجل كـ merged
     final conflict = OfflineItemConflict(
       key: 'item_conflict:1_2',
+      conflictType: 'sku',
+      sharedSku: '62910001',
       item1Id: 1,
-      item2Id: 2,
       item1Name: 'شاي كبوس',
+      item1Creator: 'المدير',
+      item2Id: 2,
       item2Name: 'سكر ناعم',
-      sku: '62910001',
+      item2Creator: 'ايمن',
       status: 'resolved',
       resolution: 'merged',
       createdAt: nowIso,
