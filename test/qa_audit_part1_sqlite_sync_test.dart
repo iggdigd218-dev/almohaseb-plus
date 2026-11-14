@@ -226,11 +226,13 @@ void main() {
       id: 'op-1',
       workspaceId: 'default',
       deviceId: 'DEV-Z',
+      userId: 1,
+      parentOpId: '',
       entityType: EntityKind.item,
       entityId: '1',
       opType: OpKind.update,
       payload: const {},
-      timestamp: DateTime(2026, 10, 2, 12, 0),
+      timestamp: '2026-10-02T12:00:00.000Z',
       deviceTime: '2026-10-02T12:00:00Z',
       serverTime: '1700000001000',
       version: 1,
@@ -239,11 +241,13 @@ void main() {
       id: 'op-2',
       workspaceId: 'default',
       deviceId: 'DEV-A',
+      userId: 1,
+      parentOpId: '',
       entityType: EntityKind.item,
       entityId: '1',
       opType: OpKind.update,
       payload: const {},
-      timestamp: DateTime(2026, 10, 1, 12, 0),
+      timestamp: '2026-10-01T12:00:00.000Z',
       deviceTime: '2026-10-01T12:00:00Z',
       serverTime: '1700000005000',
       version: 1,
@@ -251,13 +255,21 @@ void main() {
 
     expect(
       resolver.decide(
-          localLatest: olderServerNewerClock, incoming: newerServerOlderClock),
-      ConflictDecision.applyIncoming,
+        exists: true,
+        localVersion: 1,
+        localLatest: olderServerNewerClock,
+        incoming: newerServerOlderClock,
+      ),
+      isTrue,
     );
     expect(
       resolver.decide(
-          localLatest: newerServerOlderClock, incoming: olderServerNewerClock),
-      ConflictDecision.keepLocal,
+        exists: true,
+        localVersion: 1,
+        localLatest: newerServerOlderClock,
+        incoming: olderServerNewerClock,
+      ),
+      isFalse,
     );
   });
 

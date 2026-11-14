@@ -631,8 +631,9 @@ class CatalogSyncGuard {
           'vouchers',
           'stock_moves',
         ]) {
-          if (snapData[table] is List) {
-            final rows = (snapData[table] as List).whereType<Map>();
+          final rawTable = snapData[table];
+          if (rawTable is List) {
+            final rows = rawTable.whereType<Map>();
             final tableInfo = await txn.rawQuery('PRAGMA table_info($table)');
             final validCols = {
               for (final col in tableInfo) col['name'] as String
