@@ -78,9 +78,9 @@ void main() {
       final itemId = await repo.saveItem(
         Item(
           name: 'صنف تجريبي',
+          buyPrice: 600,
           sellPrice: 1000,
-          costPrice: 600,
-          stock: 10,
+          quantity: 10,
           createdAt: now,
           updatedAt: now,
         ),
@@ -89,7 +89,7 @@ void main() {
       // فاتورة: قطعتان × 1000 = 2000 قبل الخصم، بخصم 10% => الصافي 1800
       final invId = await repo.saveTx(
         Tx(
-          type: OpType.creditSale,
+          type: OpType.debit,
           accountId: custId,
           amount: 1800,
           currency: 'YER',
@@ -130,7 +130,7 @@ void main() {
           .firstWhere((t) => t.id == ret1Id);
       expect(ret1Tx.amount, closeTo(900, 0.01));
 
-      // إرجاع القطعة الثانية يكتمل إلى 1800 فقط، ومحاولة إرجاع أكثر تُرفض
+      // إرجاع بمبلغ يتجاوز المتبقي من صافي الفاتورة يُرفض
       await expectLater(
         repo.processSalesReturn(
           originalTx: invTx,
@@ -139,7 +139,7 @@ void main() {
               itemId: itemId,
               name: 'صنف تجريبي',
               quantity: 1,
-              unitPrice: 1500, // أعلى من قيمة الصافي المتبقية (900)
+              unitPrice: 1500,
               total: 1500,
             ),
           ],
@@ -180,17 +180,17 @@ void main() {
       final newItemId = await repo.saveItem(
         Item(
           name: 'شاشة',
+          buyPrice: 3000,
           sellPrice: 5000,
-          costPrice: 3000,
-          stock: 4,
+          quantity: 4,
           createdAt: now,
           updatedAt: now,
         ),
       );
-      final deletedOldId = 999999; // صنف غير موجود في جدول items
+      const deletedOldId = 999999; // صنف غير موجود في جدول items
       final invId = await repo.saveTx(
         Tx(
-          type: OpType.creditSale,
+          type: OpType.debit,
           accountId: custId,
           amount: 5000,
           currency: 'YER',
@@ -214,7 +214,7 @@ void main() {
 
       await repo.processSalesReturn(
         originalTx: invTx,
-        returnLines: [
+        returnLines: const [
           InvoiceLine(
             itemId: deletedOldId,
             name: 'شاشة',
@@ -228,13 +228,12 @@ void main() {
 
       final intactItem =
           (await repo.items()).firstWhere((i) => i.id == newItemId);
-      expect(intactItem.stock, equals(4.0),
+      expect(intactItem.quantity, equals(4.0),
           reason: 'ممنوع إرجاع كمية إلى صنف آخر بمجرد تطابق الاسم عند غياب المعرف الصريح');
     });
 
     test('A3 & A6 reportDataProvider يعزل العملات ويحسب الأرصدة شاملةً حركات ما قبل الفترة', () async {
-      // تهيئة عملة KWD بـ 3 منازل عشرية وعملة USD بـ 2
-      await db.update('currencies', {'decimals': 2},
+      await db.update('currencies', {'decimal': 2},
           where: 'code = ?', whereArgs: ['USD']);
       final custUsd = await repo.saveAccount(
         Account(
@@ -250,7 +249,7 @@ void main() {
       final preDate = DateTime(2026, 10, 15, 10, 0);
       final inDate = DateTime(2026, 11, 10, 10, 0);
 
-      // حركة قبل الفترة: دين بالـ USD بمبلغ 25.555 -> يُقرّب لـ 25.56 وحركة بالـ YER يجب تجاهلها (توافق allBalances)
+      // حركة قبل الفترة: دين بالـ USD بمبلغ 25.55
       await repo.saveTx(
         Tx(
           type: OpType.debit,
@@ -263,7 +262,7 @@ void main() {
           updatedAt: preDate,
         ),
       );
-      // حركة بعملة أخرى YER على حساب USD يجب ألا تُجمع كدولار
+      // حركة بعملة أخرى YER على حساب USD يجب ألا تُجمع كدولار (توافق allBalances)
       await repo.saveTx(
         Tx(
           type: OpType.debit,
@@ -316,14 +315,14 @@ void main() {
       );
       final data = ReportData(
         accounts: [cust],
-        balances: {1: 0},
-        txCount: {1: 4},
+        balances: const {1: 0},
+        txCount: const {1: 4},
         posTxIds: const {101},
         txs: [
-          // فاتورة مبيعات POS بـ YER
+          // فاتورة مبيعات POS بـ YER (تُحسب مبيعات + إيراد تشغيلي)
           Tx(
             id: 101,
-            type: OpType.cashSale,
+            type: OpType.revenue,
             accountId: 1,
             amount: 1000,
             currency: 'YER',
@@ -370,9 +369,9 @@ void main() {
         ],
       );
 
-      final currencies = [
-        const CurrencyDef(code: 'YER', name: 'ريال يمني', symbol: 'ر.ي', decimals: 0),
-        const CurrencyDef(code: 'USD', name: 'دولار', symbol: '\$', decimals: 2),
+      const currencies = [
+        CurrencyDef('YER', 'ريال يمني', 'ر.ي', 0),
+        CurrencyDef('USD', 'دولار', '\$', 2),
       ];
 
       // A8: بطاقة المبيعات تحتوي فقط فاتورة المبيعات وليس قيد الدين اليدوي
@@ -383,13 +382,23 @@ void main() {
 
       // A4 & A5: تقرير الأرباح والخسائر يعزل YER عن USD ولا يدخل التدفقات النقدية في صافي الربح التشغيلي
       final pl = buildReport(ReportTab.pl, data, currencies, PeriodUnit.day);
-      final yerRow = pl.rows.firstWhere((r) => r.contains('YER'));
-      final usdRow = pl.rows.firstWhere((r) => r.contains('USD'));
-      expect(yerRow[1], contains('1,000')); // إيراد تشغيلي
-      expect(yerRow[2], contains('300'));   // مصروف تشغيلي
-      expect(yerRow[3], contains('700'));   // صافي الربح التشغيلي 1000 - 300
-      expect(usdRow[1], isNot(contains('20.00')),
-          reason: 'التدفق النقدي (inflow) لا يُحسب ضمن الإيرادات التشغيلية');
+      final opRevYer =
+          pl.rows.firstWhere((r) => r.first.contains('الإيرادات التشغيلية') && r.first.contains('ر.ي'));
+      final opExpYer =
+          pl.rows.firstWhere((r) => r.first.contains('المصروفات التشغيلية') && r.first.contains('ر.ي'));
+      final opNetYer =
+          pl.rows.firstWhere((r) => r.first.contains('صافي الربح التشغيلي') && r.first.contains('ر.ي'));
+      final opNetUsd =
+          pl.rows.firstWhere((r) => r.first.contains('صافي الربح التشغيلي') && r.first.contains('\$'));
+      final cashInUsd =
+          pl.rows.firstWhere((r) => r.first.contains('التدفقات النقدية (القبض)') && r.first.contains('\$'));
+
+      expect(opRevYer[1], contains('1,000'));
+      expect(opExpYer[1], contains('300'));
+      expect(opNetYer[1], contains('700'));
+      expect(opNetUsd[1], isNot(contains('20.00')),
+          reason: 'التدفق النقدي (inflow) لا يُحسب ضمن صافي الربح التشغيلي');
+      expect(cashInUsd[1], contains('20.00'));
 
       // A5: التقرير الملخص لا يجمع YER و USD رقمياً معاً
       final summary =
@@ -400,14 +409,16 @@ void main() {
     });
 
     test('A7 خصم سلة نقطة البيع يُقرّب حسب منازل العملة العشرية', () {
-      const item = Item(
+      final item = Item(
         id: 1,
         name: 'عطر',
+        buyPrice: 8,
         sellPrice: 12.345,
-        costPrice: 8,
-        stock: 10,
+        quantity: 10,
+        createdAt: now,
+        updatedAt: now,
       );
-      const draft3 = PosDraft(
+      final draft3 = PosDraft(
         cart: {1: CartEntry(item: item, quantity: 1, unitPrice: 12.345)},
         discountText: '10',
         discountIsPercent: true,
@@ -455,7 +466,7 @@ void main() {
       const expiredPaid = SubscriptionState(
         status: 'active',
         createdAtMs: nowMs - 86400000 * 400,
-        expiresAtMs: nowMs - 1000, // انتهى قبل ثانية بوقت الخادم
+        expiresAtMs: nowMs - 1000,
         isActive: true,
         isFrozen: false,
         deviceFingerprint: 'FP-TEST',
@@ -490,12 +501,10 @@ void main() {
     });
 
     test('SEC7 & SEC8 صلاحيات Repo.can ورفض تعديل الصلاحيات لغير المدير', () async {
-      // تحويل المستخدم الحالي إلى كاشير
       await db.update('devices', {'is_owner': 0});
       await db.update('users', {'role': 'cashier', 'permissions': 'add_tx'});
       await repo.setSetting('account.email', 'worker@store.com');
 
-      // fail-closed عند التعديل دون صلاحية إدارة المستخدمين
       await expectLater(
         repo.upsertUserPermission(email: 'worker@store.com', role: 'admin'),
         throwsStateError,
@@ -505,7 +514,6 @@ void main() {
         throwsStateError,
       );
 
-      // إدخال صف من المالك لتعطيل الخصم رغم أي كاش قديم -> Repo.can يحسمها بـ false
       await db.insert('user_permissions', {
         'user_email': 'worker@store.com',
         'store_id': repo.requireWorkspaceId,
@@ -520,7 +528,6 @@ void main() {
       expect(await repo.can('can_discount'), isFalse);
       expect(await repo.can('delete_tx'), isTrue);
 
-      // عند تعطيل العضو (is_active = 0) يتوقف بالكامل
       await db.update('user_permissions', {'is_active': 0},
           where: 'user_email = ?', whereArgs: ['worker@store.com']);
       expect(await repo.can('delete_tx'), isFalse);
@@ -537,7 +544,7 @@ void main() {
       final doc = await buildThermalInvoiceDocument(
         tx: Tx(
           id: 77,
-          type: OpType.cashSale,
+          type: OpType.revenue,
           amount: 12.345,
           currency: 'KWD',
           description: 'فاتورة مبيعات #77',

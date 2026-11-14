@@ -89,7 +89,7 @@ class Security {
   ) {
     final hmac = Hmac(sha256, utf8.encode(password));
     const hLen = 32;
-    final blocks = (_pbkdf2KeyLength + hLen - 1) ~/ hLen;
+    const blocks = (_pbkdf2KeyLength + hLen - 1) ~/ hLen;
     final dk = Uint8List(_pbkdf2KeyLength);
     var offset = 0;
 

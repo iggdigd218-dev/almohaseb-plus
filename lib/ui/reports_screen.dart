@@ -355,7 +355,7 @@ class _ScopeBar extends ConsumerWidget {
                       leading: const Icon(Icons.currency_exchange),
                       title: Text(
                         ctx.tr('العملة'),
-                        style: TextStyle(fontWeight: FontWeight.w700),
+                        style: const TextStyle(fontWeight: FontWeight.w700),
                       ),
                       subtitle: Text(scope.currency ?? ctx.tr('كل العملات')),
                       trailing: const Icon(Icons.chevron_left),
@@ -392,7 +392,7 @@ class _ScopeBar extends ConsumerWidget {
                       leading: const Icon(Icons.person_outline),
                       title: Text(
                         ctx.tr('الحساب'),
-                        style: TextStyle(fontWeight: FontWeight.w700),
+                        style: const TextStyle(fontWeight: FontWeight.w700),
                       ),
                       subtitle: Text(
                         scope.accountId == null
@@ -437,7 +437,7 @@ class _ScopeBar extends ConsumerWidget {
                       leading: const Icon(Icons.badge_outlined),
                       title: Text(
                         ctx.tr('الكاشير / الموظف'),
-                        style: TextStyle(fontWeight: FontWeight.w700),
+                        style: const TextStyle(fontWeight: FontWeight.w700),
                       ),
                       subtitle: Text(
                         scope.cashier == null

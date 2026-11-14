@@ -623,7 +623,7 @@ class CatalogSyncGuard {
     // 5. (S8) ترميم الفجوة المضغوطة داخل معاملة ذرية واحدة: إذا فشل أي جدول
     // تتراجع المعاملة بالكامل ولا يُسجَّل healedCompactedTs حتى يعاد الترميم لاحقاً.
     final safeSnapData = snapData;
-    if (isCompactedGap && safeSnapData != null) {
+    if (isCompactedGap) {
       var compactedHealed = 0;
       await db.transaction((txn) async {
         for (final table in const [
