@@ -328,7 +328,7 @@ void main() {
           txn,
           SyncOperation(
             id: 'op-remote-item-zero',
-            parentOpId: null,
+            parentOpId: '',
             workspaceId: 'default',
             deviceId: 'DEV-PEER-2',
             userId: 1,
@@ -357,7 +357,7 @@ void main() {
           txn,
           SyncOperation(
             id: 'op-remote-move-sale',
-            parentOpId: null,
+            parentOpId: '',
             workspaceId: 'default',
             deviceId: 'DEV-PEER-2',
             userId: 1,
