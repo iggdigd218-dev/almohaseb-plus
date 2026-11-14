@@ -91,7 +91,7 @@ class _AtomicMockCloud {
           if (direct is Map && (direct['max_devices'] is num) && (direct['max_devices'] as num) > 1) {
             return _jsonResp(direct);
           }
-          final fallback = {
+          final fallback = <String, Object?>{
             'status': 'active',
             'plan_type': 'enterprise',
             'max_devices': 10,
@@ -101,7 +101,9 @@ class _AtomicMockCloud {
             'features': {'all': true},
           };
           if (direct is Map) {
-            fallback.addAll(Map<String, Object?>.from(direct));
+            for (final e in direct.entries) {
+              fallback['${e.key}'] = e.value;
+            }
             fallback['max_devices'] = 10;
             fallback['plan_type'] = 'enterprise';
           }
