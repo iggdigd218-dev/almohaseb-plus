@@ -1031,14 +1031,16 @@ class _TxTile extends ConsumerWidget {
         : '';
     final detailsText = '$baseDetail$refSuffix';
 
-    return InkWell(
-      onTap: () => _openActionsMenu(context, ref),
-      onLongPress: () => _openActionsMenu(context, ref),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
-        child: IntrinsicHeight(
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
+    return Tooltip(
+      message: context.tr('خيارات العملية'),
+      child: InkWell(
+        onTap: () => _openActionsMenu(context, ref),
+        onLongPress: () => _openActionsMenu(context, ref),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+          child: IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               // 1) العمود الأول (أقصى اليمين): التاريخ (YYYY-MM-DD HH:mm)
               Expanded(
@@ -1182,7 +1184,8 @@ class _TxTile extends ConsumerWidget {
           ),
         ),
       ),
-    );
+    ),
+  );
   }
 }
 
