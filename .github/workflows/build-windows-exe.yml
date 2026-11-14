@@ -46,6 +46,26 @@ jobs:
       - name: Install dependencies
         run: flutter pub get
 
+      - name: Match Windows app version to pubspec for this build
+        shell: pwsh
+        run: |
+          $pubspec = Get-Content pubspec.yaml -Raw
+          $version = [regex]::Match($pubspec, '(?m)^version:\s*(\d+\.\d+\.\d+)\+(\d+)\s*$')
+          if (-not $version.Success) { throw 'Invalid or missing pubspec version' }
+          $name = $version.Groups[1].Value
+          $build = $version.Groups[2].Value
+          $path = 'lib/core/app_version.dart'
+          $source = Get-Content $path -Raw
+          $versionPattern = "(?m)^const String kAppVersion = '[^']+';"
+          $buildPattern = '(?m)^const int kAppBuild = \d+;'
+          if ([regex]::Matches($source, $versionPattern).Count -ne 1 -or [regex]::Matches($source, $buildPattern).Count -ne 1) {
+            throw 'Unable to locate unique app version constants'
+          }
+          $source = [regex]::Replace($source, $versionPattern, "const String kAppVersion = '$name';")
+          $source = [regex]::Replace($source, $buildPattern, "const int kAppBuild = $build;")
+          Set-Content -Path $path -Value $source -Encoding utf8 -NoNewline
+          Write-Host "Windows build version: $name+$build"
+
       - name: Generate fresh Windows platform (match installed Visual Studio)
         run: |
           Remove-Item -Recurse -Force windows -ErrorAction SilentlyContinue
