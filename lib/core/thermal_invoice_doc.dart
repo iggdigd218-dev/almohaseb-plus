@@ -149,8 +149,7 @@ Future<ThermalInvoiceDoc> buildThermalInvoiceDocument({
   );
   final currSymbol =
       _resolveThermalCurrencySymbol(tx.currency, currencySymbol);
-  final cleanAccountName =
-      account != null ? PdfFonts.sanitize(account.name.trim()) : 'عميل نقدي';
+  final cleanAccountName = PdfFonts.sanitize(tx.resolvedPartyName(account));
   final cleanSeller = PdfFonts.sanitize(sellerOrDevice.trim());
   final rawFooter = PdfFonts.sanitize(footer.trim());
   final cleanFooter = (rawFooter.isEmpty ||

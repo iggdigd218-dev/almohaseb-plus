@@ -99,6 +99,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
   late final TextEditingController _paidCtrl;
   late final TextEditingController _discountCtrl;
   late final TextEditingController _notesCtrl;
+  late final TextEditingController _cashCustomerNameCtrl;
 
   /// (3.70) صلاحية الخصم المحلية — تُحجب عن الكاشير فوراً (بلا شبكة).
   bool _canDiscount = true;
@@ -188,6 +189,11 @@ class _PosScreenState extends ConsumerState<PosScreen>
     _paidCtrl = TextEditingController(text: d.paidText);
     _discountCtrl = TextEditingController(text: d.discountText);
     _notesCtrl = TextEditingController(text: d.notesText);
+    _cashCustomerNameCtrl = TextEditingController(
+      text: d.cashCustomerName.trim().isEmpty
+          ? 'عميل نقدي'
+          : d.cashCustomerName,
+    );
     _tabController = TabController(length: 2, vsync: this);
     _tabController.addListener(() {
       if (mounted) setState(() {});
@@ -235,6 +241,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
     _paidCtrl.dispose();
     _discountCtrl.dispose();
     _notesCtrl.dispose();
+    _cashCustomerNameCtrl.dispose();
     _shortcutFocus.dispose();
     _searchFocus.dispose();
     super.dispose();
@@ -324,6 +331,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
     _paidCtrl.clear();
     _discountCtrl.clear();
     _notesCtrl.clear();
+    _cashCustomerNameCtrl.text = 'عميل نقدي';
     _supervisorOverride = false;
     setState(() {});
   }
@@ -548,6 +556,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
     _paidCtrl.clear();
     _discountCtrl.clear();
     _notesCtrl.clear();
+    _cashCustomerNameCtrl.text = 'عميل نقدي';
     _supervisorOverride = false;
     setState(() {});
     Sfx.pop();
@@ -615,6 +624,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
     _paidCtrl.clear();
     _discountCtrl.clear();
     _notesCtrl.clear();
+    _cashCustomerNameCtrl.text = 'عميل نقدي';
     setState(() {});
     Sfx.pop();
     showSnack(context, 'تم تعليق الفاتورة ⏸️');
@@ -634,6 +644,9 @@ class _PosScreenState extends ConsumerState<PosScreen>
       _paidCtrl.text = d.paidText;
       _discountCtrl.text = d.discountText;
       _notesCtrl.text = d.notesText;
+      _cashCustomerNameCtrl.text = d.cashCustomerName.trim().isEmpty
+          ? 'عميل نقدي'
+          : d.cashCustomerName;
       setState(() {});
       Sfx.pop();
       showSnack(context, 'تم استئناف الفاتورة ▶️');
@@ -3239,6 +3252,50 @@ class _PosScreenState extends ConsumerState<PosScreen>
                       },
                     ),
 
+                    // عند اختيار «نقداً»: حقل مدمج لاسم العميل بقيمة افتراضية «عميل نقدي» مع مسح سريع
+                    if (_payment == _PosPayment.cash) ...[
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: _cashCustomerNameCtrl,
+                        textInputAction: TextInputAction.done,
+                        onTap: () {
+                          if (_cashCustomerNameCtrl.text.trim() == 'عميل نقدي') {
+                            _cashCustomerNameCtrl.selection = TextSelection(
+                              baseOffset: 0,
+                              extentOffset: _cashCustomerNameCtrl.text.length,
+                            );
+                          }
+                        },
+                        decoration: InputDecoration(
+                          isDense: true,
+                          labelText: 'اسم العميل (نقداً)',
+                          hintText: 'عميل نقدي',
+                          prefixIcon: const Icon(
+                            Icons.person_outline_rounded,
+                            size: 20,
+                          ),
+                          suffixIcon: _cashCustomerNameCtrl.text.isNotEmpty
+                              ? IconButton(
+                                  visualDensity: VisualDensity.compact,
+                                  tooltip: 'مسح الاسم',
+                                  icon: const Icon(Icons.close_rounded, size: 18),
+                                  onPressed: () {
+                                    _cashCustomerNameCtrl.clear();
+                                    _cartCtl.setCashCustomerName('');
+                                    setSheetState(() {});
+                                    setState(() {});
+                                  },
+                                )
+                              : null,
+                        ),
+                        onChanged: (val) {
+                          _cartCtl.setCashCustomerName(val);
+                          setSheetState(() {});
+                          setState(() {});
+                        },
+                      ),
+                    ],
+
                     // اختيار العميل — يظهر فقط عند تحديد العملية آجل أو جزئي،
                     // ويتوهج بالأحمر إذا لم يُحدَّد حساب عميل.
                     if (needsAccount) ...[
@@ -3859,6 +3916,9 @@ class _PosScreenState extends ConsumerState<PosScreen>
 
       if (_payment == _PosPayment.cash) {
         // مبيعات نقدية: إيراد بصفر أثر على مديونية العميل (فاتورة نقدية مدفوعة)
+        final rawCashCust = _cashCustomerNameCtrl.text.trim();
+        final cashCustomerName =
+            rawCashCust.isEmpty ? 'عميل نقدي' : rawCashCust;
         final tx = Tx(
           accountId: _selectedCustomerId,
           accountKind: selectedAccKind,
@@ -3869,7 +3929,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
           description: 'فاتورة نقدية مدفوعة رقم #$refNum',
           reference: refNum,
           notes:
-              'طريقة الدفع: مدفوع نقداً\nالمبلغ المدفوع: ${Fmt.money(_netTotal)} ${cur.symbol}\nالمتبقي: 0.00 ${cur.symbol}$discountNote$supNote',
+              'اسم العميل: $cashCustomerName\nطريقة الدفع: مدفوع نقداً\nالمبلغ المدفوع: ${Fmt.money(_netTotal)} ${cur.symbol}\nالمتبقي: 0.00 ${cur.symbol}$discountNote$supNote',
           createdByUserId: creatorId,
           cashierName: cashierName,
           createdAt: now,
@@ -4580,9 +4640,10 @@ class _PosHistoryTabState extends ConsumerState<_PosHistoryTab> {
                         final isPartial =
                       !isCash && tx.notes.contains('طريقة الدفع: جزئي');
                   final hasReturnNote = tx.notes.contains('تم إرجاع (');
-                  final customerName = account?.name.trim().isNotEmpty == true
-                      ? account!.name
-                      : (isCash ? 'عميل نقدي' : 'عميل مسجل');
+                  final customerName = tx.resolvedPartyName(
+                    account,
+                    fallback: isCash ? 'عميل نقدي' : 'عميل مسجل',
+                  );
                   final customerPhone = account?.phone.trim().isNotEmpty == true
                       ? ' • ${account!.phone}'
                       : '';

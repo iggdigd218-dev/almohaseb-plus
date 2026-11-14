@@ -1097,6 +1097,10 @@ Future<int> _autoHealOrphanItems(
 
 
 extension ApplyRemoteOp on Repo {
+  /// حركات المخزون التي طُبّقت كميتها الابتدائية عبر لقطة صنف يتيم (بلا سجل محلي سابق)
+  /// لمنع خصمها مرتين في نفس الدفعة، مع ضمان تطبيق كافة الحركات التراكمية (Delta) للأصناف الموجودة.
+  static final Set<String> _snapshotAppliedMoveIds = <String>{};
+
   /// Returns false for replay/ignored/conflicting operations. The caller owns
   /// the transaction, so entity data and the operation receipt commit together.
   Future<bool> applyRemoteOperation(
@@ -1741,34 +1745,17 @@ extension ApplyRemoteOp on Repo {
                         op.payload.containsKey('quantity');
                 if (isQtyUnchangedMetaEdit && !isStubRow) {
                   row.remove('quantity');
-                } else if (isFromStockMove && !isStubRow) {
-                  // نحذف الكمية فقط إذا كانت حركة المخزون المرافقة قد طُبِّقت محلياً بالفعل
-                  // أو ستُطبَّق كفرق (Delta)، أما إن كانت مفقودة/مضغوطة فنعتمد كمية الصنف المحدثة.
-                  if (moveRefId != null) {
-                    final moveRows = await txn.query(
-                      'stock_moves',
-                      columns: ['id'],
-                      where: 'id = ?',
-                      whereArgs: [moveRefId],
-                      limit: 1,
-                    );
-                    if (moveRows.isNotEmpty) {
-                      row.remove('quantity');
-                    }
-                  } else {
+                } else if (isFromStockMove) {
+                  if (!isStubRow) {
+                    // منع الكتابة الفوقية للكمية (No Snapshot Overwrite on Stock):
+                    // لا نسمح للقطة الصنف القادمة من جهاز كان يعمل أوفلاين (مثل quantity = 0)
+                    // أن تمسح كمية الصنف المحلية، بل نترك التعديل لحركة المخزون التراكمية (Delta).
                     row.remove('quantity');
+                  } else if (moveRefId != null) {
+                    _snapshotAppliedMoveIds.add('${op.workspaceId}:$moveRefId');
                   }
                 } else if (isLegacyStockCompanion && !isStubRow) {
-                  final hasMoves = await txn.query(
-                    'stock_moves',
-                    columns: ['id'],
-                    where: 'item_id = ?',
-                    whereArgs: [op.entityId],
-                    limit: 1,
-                  );
-                  if (hasMoves.isNotEmpty) {
-                    row.remove('quantity');
-                  }
+                  row.remove('quantity');
                 }
               }
 
@@ -2034,27 +2021,10 @@ extension ApplyRemoteOp on Repo {
               final moveQty = (insertRow['quantity'] as num?)?.toDouble() ?? 0.0;
               final kindStr = '${insertRow['kind'] ?? 'sale'}'.trim();
               if (itemId != null && moveQty != 0) {
-                // التحقق مما إذا كانت عملية تحديث الصنف المرافقة (__from_stock_move == moveId)
-                // قد طبّقت الكمية النهائية مسبقاً في نفس الدفعة لتجنب الخصم المزدوج.
-                var alreadyAppliedByItemOp = false;
-                try {
-                  final itemOps = await txn.query(
-                    'operations',
-                    columns: ['payload', 'version'],
-                    where: "entity_type = 'item' AND entity_id = ?",
-                    whereArgs: ['$itemId'],
-                    orderBy: 'version DESC, timestamp DESC',
-                    limit: 5,
-                  );
-                  for (final io in itemOps) {
-                    final rawP = '${io['payload'] ?? ''}';
-                    if (rawP.contains('"__from_stock_move":$moveId') ||
-                        rawP.contains('"__from_stock_move":"$moveId"')) {
-                      alreadyAppliedByItemOp = true;
-                      break;
-                    }
-                  }
-                } catch (_) {}
+                // تُطبَّق حركة المخزون دائماً كفرق تراكمي (Delta) على الرصيد المحلي الحالي،
+                // ولا تُتخطى إلا إذا كان الصنف غير موجود محلياً وأُنشئ لتوّه بلقطة شملت هذه الحركة.
+                final alreadyAppliedByItemOp = _snapshotAppliedMoveIds
+                    .remove('${op.workspaceId}:$moveId');
 
                 final itRows = await txn.query(
                   'items',
@@ -3016,7 +2986,7 @@ extension ApplyRemoteOp on Repo {
         if (itemId == null) continue;
         final currentQty = (itemRow['quantity'] as num?)?.toDouble() ?? 0.0;
 
-        // 1. سجل عمليات الصنف: الكمية الافتتاحية عند الإنشاء وآخر كمية مرفوعة
+        // 1. سجل عمليات الصنف: الكمية الافتتاحية عند الإنشاء وآخر كمية مرفوعة صريحة
         double? initialCreateQty;
         double? latestOpQty;
         try {
@@ -3035,10 +3005,20 @@ extension ApplyRemoteOp on Repo {
             if (decoded is Map && decoded['quantity'] != null) {
               final q = (decoded['quantity'] as num?)?.toDouble();
               if (q != null) {
+                final isCompanionMoveOp =
+                    decoded['__from_stock_move'] != null ||
+                        decoded['__from_stock_move_delete'] != null;
                 if (opType == 'create' && initialCreateQty == null) {
                   initialCreateQty = q;
+                } else if (initialCreateQty == null &&
+                    isCompanionMoveOp &&
+                    decoded['__stock_move_delta'] is num) {
+                  final d = (decoded['__stock_move_delta'] as num).toDouble();
+                  initialCreateQty = q - d;
                 }
-                latestOpQty = q;
+                if (!isCompanionMoveOp) {
+                  latestOpQty = q;
+                }
               }
             }
           }
@@ -3120,9 +3100,6 @@ extension ApplyRemoteOp on Repo {
             if ((currentQty - target).abs() > 0.0001) {
               reconciledQty = target;
             }
-          } else if (latestOpQty != null &&
-              (currentQty - latestOpQty).abs() > 0.0001) {
-            reconciledQty = latestOpQty;
           }
         } else if (initialCreateQty != null &&
             (txSold + txReturned) > 0.0001) {
@@ -3134,6 +3111,7 @@ extension ApplyRemoteOp on Repo {
           }
         } else if (initialCreateQty == null &&
             latestOpQty != null &&
+            (txSold + txReturned) <= 0.0001 &&
             (currentQty - latestOpQty).abs() > 0.0001) {
           reconciledQty = latestOpQty;
         }

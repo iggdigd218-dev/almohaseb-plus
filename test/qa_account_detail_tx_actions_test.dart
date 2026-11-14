@@ -160,12 +160,15 @@ void main() {
         );
         await pumpFrames(5);
 
-        // Verify customer name is visible and initial balance is 2,000 (1500 + 500)
-        expect(find.text('أحمد عبد الله المنصوري'), findsWidgets);
-        expect(find.text('سجل العمليات (2)'), findsOneWidget);
+        // Verify customer name is visible in AppBar (not duplicated) and initial balance is 2,000 (1500 + 500)
+        expect(find.text('أحمد عبد الله المنصوري'), findsOneWidget);
+        expect(find.text('التاريخ'), findsOneWidget);
+        expect(find.text('المبلغ'), findsOneWidget);
+        expect(find.text('التفاصيل'), findsOneWidget);
+        expect(find.text('الرصيد'), findsOneWidget);
         expect(find.textContaining('2,000'), findsWidgets);
 
-        // Verify the ⋮ options buttons exist on each transaction row
+        // Verify the transaction rows with 'خيارات العملية' tooltip exist on each row
         final menuButtons = find.byTooltip('خيارات العملية');
         expect(menuButtons, findsNWidgets(2));
 
@@ -257,7 +260,8 @@ void main() {
         expect(confirmDeleteBtn, findsOneWidget);
         await tester.tap(confirmDeleteBtn);
         for (var i = 0;
-            i < 40 && find.text('سجل العمليات (1)').evaluate().isEmpty;
+            i < 40 &&
+                find.byTooltip('خيارات العملية').evaluate().length != 1;
             i++) {
           await tester.runAsync(
             () => Future<void>.delayed(const Duration(milliseconds: 60)),
@@ -267,7 +271,7 @@ void main() {
         await pumpFrames(4);
 
         // Verify transaction count is now 1 and balance updated immediately to 1,500
-        expect(find.text('سجل العمليات (1)'), findsOneWidget);
+        expect(find.byTooltip('خيارات العملية'), findsOneWidget);
         expect(find.textContaining('1,500'), findsWidgets);
         expect(tester.takeException(), isNull);
       } finally {

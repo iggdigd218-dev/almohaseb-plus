@@ -681,9 +681,7 @@ ReportTable buildCardDetailTable(
               (t) => [
                 Fmt.date(t.date),
                 t.type.label,
-                byId[t.accountId]?.name.trim().isNotEmpty == true
-                    ? byId[t.accountId]!.name
-                    : 'عميل نقدي',
+                t.resolvedPartyName(byId[t.accountId]),
                 t.description.isEmpty ? t.type.label : t.description,
                 Fmt.money(t.amount),
                 sym(t.currency),
@@ -859,9 +857,7 @@ ReportTable buildReport(
                 t.type.label,
                 t.type == OpType.transfer
                     ? 'تحويل'
-                    : (byId[t.accountId]?.name.trim().isNotEmpty == true
-                        ? byId[t.accountId]!.name
-                        : 'عميل نقدي'),
+                    : t.resolvedPartyName(byId[t.accountId]),
                 t.description,
                 Fmt.money(t.amount),
                 sym(t.currency),

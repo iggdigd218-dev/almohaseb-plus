@@ -8595,10 +8595,10 @@ class Repo {
   }) async {
     await _ensureCan(it.id == null ? 'add_tx' : 'edit_tx');
     final db = await _db;
-    // (سلامة المخزون) الكمية السالبة أو غير الصالحة تُرفض من البوابة نفسها —
-    // اتساقًا مع حارس addStockMove الذي يمنع أن يصير الرصيد سالبًا أبدًا.
-    if (!it.quantity.isFinite || it.quantity < 0) {
-      throw StateError('كمية الصنف لا يمكن أن تكون سالبة أو غير صالحة.');
+    // (سلامة المخزون) رفض القيم غير المنتهية فقط (NaN / Infinity) مع السماح
+    // بالكميات السالبة (مثل -1 عند البيع المتزامن أوفلاين أو البيع على المكشوف).
+    if (!it.quantity.isFinite) {
+      throw StateError('كمية الصنف غير صالحة.');
     }
     // فرادة الباركود/SKU ومنع الباركود اليدوي القصير (< 5 خانات / < 10000):
     final sku = it.sku.trim();
@@ -9378,6 +9378,7 @@ class Repo {
       itemPayload['quantity'] = resultingQty;
       itemPayload['updated_at'] = now;
       itemPayload['__from_stock_move'] = id;
+      itemPayload['__stock_move_delta'] = delta;
       await rec.record(
         entityType: EntityKind.item,
         entityId: '${m.itemId}',
@@ -9480,6 +9481,7 @@ class Repo {
       itemPayload['quantity'] = newQty;
       itemPayload['updated_at'] = now;
       itemPayload['__from_stock_move_delete'] = id;
+      itemPayload['__stock_move_delta'] = -(m.kind.qtySign * m.quantity);
       await rec.record(
         entityType: EntityKind.item,
         entityId: '${m.itemId}',

@@ -305,7 +305,7 @@ Future<Uint8List> buildVoucherPdf({
             ),
             child: pw.Column(
               children: [
-                line('اسم الحساب', account?.name ?? 'عميل نقدي'),
+                line('اسم الحساب', v.resolvedPartyName(account)),
                 if (account != null && account.phone.isNotEmpty)
                   line('رقم الهاتف', '\u202A${account.phone}\u202C'),
                 line('رقم الحساب', account?.id?.toString() ?? '—'),
@@ -475,7 +475,7 @@ String voucherText({
   final b = StringBuffer()
     ..writeln('📄 ${v.kind.label} رقم $cleanNum')
     ..writeln('التاريخ: ${Fmt.date(v.date)}')
-    ..writeln('الحساب: ${account?.name ?? 'عميل نقدي'}')
+    ..writeln('الحساب: ${v.resolvedPartyName(account)}')
     ..writeln(
       'المبلغ: ${Fmt.money(v.amount, currency.decimal)} ${currency.symbol}',
     )

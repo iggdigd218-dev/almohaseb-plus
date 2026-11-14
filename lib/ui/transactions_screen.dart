@@ -704,11 +704,14 @@ class _TxCard extends ConsumerWidget {
     };
 
     final cashCustomer = context.tr('عميل نقدي');
+    final customCustName = tx.customCustomerName ?? '';
+    final defaultNonTransferParty =
+        customCustName.isNotEmpty ? customCustName : cashCustomer;
     final title = isTransfer
         ? '${account?.name.trim().isNotEmpty == true ? account!.name : cashCustomer}  ←  ${toAccount?.name.trim().isNotEmpty == true ? toAccount!.name : cashCustomer}'
         : (account?.name.trim().isNotEmpty == true
             ? account!.name
-            : cashCustomer);
+            : defaultNonTransferParty);
 
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final cardBg = index.isEven
@@ -1275,9 +1278,12 @@ Future<void> showTxDetails(
           ? '0.00 ${tx.currency}'
           : (isCreditOrPartial ? '${Fmt.money(tx.amount)} ${tx.currency}' : '0.00 ${tx.currency}'));
 
+  final customCustName = tx.customCustomerName ?? '';
   final partyName = resolvedAccount?.name.trim().isNotEmpty == true
       ? resolvedAccount!.name
-      : (isCashSale ? 'عميل نقدي' : 'غير محدد');
+      : (customCustName.isNotEmpty
+          ? customCustName
+          : (isCashSale ? 'عميل نقدي' : 'غير محدد'));
   final partyPhone = resolvedAccount?.phone.trim().isNotEmpty == true
       ? resolvedAccount!.phone
       : 'غير مسجل';

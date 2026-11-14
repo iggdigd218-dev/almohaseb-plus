@@ -696,10 +696,13 @@ class _TxRow extends StatelessWidget {
     );
     final acc = accounts.where((a) => a.id == tx.accountId).toList();
     final rawAccName = acc.isEmpty ? '' : '${acc.first.name}'.trim();
+    final customCustName = '${tx.customCustomerName ?? ''}'.trim();
     final name = rawAccName.isEmpty
         ? (tx.type == OpType.transfer
             ? context.tr('تحويل', 'Transfer')
-            : context.tr('عميل نقدي'))
+            : (customCustName.isNotEmpty
+                ? customCustName
+                : context.tr('عميل نقدي')))
         : rawAccName;
     final group = opGroup(tx.type);
     final color = group == 'inflow'
