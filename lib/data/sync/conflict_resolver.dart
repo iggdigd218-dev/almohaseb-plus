@@ -29,42 +29,21 @@ class ConflictResolver {
       return incoming.payload.isNotEmpty;
     }
 
-    // 3. الكيان موجود محلياً: الحسم الموحّد والحتمي (M4):
-    // الترتيب القياسي الموحّد لكسر التعادل في جميع الحالات:
-    // (أ) مقارنة رقم الإصدار (Version) إن اختلف وكان أحدهما متقدماً.
-    // (ب) مقارنة الطابع الزمني المرجعي (server_time إن توفر في الطرفين، وإلا الطابع المحلي).
-    // (ج) كسر التعادل الحتمي عبر مقارنة معرف الجهاز lexicographically (`deviceId.compareTo`).
+    // 3. الكيان موجود محلياً: الحسم الموحّد والحتمي المتطابق مع استعلام SQLite (S2):
+    // الترتيب القياسي الموحّد لكسر التعادل:
+    // (أ) وقت الخادم server_time إن وجد، وإلا الطابع الزمني للعملية (timestamp / deviceTime).
+    // (ب) الطابع الزمني المحلي timestamp في حال تعادل server_time.
+    // (ج) رقم الإصدار (version).
+    // (د) معرف العملية / الجهاز لكسر التعادل الحتمي.
     final inServerMs = incoming.serverTimeMs;
     final locServerMs = localLatest?.serverTimeMs ?? 0;
 
-    if (inServerMs > 0 && locServerMs > 0) {
-      if (incoming.version != localVersion) {
-        if (inServerMs != locServerMs) {
-          return inServerMs > locServerMs;
-        }
-        return incoming.version > localVersion;
-      }
-      if (inServerMs != locServerMs) {
-        return inServerMs > locServerMs;
-      }
-      final localDevId = localLatest?.deviceId ?? '';
-      if (localDevId.isNotEmpty && localDevId == incoming.deviceId) {
-        return true;
-      }
-      return incoming.deviceId.compareTo(localDevId) <= 0;
-    }
-
-    // مسار عدم اكتمال server_time في أحد الطرفين: نفس الترتيب القياسي الموحّد
-    if (incoming.version != localVersion) {
-      return incoming.version > localVersion;
-    }
-
-    final tIn = inServerMs > 0
+    final inEffectiveMs = inServerMs > 0
         ? inServerMs
         : (DateTime.tryParse(incoming.timestamp)?.millisecondsSinceEpoch ??
             (DateTime.tryParse(incoming.deviceTime)?.millisecondsSinceEpoch ??
                 0));
-    final tLocal = locServerMs > 0
+    final locEffectiveMs = locServerMs > 0
         ? locServerMs
         : (DateTime.tryParse(localLatest?.timestamp ?? '')
                 ?.millisecondsSinceEpoch ??
@@ -72,10 +51,31 @@ class ConflictResolver {
                     ?.millisecondsSinceEpoch ??
                 0));
 
-    if (tIn != tLocal) {
-      return tIn > tLocal;
+    if (inServerMs > 0 && locServerMs > 0 && inServerMs != locServerMs) {
+      return inServerMs > locServerMs;
+    }
+    if (inEffectiveMs != locEffectiveMs) {
+      return inEffectiveMs > locEffectiveMs;
     }
 
+    final inTsMs =
+        DateTime.tryParse(incoming.timestamp)?.millisecondsSinceEpoch ?? 0;
+    final locTsMs =
+        DateTime.tryParse(localLatest?.timestamp ?? '')
+                ?.millisecondsSinceEpoch ??
+            0;
+    if (inTsMs != locTsMs) {
+      return inTsMs > locTsMs;
+    }
+
+    if (incoming.version != localVersion) {
+      return incoming.version > localVersion;
+    }
+
+    final localId = localLatest?.id ?? '';
+    if (localId.isNotEmpty && incoming.id != localId) {
+      return incoming.id.compareTo(localId) > 0;
+    }
     final localDevId = localLatest?.deviceId ?? '';
     if (localDevId.isNotEmpty && localDevId == incoming.deviceId) {
       return true;
