@@ -8593,7 +8593,13 @@ class Repo {
     Item it, {
     bool enforceMinBarcodeLength = false,
   }) async {
-    await _ensureCan(it.id == null ? 'add_tx' : 'edit_tx');
+    final perms = await effectivePermissions().timeout(
+      const Duration(seconds: 3),
+      onTimeout: () => EffectivePermissions.none(''),
+    );
+    if (!perms.isActive || (!perms.isAdmin && !perms.canManageItems)) {
+      throw StateError('ليس لديك صلاحية إدارة الأصناف.');
+    }
     final db = await _db;
     // (سلامة المخزون) رفض القيم غير المنتهية فقط (NaN / Infinity) مع السماح
     // بالكميات السالبة (مثل -1 عند البيع المتزامن أوفلاين أو البيع على المكشوف).
@@ -10015,13 +10021,19 @@ class Repo {
 
     Map<String, Object?>? snap;
     var snapshotCompactedTs = 0;
+    var snapChecksum = '';
+    Map<String, int>? snapCounts;
     try {
       final snapRec = await CloudJoin.getJson('$root/joinSnapshot.json');
       if (snapRec != null) {
-        snapshotCompactedTs =
-            (snapRec['compacted_through_ts'] as num?)?.toInt() ??
-                (snapRec['updatedAt'] as num?)?.toInt() ??
-                0;
+        snapshotCompactedTs = CloudJoin.extractSnapshotWatermarkMs(snapRec);
+        snapChecksum = '${snapRec['checksum'] ?? ''}'.trim();
+        if (snapRec['counts'] is Map) {
+          snapCounts = {
+            for (final e in (snapRec['counts'] as Map).entries)
+              if (e.value is num) '${e.key}': (e.value as num).toInt(),
+          };
+        }
         if (snapRec['data'] is Map) {
           snap = Map<String, Object?>.from(snapRec['data'] as Map);
         } else if (snapRec['accounts'] != null ||
@@ -10049,7 +10061,23 @@ class Repo {
       );
     }
 
-    await SnapshotApply.applySnapshot(() => _db, ourId, snap);
+    SnapshotApply.verifySnapshotIntegrity(
+      snap,
+      expectedChecksum: snapChecksum,
+      expectedCounts: snapCounts,
+    );
+
+    await SnapshotApply.applySnapshot(
+      () => _db,
+      ourId,
+      snap,
+      mode: amIOwnerBefore
+          ? SnapshotApplyMode.ownerRestore
+          : SnapshotApplyMode.memberJoin,
+      serverWatermarkMs: snapshotCompactedTs,
+      expectedChecksum: snapChecksum,
+      expectedCounts: snapCounts,
+    );
 
     if (amIOwnerBefore) {
       await restoreManagerOwnership();
