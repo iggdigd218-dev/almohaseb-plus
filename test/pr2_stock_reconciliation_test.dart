@@ -318,8 +318,8 @@ void main() {
       expect(await qtyOf(itemId), 0);
 
       // 3. الجهاز الثاني كان أوفلاين وباع نفس الحبة (فكانت لقطته للصنف = 0 أيضاً مع حركة مخزون)
-      final remoteMoveId = 777001;
-      final resolver = const ConflictResolver();
+      const remoteMoveId = 777001;
+      final resolver = ConflictResolver();
       final remoteTs = now.add(const Duration(seconds: 5)).toIso8601String();
 
       await db.transaction((txn) async {
@@ -328,6 +328,7 @@ void main() {
           txn,
           SyncOperation(
             id: 'op-remote-item-zero',
+            parentOpId: null,
             workspaceId: 'default',
             deviceId: 'DEV-PEER-2',
             userId: 1,
@@ -356,6 +357,7 @@ void main() {
           txn,
           SyncOperation(
             id: 'op-remote-move-sale',
+            parentOpId: null,
             workspaceId: 'default',
             deviceId: 'DEV-PEER-2',
             userId: 1,
