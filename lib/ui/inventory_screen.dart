@@ -2639,10 +2639,15 @@ class _ItemTile extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final warn = item.out
-        ? AppColors.danger
-        : (item.low ? AppColors.amber : AppColors.green);
-    final warnText = item.out ? 'نفد' : (item.low ? 'قارب النفاد' : 'متوفر');
+    final isNeg = item.quantity < 0;
+    final warn = isNeg
+        ? const Color(0xFFDC2626)
+        : (item.out
+            ? AppColors.danger
+            : (item.low ? AppColors.amber : AppColors.green));
+    final warnText = isNeg
+        ? 'متوفر ${Fmt.qty(item.quantity)}'
+        : (item.out ? 'نفد' : (item.low ? 'قارب النفاد' : 'متوفر'));
 
     return Card(
       margin: const EdgeInsets.only(bottom: 9),
@@ -2747,11 +2752,11 @@ class _ItemTile extends ConsumerWidget {
                   Pill(warnText, color: warn),
                   const SizedBox(height: 8),
                   Text(
-                    Fmt.money(item.quantity, 0),
+                    Fmt.qty(item.quantity),
                     style: TextStyle(
                       fontSize: 17,
                       fontWeight: FontWeight.w900,
-                      color: warn,
+                      color: isNeg ? const Color(0xFFDC2626) : warn,
                     ),
                   ),
                   if (item.minQuantity > 0)
@@ -2854,11 +2859,14 @@ class _ItemGridCard extends ConsumerWidget {
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
+    final isNeg = item.quantity < 0;
     final isOut = item.quantity <= 0;
     final isLow = item.minQuantity > 0 && item.quantity <= item.minQuantity;
-    final status = isOut
-        ? ('نفد', AppColors.red)
-        : (isLow ? ('قليل', AppColors.amber) : ('متوفر', AppColors.green));
+    final status = isNeg
+        ? ('متوفر ${Fmt.qty(item.quantity)}', const Color(0xFFDC2626))
+        : (isOut
+            ? ('نفد', AppColors.red)
+            : (isLow ? ('قليل', AppColors.amber) : ('متوفر', AppColors.green)));
     final scheme = Theme.of(context).colorScheme;
 
     return Container(
@@ -2964,10 +2972,15 @@ class _ItemGridCard extends ConsumerWidget {
                   ),
                   const SizedBox(height: 2),
                   Text(
-                    '${Fmt.money(item.quantity)} ${item.unit}',
+                    isNeg
+                        ? 'متوفر ${Fmt.qty(item.quantity)} ${item.unit}'
+                        : '${Fmt.qty(item.quantity)} ${item.unit}',
                     style: TextStyle(
                       fontSize: 9.5,
-                      color: AppColors.text3Of(context),
+                      fontWeight: isNeg ? FontWeight.w800 : FontWeight.normal,
+                      color: isNeg
+                          ? const Color(0xFFDC2626)
+                          : AppColors.text3Of(context),
                     ),
                   ),
                   const SizedBox(height: 4),
@@ -5516,8 +5529,12 @@ class _ShortagesListSheetState extends ConsumerState<_ShortagesListSheet> {
                                           overflow: TextOverflow.ellipsis,
                                           style: TextStyle(
                                             fontSize: 10.5,
-                                            fontWeight: FontWeight.w600,
-                                            color: AppColors.text2Of(context),
+                                            fontWeight: it.quantity < 0
+                                                ? FontWeight.w800
+                                                : FontWeight.w600,
+                                            color: it.quantity < 0
+                                                ? const Color(0xFFDC2626)
+                                                : AppColors.text2Of(context),
                                           ),
                                         ),
                                       ),

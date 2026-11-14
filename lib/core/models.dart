@@ -517,6 +517,37 @@ class Tx {
           fallbackRaw: m['created_at'] ?? m['date'],
         ),
       );
+
+  /// اسم العميل المخصص للفواتير النقدية المستخرج من الملاحظات أو الوصف.
+  String? get customCustomerName =>
+      extractCustomCustomerName(notes, description);
+
+  /// اسم العميل/الحساب المحلول للعرض في البطاقات والتقارير والسندات والفواتير.
+  String resolvedPartyName(Account? account, {String fallback = 'عميل نقدي'}) {
+    final accName = account?.name.trim() ?? '';
+    if (accName.isNotEmpty) return accName;
+    final custom = customCustomerName;
+    if (custom != null && custom.isNotEmpty) return custom;
+    return fallback;
+  }
+}
+
+/// يستخرج اسم العميل المخصص من حقل الملاحظات أو الوصف (مثل: `اسم العميل: أحمد`).
+String? extractCustomCustomerName(String notes, [String description = '']) {
+  for (final raw in <String>[notes, description]) {
+    if (raw.trim().isEmpty) continue;
+    for (final line in raw.split('\n')) {
+      final t = line.trim();
+      if (t.startsWith('اسم العميل:')) {
+        final v = t.substring('اسم العميل:'.length).trim();
+        if (v.isNotEmpty) return v;
+      } else if (t.toLowerCase().startsWith('customer:')) {
+        final v = t.substring('customer:'.length).trim();
+        if (v.isNotEmpty) return v;
+      }
+    }
+  }
+  return null;
 }
 
 /// سطر صنف داخل فاتورة/عملية.
@@ -659,6 +690,17 @@ class Voucher {
         'cancelled' => 'ملغى',
         _ => 'مسودة',
       };
+
+  String? get customCustomerName =>
+      extractCustomCustomerName(notes, statement);
+
+  String resolvedPartyName(Account? account, {String fallback = 'عميل نقدي'}) {
+    final accName = account?.name.trim() ?? '';
+    if (accName.isNotEmpty) return accName;
+    final custom = customCustomerName;
+    if (custom != null && custom.isNotEmpty) return custom;
+    return fallback;
+  }
 
   Voucher copyWith({
     int? id,

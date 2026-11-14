@@ -108,7 +108,7 @@ class ReceiptData {
                     : 'فاتورة مبيع آجل')
                 : tx.type.label),
         number: tx.reference,
-        accountName: account?.name ?? 'عميل نقدي',
+        accountName: tx.resolvedPartyName(account),
         accountPhone: account?.phone ?? '',
         amount: tx.amount,
         currency: currency,
