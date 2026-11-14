@@ -141,7 +141,7 @@ void main() {
         createdAt: now,
         updatedAt: now,
       )),
-      throwsArgumentError,
+      throwsStateError,
     );
   });
 
@@ -157,11 +157,10 @@ void main() {
     });
     await db.insert('trash', {
       'id': 1,
-      'workspace_id': 'default',
-      'entity_type': 'item',
-      'entity_id': 9,
-      'title': 'محذوف',
-      'deleted_at': nowIso,
+      'store': 'items',
+      'payload': '{"id":9}',
+      'label': 'محذوف',
+      'created_at': nowIso,
     });
     await db.insert('notifications', {
       'id': 1,
@@ -172,17 +171,24 @@ void main() {
       'created_at': nowIso,
     });
 
+    await db.insert(
+      'settings',
+      {'key': 'logo', 'value': 'media/logo.png'},
+      conflictAlgorithm: ConflictAlgorithm.replace,
+    );
+
     final fullExport = await repo.exportAll(withImages: true);
-    final tables = fullExport['tables'] as Map<String, Object?>;
-    expect(tables.containsKey('trash'), isTrue);
-    expect(tables.containsKey('notifications'), isTrue);
-    final itemRows = tables['items'] as List;
-    expect((itemRows.first as Map)['image'], 'media/item_1.jpg');
+    final data = fullExport['data'] as Map<String, Object?>;
+    expect(data.containsKey('trash'), isTrue);
+    expect(data.containsKey('notifications'), isTrue);
+    final settingsWithImg = (data['settings'] as List).cast<Map>();
+    expect(settingsWithImg.any((r) => r['key'] == 'logo'), isTrue);
 
     final noImgExport = await repo.exportAll(withImages: false);
-    final noImgTables = noImgExport['tables'] as Map<String, Object?>;
-    final noImgItems = noImgTables['items'] as List;
-    expect((noImgItems.first as Map).containsKey('image'), isFalse);
+    final noImgData = noImgExport['data'] as Map<String, Object?>;
+    final settingsNoImg = (noImgData['settings'] as List).cast<Map>();
+    expect(settingsNoImg.any((r) => r['key'] == 'logo'), isFalse);
+    expect((noImgExport['images'] as Map), isEmpty);
   });
 
   test('M7/M8: latestActivityInfoFromDb scans items/accounts beyond tx & package backup passes inspectBackupBytes',

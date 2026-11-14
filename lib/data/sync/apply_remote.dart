@@ -1286,8 +1286,8 @@ extension ApplyRemoteOp on Repo {
       where: 'entity_type = ? AND entity_id = ?',
       whereArgs: [op.entityType.name, op.entityId],
       orderBy:
-          "COALESCE(NULLIF(CAST(server_time AS INTEGER), 0), timestamp) DESC, "
-          'timestamp DESC, version DESC, id DESC',
+          'COALESCE(NULLIF(CAST(server_time AS INTEGER), 0), 0) DESC, '
+          'version DESC, timestamp DESC, id DESC',
       limit: 1,
     );
     final localLatest =

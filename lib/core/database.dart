@@ -560,7 +560,7 @@ class AppDatabase {
         }
         // (3.98.39 / D1-D2) ترميم الأعمدة الحرجة في **كل** فتح — خارج بوابة
         // alreadyEnsured — فلا يتكرر عطل «العمود الناقص» على الأجهزة المُرقّاة.
-        await ensureLatestColumns(db);
+        await ensureLatestColumns(db, skipIfDatesHealedForVersion: true);
         await repairOwnerAdminStatus(db);
       },
     );
@@ -2441,6 +2441,23 @@ class AppDatabase {
     try {
       await db.execute('DROP INDEX IF EXISTS idx_item_categories_name');
     } catch (_) {}
+    try {
+      final rows = await db.query(
+        'sync_meta',
+        columns: ['value'],
+        where: 'key = ?',
+        whereArgs: ['schema_ensured_v'],
+        limit: 1,
+      );
+      final currentV = int.tryParse('${rows.isEmpty ? "" : rows.first["value"]}') ?? 0;
+      if (currentV < 30) {
+        await db.insert(
+          'sync_meta',
+          {'key': 'schema_ensured_v', 'value': '30'},
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+    } catch (_) {}
   }
 
   /// (v31 — M1) توحيد قيود المفاتيح الأجنبية `REFERENCES` في جدولي `item_categories` و `items`
@@ -2470,6 +2487,33 @@ class AppDatabase {
         !hasFk(catFks, 'section_id', 'sections');
     final needItemRebuild = !hasFk(itemFks, 'section_id', 'sections') ||
         !hasFk(itemFks, 'category_id', 'item_categories');
+
+    try {
+      await db.execute('''
+        UPDATE item_categories
+        SET parent_id = NULL
+        WHERE parent_id IS NOT NULL
+          AND (parent_id = id OR parent_id NOT IN (SELECT id FROM item_categories))
+      ''');
+      await db.execute('''
+        UPDATE item_categories
+        SET section_id = NULL
+        WHERE section_id IS NOT NULL
+          AND section_id NOT IN (SELECT id FROM sections)
+      ''');
+      await db.execute('''
+        UPDATE items
+        SET category_id = NULL
+        WHERE category_id IS NOT NULL
+          AND category_id NOT IN (SELECT id FROM item_categories)
+      ''');
+      await db.execute('''
+        UPDATE items
+        SET section_id = NULL
+        WHERE section_id IS NOT NULL
+          AND section_id NOT IN (SELECT id FROM sections)
+      ''');
+    } catch (_) {}
 
     if (!needCatRebuild && !needItemRebuild) {
       await _markSchemaVerifiedAndEnsured(db);
@@ -2716,7 +2760,10 @@ class AppDatabase {
   /// (3.98.39) شبكة أمان دائمة تُستدعى عند **كل فتح** خارج بوابة
   /// `schema_ensured_v`: تضمن قيود REFERENCES في v31 وتشغل
   /// ترميم التواريخ مرة واحدة لكل إصدار مخطط (M12) مع ضمان الأعمدة الحرجة.
-  static Future<void> ensureLatestColumns(Database db) async {
+  static Future<void> ensureLatestColumns(
+    Database db, {
+    bool skipIfDatesHealedForVersion = false,
+  }) async {
     try {
       await migrateToV30(db);
     } catch (e) {
@@ -2732,17 +2779,19 @@ class AppDatabase {
       }
     }
     var datesHealed = false;
-    try {
-      final rows = await db.query(
-        'sync_meta',
-        columns: ['value'],
-        where: 'key = ?',
-        whereArgs: ['catalog_dates_healed_v'],
-        limit: 1,
-      );
-      datesHealed =
-          rows.isNotEmpty && '${rows.first['value'] ?? ''}' == '$_version';
-    } catch (_) {}
+    if (skipIfDatesHealedForVersion) {
+      try {
+        final rows = await db.query(
+          'sync_meta',
+          columns: ['value'],
+          where: 'key = ?',
+          whereArgs: ['catalog_dates_healed_v'],
+          limit: 1,
+        );
+        datesHealed =
+            rows.isNotEmpty && '${rows.first['value'] ?? ''}' == '$_version';
+      } catch (_) {}
+    }
     if (!datesHealed) {
       await _healCatalogDates(db);
       try {
