@@ -36,6 +36,7 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
   String? _capsuleCur;
   Account? _latestAccount;
   List<Tx>? _latestTxs;
+  Set<int> _posTxIds = const {};
 
   @override
   void initState() {
@@ -47,10 +48,12 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
     final repo = ref.read(repoProvider);
     final acc = await repo.account(accountId);
     final list = await repo.transactions(accountId: accountId);
+    final posIds = await repo.posInvoiceTxIds();
     if (mounted) {
       setState(() {
         _latestAccount = acc;
         _latestTxs = list;
+        _posTxIds = posIds;
       });
     }
   }
@@ -130,13 +133,8 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
         var totalSales = 0.0;
         for (final t in txs) {
           if (t.currency != activeCur) continue;
-          final isRet = t.description.trim().startsWith('مرتجع ') ||
-              t.category == 'مرتجع مبيعات' ||
-              t.notes.contains('[ORIG_TX:');
-          final isSale = !isRet &&
-              (t.type == OpType.revenue ||
-                  (t.type == OpType.debit &&
-                      t.accountKind != AccountKind.supplier));
+          final isRet = isSalesReturnTx(t);
+          final isSale = isSalesInvoiceTx(t, posTxIds: _posTxIds);
           if (isSale) {
             totalSales += t.amount;
           } else if (isRet) {
@@ -720,6 +718,11 @@ class _TxTile extends ConsumerWidget {
               st['account.name'] ??
               tx.cashierName)
           .trim();
+      final curs = await repo.currencies();
+      final txCur = curs.firstWhere(
+        (c) => c.code.toUpperCase() == tx.currency.trim().toUpperCase(),
+        orElse: () => CurrencyDef(tx.currency, tx.currency, tx.currency, 0),
+      );
       final built = await buildThermalInvoiceDocument(
         tx: tx,
         account: account,
@@ -730,6 +733,8 @@ class _TxTile extends ConsumerWidget {
         sellerOrDevice: sellerIdentity,
         logoPath: logoPath,
         logoBase64: logoBase64,
+        currencySymbol: txCur.symbol,
+        currencyDecimals: txCur.decimal,
         stamp: stamp,
       );
       await Printing.layoutPdf(

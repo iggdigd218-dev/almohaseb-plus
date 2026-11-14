@@ -147,14 +147,20 @@ void main() {
   });
 
   group('تجزئة كلمات المرور', () {
-    test('QA-SEC-01 new hashes use per-user random salt (v2)', () {
+    test('QA-SEC-01 new hashes use per-user random salt PBKDF2 (SEC6)', () {
       final h1 = Security.hash('secret123');
       final h2 = Security.hash('secret123');
-      expect(h1, startsWith('v2\$'));
+      expect(h1, startsWith('pbkdf2_sha256\$'));
       expect(h1 == h2, isFalse, reason: 'ملح عشوائي مختلف لكل تجزئة');
       expect(Security.verify('secret123', h1), isTrue);
       expect(Security.verify('secret123', h2), isTrue);
       expect(Security.verify('wrong', h1), isFalse);
+      // التحقق من التوافق الرجعي مع تجزئات v2$ القديمة وتصنيفها لإعادة التجزئة
+      const legacyV2Salt = 'somesalt';
+      final legacyV2Hash =
+          'v2\$$legacyV2Salt\$${sha256.convert(utf8.encode('nexora::$legacyV2Salt::secret123'))}';
+      expect(Security.verify('secret123', legacyV2Hash), isTrue);
+      expect(Security.needsRehash(legacyV2Hash), isTrue);
     });
 
     test('QA-SEC-02 legacy static-salt hashes still verify + flagged', () {

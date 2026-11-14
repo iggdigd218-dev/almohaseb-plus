@@ -1727,6 +1727,7 @@ class CloudJoin {
         canDeleteTx: memberPermStr.contains('delete_tx'),
         canViewReports: memberPermStr.contains('view_reports'),
         canManageItems: memberPermStr.contains('manage_items') || memberPermStr.contains('items'),
+        skipAuthCheck: true,
       );
     } catch (_) {}
 
@@ -2176,6 +2177,7 @@ class CloudJoin {
             canViewReports: permStr.contains('view_reports'),
             canManageItems: permStr.contains('manage_items') || permStr.contains('items') || permStr.contains('edit_tx') || roleGrantsAdvanced(role),
             sync: false,
+            skipAuthCheck: true,
           );
         }
       } catch (_) {}
@@ -3240,9 +3242,29 @@ class CloudJoin {
         final onlyOurs =
             await _workspaceHasOnlyOurDevice(url, oldLocalWs, ourId);
         if (onlyOurs) {
+          final encOldWs = Uri.encodeComponent(oldLocalWs);
+          final oldWsBase = '$root/workspaces/$encOldWs';
+          for (final sub in const [
+            'operations.json',
+            'roster.json',
+            'devices.json',
+            'invites.json',
+            'joinRequests.json',
+            'logout_requests.json',
+            'evictions.json',
+            'media.json',
+            'revoked_devices.json',
+            'ejected_devices.json',
+            'security_log.json',
+            'meta.json',
+            'members.json',
+          ]) {
+            try {
+              await _delete('$oldWsBase/$sub');
+            } catch (_) {}
+          }
           try {
-            await _delete(
-                '$root/workspaces/${Uri.encodeComponent(oldLocalWs)}.json');
+            await _delete('$root/workspaces/$encOldWs.json');
           } catch (_) {}
         } else {
           // إذا كان عضواً في مؤسسة سابقة، نعزله منها رسمياً

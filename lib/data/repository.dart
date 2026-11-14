@@ -2723,7 +2723,10 @@ class Repo {
     final db = await _db;
     final dec = await _decimalsOf(originalTx.currency);
     final rawTotal = validLines.fold<double>(0, (s, l) => s + l.total);
-    final returnAmount = Fmt.roundMoney(rawTotal, dec);
+    if (rawTotal <= 0 || !rawTotal.isFinite) {
+      throw ArgumentError('إجمالي قيمة المرتجع يجب أن يكون أكبر من صفر.');
+    }
+    var returnAmount = Fmt.roundMoney(rawTotal, dec);
     final nowDt = DateTime.now();
     final nowIso = nowDt.toIso8601String();
     final origRef = originalTx.reference.trim().isNotEmpty
@@ -2768,19 +2771,36 @@ class Repo {
             "(deleted_at IS NULL OR deleted_at = '') AND (original_tx_id = ? OR notes LIKE ?)",
         whereArgs: ['${originalTx.id}', '%[ORIG_TX:${originalTx.id}]%'],
       );
+      final prevReturnedAmount = prevReturnTxs.fold<double>(
+        0.0,
+        (sum, r) => sum + ((r['amount'] as num?)?.toDouble() ?? 0.0),
+      );
+      var effectiveLines = validLines;
+
       if (origItemRows.isNotEmpty) {
         final soldById = <int, double>{};
         final soldByName = <String, double>{};
+        final origPriceById = <int, double>{};
+        final origPriceByName = <String, double>{};
+        var origGrossTotal = 0.0;
         for (final r in origItemRows) {
           final l = InvoiceLine.fromMap(r);
+          origGrossTotal += l.total;
           final nameKey = l.name.trim().toLowerCase();
           if (l.itemId != null) {
             soldById[l.itemId!] = (soldById[l.itemId!] ?? 0.0) + l.quantity;
+            origPriceById[l.itemId!] = l.unitPrice;
           }
           if (nameKey.isNotEmpty) {
             soldByName[nameKey] = (soldByName[nameKey] ?? 0.0) + l.quantity;
+            origPriceByName[nameKey] = l.unitPrice;
           }
         }
+
+        final discountRatio = (origGrossTotal > originalTx.amount + Fmt.moneyEpsilon &&
+                origGrossTotal > 0)
+            ? (originalTx.amount / origGrossTotal).clamp(0.0, 1.0)
+            : 1.0;
 
         final returnedById = <int, double>{};
         final returnedByName = <String, double>{};
@@ -2811,6 +2831,8 @@ class Repo {
 
         final reqById = <int, double>{};
         final reqByName = <String, double>{};
+        final adjusted = <InvoiceLine>[];
+        var computedReturnSum = 0.0;
         for (final line in validLines) {
           final nameKey = line.name.trim().toLowerCase();
           final hasIdMatch =
@@ -2844,22 +2866,53 @@ class Repo {
               );
             }
           }
+
+          var effUnitPrice = line.unitPrice;
+          if (discountRatio < 1.0 - 1e-6) {
+            final origGrossUnit = hasIdMatch
+                ? (origPriceById[line.itemId!] ?? line.unitPrice)
+                : (origPriceByName[nameKey] ?? line.unitPrice);
+            final expectedNetUnit = origGrossUnit * discountRatio;
+            if ((line.unitPrice - origGrossUnit).abs() <= Fmt.moneyEpsilon ||
+                line.unitPrice > expectedNetUnit + 0.01) {
+              effUnitPrice = expectedNetUnit;
+            }
+          }
+          adjusted.add(InvoiceLine(
+            itemId: line.itemId,
+            name: line.name,
+            unit: line.unit,
+            quantity: line.quantity,
+            unitPrice: effUnitPrice,
+          ));
+          computedReturnSum += line.quantity * effUnitPrice;
         }
-      } else {
-        final prevReturnedAmount = prevReturnTxs.fold<double>(
-          0.0,
-          (sum, r) => sum + ((r['amount'] as num?)?.toDouble() ?? 0.0),
+        effectiveLines = adjusted;
+        returnAmount = Fmt.roundMoney(computedReturnSum, dec);
+      }
+
+      // سقف التراكم المالي للمرتجعات: يسري على الفواتير المفصلة والمجمّعة معاً.
+      final maxRemainingAmount =
+          (originalTx.amount - prevReturnedAmount).clamp(0.0, double.infinity);
+      final roundingSlop = dec == 0 ? 1.0 : 0.02;
+      if (prevReturnedAmount + returnAmount > originalTx.amount + roundingSlop) {
+        throw StateError(
+          'إجمالي قيمة المرتجعات يتجاوز قيمة الفاتورة الأصلية #$origRef.',
         );
-        if (prevReturnedAmount + returnAmount > originalTx.amount + 1e-6) {
-          throw StateError(
-            'إجمالي قيمة المرتجعات يتجاوز قيمة الفاتورة الأصلية #$origRef.',
-          );
-        }
+      }
+      if (returnAmount > maxRemainingAmount) {
+        returnAmount = Fmt.roundMoney(maxRemainingAmount, dec);
+      }
+      if (returnAmount <= 0 || !returnAmount.isFinite) {
+        throw StateError(
+          'إجمالي قيمة المرتجعات يتجاوز قيمة الفاتورة الأصلية #$origRef.',
+        );
       }
 
       // 1. إعادة الأصناف المرتجعة إلى المخزون والمبيعات
       final resolvedLines = <InvoiceLine>[];
-      for (final line in validLines) {
+      for (final line in effectiveLines) {
+        final hadExplicitItemId = line.itemId != null;
         int? targetItemId = line.itemId;
         if (targetItemId != null) {
           final check = await txn.query(
@@ -2872,7 +2925,8 @@ class Repo {
           if (check.isEmpty) targetItemId = null;
         }
         // إن لم يكن للصنف معرّف مربوط في السطر، نبحث عنه بالاسم في جدول الأصناف
-        if (targetItemId == null && line.name.trim().isNotEmpty) {
+        // (ولا نعيد ربط صنف له معرف صريح مفقود بصنف آخر مختلف تطابق اسمه).
+        if (!hadExplicitItemId && targetItemId == null && line.name.trim().isNotEmpty) {
           final byName = await txn.query(
             'items',
             columns: ['id'],
@@ -3467,8 +3521,12 @@ class Repo {
     bool canManageItems = false,
     bool isActive = true,
     bool sync = true,
+    bool skipAuthCheck = false,
     DatabaseExecutor? executor,
   }) async {
+    if (!skipAuthCheck) {
+      await _ensureCan('manage_users');
+    }
     final em = email.trim().toLowerCase();
     if (em.isEmpty) return;
     final row = <String, Object?>{
@@ -3590,6 +3648,7 @@ class Repo {
     int? userId,
     String? deviceId,
   }) async {
+    await _ensureCan('manage_users');
     final em = email.trim().toLowerCase();
     final fullPerms = kPerms.map((p) => p.key).toSet();
     final full = fullPerms.join(',');
@@ -4502,10 +4561,34 @@ class Repo {
   }
 
   /// Failure to verify identity never grants privileges (fail closed).
+  /// يوحّد قرار الصلاحية مع `effectivePermissions()` (جدول `user_permissions`
+  /// ودور المستخدم الفعّال مع التحقق الصارم من حالة النشاط).
   Future<bool> can(String perm) async {
     try {
       final me = await currentUser().timeout(const Duration(seconds: 2));
-      return me != null && me.active && me.can(perm);
+      if (me == null || !me.active) return false;
+      final eff = await effectivePermissions().timeout(const Duration(seconds: 2));
+      if (!eff.isActive) return false;
+      if (eff.isAdmin) return true;
+      switch (perm) {
+        case 'can_discount':
+        case 'discount':
+          return eff.canDiscount;
+        case 'delete_tx':
+        case 'can_delete_tx':
+          return eff.canDeleteTx;
+        case 'view_reports':
+        case 'can_view_reports':
+          return eff.canViewReports;
+        case 'view_sales_summary':
+        case 'can_view_sales_summary':
+          return eff.canViewSalesSummary;
+        case 'manage_items':
+        case 'can_manage_items':
+          return eff.canManageItems;
+        default:
+          return me.can(perm);
+      }
     } catch (_) {
       return false;
     }
@@ -4602,6 +4685,7 @@ class Repo {
           canManageItems: effective.role == UserRole.admin ||
               (effective.permissions['edit_tx'] ?? false),
           isActive: effective.active,
+          skipAuthCheck: true,
           executor: txn,
         );
       } catch (_) {}
