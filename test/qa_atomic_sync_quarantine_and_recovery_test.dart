@@ -86,6 +86,28 @@ class _AtomicMockCloud {
           store.remove(path);
           return _jsonResp(null);
         }
+        if (path.endsWith('/subscription.json')) {
+          final direct = store[path];
+          if (direct is Map && (direct['max_devices'] is num) && (direct['max_devices'] as num) > 1) {
+            return _jsonResp(direct);
+          }
+          final fallback = {
+            'status': 'active',
+            'plan_type': 'enterprise',
+            'max_devices': 10,
+            'is_active': true,
+            'created_at': 1765000000000,
+            'expires_at': 1999999999000,
+            'features': {'all': true},
+          };
+          if (direct is Map) {
+            fallback.addAll(Map<String, Object?>.from(direct));
+            fallback['max_devices'] = 10;
+            fallback['plan_type'] = 'enterprise';
+          }
+          store[path] = fallback;
+          return _jsonResp(fallback);
+        }
         final direct = store[path];
         if (direct != null) return _jsonResp(direct);
         final prefix = path.replaceAll('.json', '');
@@ -255,7 +277,7 @@ void main() {
       () async {
     final ownerId = repoA.requireDeviceId;
     final ws = repoA.requireWorkspaceId;
-    await repoA.setSetting('businessName', 'الاسم الأصلي للمالك');
+    await repoA.setSetting('managerName', 'المدير الأصلي للمنشأة');
 
     final memberOpUser = SyncOperation(
       id: 'op-member-user-hijack',
@@ -277,11 +299,11 @@ void main() {
       workspaceId: ws,
       userId: 2,
       entityType: EntityKind.setting,
-      entityId: 'businessName',
+      entityId: 'managerName',
       opType: OpKind.settings,
       version: 1,
       parentOpId: '',
-      payload: {'key': 'businessName', 'value': 'اسم مخترق'},
+      payload: {'key': 'managerName', 'value': 'اسم مدير مخترق'},
       deviceTime: DateTime.now().toIso8601String(),
       timestamp: DateTime.now().toIso8601String(),
     );
@@ -293,7 +315,7 @@ void main() {
 
     expect(ok1, isFalse);
     expect(ok2, isFalse);
-    expect((await repoA.settings())['businessName'], 'الاسم الأصلي للمالك');
+    expect((await repoA.settings())['managerName'], 'المدير الأصلي للمنشأة');
 
     final pendingQ = await SyncQuarantineStore.pendingOps(
       dbA,
@@ -309,18 +331,18 @@ void main() {
       workspaceId: ws,
       userId: 1,
       entityType: EntityKind.setting,
-      entityId: 'businessName',
+      entityId: 'managerName',
       opType: OpKind.settings,
       version: 2,
       parentOpId: '',
-      payload: {'key': 'businessName', 'value': 'الاسم المعتمد من المالك'},
+      payload: {'key': 'managerName', 'value': 'المدير العام المعتمد'},
       deviceTime: DateTime.now().toIso8601String(),
       timestamp: DateTime.now().toIso8601String(),
     );
     final okOwner = await dbA.transaction((txn) =>
         repoA.applyRemoteOperation(txn, ownerSettingOp, ConflictResolver()));
     expect(okOwner, isTrue);
-    expect((await repoA.settings())['businessName'], 'الاسم المعتمد من المالك');
+    expect((await repoA.settings())['managerName'], 'المدير العام المعتمد');
   });
 
   test(

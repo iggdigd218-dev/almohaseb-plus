@@ -275,19 +275,15 @@ class SovereignAuthorityGuard {
   SovereignAuthorityGuard._();
 
   static const Set<String> sovereignOrgSettingKeys = {
-    'businessName',
-    'businessNameEn',
-    'businessActivity',
     'managerName',
-    'address',
-    'phone',
-    'whatsapp',
-    'voucherFooter',
-    'defaultVoucherNotes',
-    'defaultCurrency',
-    'org.icon.b64',
-    'allow_cloud_media_sync',
     'profile.owner_name',
+    'ownerDeviceId',
+    'creatorDeviceId',
+    'owner_email',
+    'admin_pin',
+    'auth_pin',
+    'workspace_license',
+    'subscription_tier',
   };
 
   /// تحديد ما إذا كانت العملية تمس صلاحيات أو هوية سيادية للمنشأة.
