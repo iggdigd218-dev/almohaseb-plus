@@ -30,6 +30,7 @@ import 'chat_hooks.dart';
 import 'operation.dart';
 import 'subscription_guard.dart';
 import 'sync_engine.dart';
+import 'sync_quarantine.dart';
 
 class CloudFirebaseTransport implements SyncTransport {
   final Repo repo;
@@ -651,10 +652,9 @@ class CloudFirebaseTransport implements SyncTransport {
               final v = entry.value;
               if (v is! Map) continue;
               final op = SyncOperation.fromMap(Map<String, Object?>.from(v));
-              if (op.workspaceId != workspaceId &&
-                  op.workspaceId != 'default' &&
-                  workspaceId != 'default' &&
-                  op.workspaceId.isNotEmpty) {
+              final opWs = op.workspaceId.trim();
+              final transportWs = workspaceId.trim();
+              if (transportWs != 'default' && opWs != transportWs) {
                 droppedOtherWs++;
                 if (droppedSample.isEmpty) droppedSample = op.workspaceId;
                 continue;
@@ -1054,7 +1054,20 @@ class CloudFirebaseTransport implements SyncTransport {
       } catch (_) {}
     }
 
-    if (applied > 0 || forceFullSync || resetCursor || lastCursorMs == 0) {
+    var replayedFromQuarantine = 0;
+    try {
+      replayedFromQuarantine = await SyncQuarantineStore.autoReplayResolvedQuarantine(
+        repo,
+        workspaceId: workspaceId,
+      );
+      applied += replayedFromQuarantine;
+    } catch (_) {}
+
+    if (applied > 0 ||
+        replayedFromQuarantine > 0 ||
+        forceFullSync ||
+        resetCursor ||
+        lastCursorMs == 0) {
       try {
         await ApplyRemoteOp.reconcileInventoryQuantities(db);
       } catch (_) {}
