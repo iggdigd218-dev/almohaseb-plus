@@ -41,7 +41,6 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
   String? _cloudError;
   GoogleAccountInfo? _googleAccount;
   GoogleDriveBackupInfo? _cloudBackup;
-  RecoveryPreview? _recoveryPreview;
 
   /// بريد الحساب من الجلسة **الموحّدة** (قسم «حساب المؤسسة»).
   String? _accountEmail;
@@ -164,13 +163,6 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
     } catch (e) {
       cloudError = '$e';
     }
-    RecoveryPreview? recoveryPreview;
-    try {
-      final repo = ref.read(repoProvider);
-      if (await repo.isWorkspaceOwner() || await repo.workspaceMode() == 'standalone') {
-        recoveryPreview = await CatalogRecoveryService.previewRecovery(repo);
-      }
-    } catch (_) {}
     if (!mounted) return;
     setState(() {
       _googleAccount = account;
@@ -178,7 +170,6 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
       _cloudError = cloudError;
       _accountEmail = accountEmail;
       _liveSyncActive = liveSync;
-      _recoveryPreview = recoveryPreview;
       _cloudLoading = false;
     });
   }
@@ -520,61 +511,6 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
     }
   }
 
-  Future<void> _handleUndoAutoMerges() async {
-    setState(() => _busy = true);
-    try {
-      final repo = ref.read(repoProvider);
-      final preview = await CatalogRecoveryService.previewRecovery(repo);
-      if (mounted) {
-        setState(() => _recoveryPreview = preview);
-      }
-      if (!preview.hasRecoverableIssues) {
-        if (mounted) {
-          showSnack(
-            context,
-            'لم يتم رصد أصناف مدمجة أو محذوفة تتطلب فك الدمج في قاعدة البيانات الحالية.',
-          );
-        }
-        return;
-      }
-      if (!mounted) return;
-      final sampleText = preview.sampleItemNames.isEmpty
-          ? ''
-          : '\n• نماذج: ${preview.sampleItemNames.take(5).join('، ')}';
-      final ok = await confirmDialog(
-        context,
-        title: 'تراجع عن الدمج التلقائي واسترجاع الأصناف',
-        message:
-            'سيتم حفظ لقطة أمان احترازية ثم:\n'
-            '• التراجع عن ${preview.autoMergeMovesCount} تسوية دمج تلقائي\n'
-            '• استعادة ${preview.softDeletedItemsCount + preview.recoverableHardDeletedItemsCount} صنف محذوف/متأثر$sampleText\n'
-            '• الحفاظ التام على جميع الفواتير والحسابات والسندات.\n\nهل تريد المتابعة؟',
-        confirmText: 'تنفيذ الاسترجاع',
-      );
-      if (!ok || !mounted) return;
-      final result = await CatalogRecoveryService.undoAutoMerges(repo);
-      final engine = _tryReadSyncEngine();
-      if (result.queuedSyncOps > 0) {
-        engine?.notifyNewOperation();
-      }
-      final updatedPreview = await CatalogRecoveryService.previewRecovery(repo);
-      if (mounted) {
-        setState(() => _recoveryPreview = updatedPreview);
-        bump(ref);
-        showSnack(
-          context,
-          'تم استرجاع ${result.restoredItems} صنف وعكس ${result.revertedQtyMoves} تسوية دمج بدون المساس بالفواتير ✅',
-        );
-      }
-    } catch (e) {
-      if (mounted) {
-        showSnack(context, 'تعذّر إلغاء الدمج واسترجاع الأصناف: $e', error: true);
-      }
-    } finally {
-      if (mounted) setState(() => _busy = false);
-    }
-  }
-
   Future<void> _handleRestoreCatalogFromBackup() async {
     setState(() => _busy = true);
     try {
@@ -605,9 +541,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
       if (result.queuedSyncOps > 0) {
         engine?.notifyNewOperation();
       }
-      final updatedPreview = await CatalogRecoveryService.previewRecovery(repo);
       if (mounted) {
-        setState(() => _recoveryPreview = updatedPreview);
         bump(ref);
         showSnack(
           context,
@@ -941,7 +875,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
         ),
         const SizedBox(height: 20),
         if (wsOwner || wsMode == 'standalone') ...[
-          const SectionTitle('استرجاع الأصناف وإلغاء الدمج التلقائي'),
+          const SectionTitle('استرجاع كتالوج الأصناف من نسخة احتياطية'),
           Card(
             child: Padding(
               padding: const EdgeInsets.all(14),
@@ -956,24 +890,21 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
                         color: AppColors.primaryOf(context),
                       ),
                       const SizedBox(width: 10),
-                      Expanded(
+                      const Expanded(
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
-                            const Text(
-                              'إنقاذ كتالوج الأصناف (للمالك فقط)',
+                            Text(
+                              'استيراد كتالوج الأصناف من نسخة (.nexora / .db)',
                               style: TextStyle(
                                 fontWeight: FontWeight.w700,
                                 fontSize: 13.5,
                               ),
                             ),
-                            const SizedBox(height: 4),
+                            SizedBox(height: 4),
                             Text(
-                              _recoveryPreview != null &&
-                                      _recoveryPreview!.hasRecoverableIssues
-                                  ? 'تم رصد ${_recoveryPreview!.autoMergeMovesCount} تسوية دمج و${_recoveryPreview!.softDeletedItemsCount + _recoveryPreview!.recoverableHardDeletedItemsCount} صنف متأثر/محذوف قابل للاسترجاع.'
-                                  : 'أداة آمنة لفك الدمج التلقائي للأصناف أو استيراد كتالوج الأصناف من نسخة سابقة دون أي مساس بالفواتير.',
-                              style: const TextStyle(fontSize: 12),
+                              'أداة جراحية لاستيراد الأقسام والفئات والأصناف من نسخة مختارة دون المساس بالفواتير أو الكميات الحية للأصناف النشطة.',
+                              style: TextStyle(fontSize: 12),
                             ),
                           ],
                         ),
@@ -981,15 +912,6 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
                     ],
                   ),
                   const SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    child: FilledButton.icon(
-                      onPressed: _busy ? null : _handleUndoAutoMerges,
-                      icon: const Icon(Icons.undo_rounded),
-                      label: const Text('تراجع عن الدمج التلقائي واسترجاع الأصناف'),
-                    ),
-                  ),
-                  const SizedBox(height: 8),
                   SizedBox(
                     width: double.infinity,
                     child: OutlinedButton.icon(

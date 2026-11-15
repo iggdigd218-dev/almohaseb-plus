@@ -233,13 +233,13 @@ class SyncQuarantineStore {
         }
       }
 
-      SyncOperation? op;
+      final SyncOperation op;
       try {
         op = SyncOperation.fromJson(opJsonRaw);
       } catch (e) {
         debugPrint('SyncQuarantineStore decode error for $opId: $e');
+        continue;
       }
-      if (op == null) continue;
 
       try {
         final applied = await db.transaction((txn) async {
@@ -247,7 +247,7 @@ class SyncQuarantineStore {
             'operations',
             columns: ['id'],
             where: 'id = ?',
-            whereArgs: [op!.id],
+            whereArgs: [op.id],
             limit: 1,
           );
           if (already.isNotEmpty) {

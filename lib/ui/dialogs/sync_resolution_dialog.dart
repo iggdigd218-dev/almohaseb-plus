@@ -6,7 +6,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../../core/format.dart';
 import '../../core/sfx.dart';
 import '../../data/providers.dart';
-import '../../data/sync/catalog_recovery_service.dart';
 import '../../data/sync/error_localization_mapper.dart';
 import '../../data/sync/sync_diagnostics.dart';
 import '../../data/sync/sync_quarantine.dart';
@@ -39,10 +38,8 @@ class SyncResolutionDialog extends ConsumerStatefulWidget {
 class _SyncResolutionDialogState extends ConsumerState<SyncResolutionDialog> {
   bool _loading = true;
   bool _actionInProgress = false;
-  bool _canManageRecovery = false;
   List<Map<String, Object?>> _unsyncedOps = [];
   List<Map<String, Object?>> _quarantinedOps = [];
-  RecoveryPreview? _recoveryPreview;
 
   @override
   void initState() {
@@ -57,20 +54,10 @@ class _SyncResolutionDialogState extends ConsumerState<SyncResolutionDialog> {
       final ops = await repo.getUnsyncedOperationsWithDetails();
       final db = await repo.database;
       final qOps = await SyncQuarantineStore.pendingOps(db);
-      final isOwner = await repo.isWorkspaceOwner() ||
-          await repo.workspaceMode() == 'standalone';
-      RecoveryPreview? recPreview;
-      if (isOwner) {
-        try {
-          recPreview = await CatalogRecoveryService.previewRecovery(repo);
-        } catch (_) {}
-      }
       if (mounted) {
         setState(() {
           _unsyncedOps = ops;
           _quarantinedOps = qOps;
-          _canManageRecovery = isOwner;
-          _recoveryPreview = recPreview;
           _loading = false;
         });
       }
@@ -91,44 +78,6 @@ class _SyncResolutionDialogState extends ConsumerState<SyncResolutionDialog> {
         return 'اختلاف معرف المنشأة عن المنشأة النشطة';
       default:
         return reason.isNotEmpty ? reason : 'معزولة للمراجعة';
-    }
-  }
-
-  Future<void> _handleUndoAutoMergesFromDialog() async {
-    final preview = _recoveryPreview;
-    if (preview == null || !preview.hasRecoverableIssues) return;
-    final ok = await confirmDialog(
-      context,
-      title: 'تراجع عن الدمج التلقائي واسترجاع الأصناف',
-      message:
-          'تم رصد ${preview.autoMergeMovesCount} تسوية دمج و${preview.softDeletedItemsCount + preview.recoverableHardDeletedItemsCount} صنف متأثر.\n'
-          'سيتم حفظ لقطة أمان ثم عكس الدمج واستعادة الأصناف مع الإبقاء على كافة الفواتير.\n\nهل تريد المتابعة؟',
-      confirmText: 'استرجاع الأصناف',
-    );
-    if (ok != true || !mounted) return;
-    setState(() => _actionInProgress = true);
-    Sfx.click();
-    try {
-      final repo = ref.read(repoProvider);
-      final engine = ref.read(syncEngineProvider);
-      final result = await CatalogRecoveryService.undoAutoMerges(repo);
-      if (result.queuedSyncOps > 0) {
-        engine.notifyNewOperation();
-      }
-      await _loadDetails();
-      if (mounted) {
-        showSnack(
-          context,
-          '✅ تم استرجاع ${result.restoredItems} صنف وعكس ${result.revertedQtyMoves} تسوية دمج',
-        );
-        bump(ref);
-      }
-    } catch (e) {
-      if (mounted) {
-        showSnack(context, 'تعذّر استرجاع الأصناف: $e', error: true);
-      }
-    } finally {
-      if (mounted) setState(() => _actionInProgress = false);
     }
   }
 
@@ -522,53 +471,6 @@ class _SyncResolutionDialogState extends ConsumerState<SyncResolutionDialog> {
                               ),
                             ),
                           ],
-                        ],
-
-                        if (_canManageRecovery &&
-                            (_recoveryPreview?.hasRecoverableIssues ?? false)) ...[
-                          const SizedBox(height: 14),
-                          Container(
-                            padding: const EdgeInsets.all(12),
-                            decoration: BoxDecoration(
-                              color: isDark
-                                  ? const Color(0xFF172554)
-                                  : const Color(0xFFEFF6FF),
-                              borderRadius: BorderRadius.circular(12),
-                              border: Border.all(
-                                color: Colors.blue.withValues(alpha: 0.35),
-                              ),
-                            ),
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                const Text(
-                                  'رُصدت أصناف متأثرة بعمليات دمج سابقة',
-                                  style: TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 13,
-                                  ),
-                                ),
-                                const SizedBox(height: 4),
-                                Text(
-                                  'توجد ${_recoveryPreview!.autoMergeMovesCount} تسوية دمج و${_recoveryPreview!.softDeletedItemsCount + _recoveryPreview!.recoverableHardDeletedItemsCount} صنف محذوف/متأثر يمكن التراجع عنها دون المساس بالفواتير.',
-                                  style: const TextStyle(fontSize: 11.5),
-                                ),
-                                const SizedBox(height: 8),
-                                SizedBox(
-                                  width: double.infinity,
-                                  child: FilledButton.tonalIcon(
-                                    onPressed: _actionInProgress
-                                        ? null
-                                        : _handleUndoAutoMergesFromDialog,
-                                    icon: const Icon(Icons.undo_rounded, size: 18),
-                                    label: const Text(
-                                      'تراجع عن الدمج التلقائي واسترجاع الأصناف',
-                                    ),
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
                         ],
 
                         // خطأ الاتصال العام إن وُجد

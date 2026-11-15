@@ -763,13 +763,19 @@ class CloudJoin {
     final ourId = await ensureDeviceId(repo);
     final snap = await buildWorkspaceSnapshot(repo, hostDeviceId: ourId);
     final snapTs = DateTime.now().millisecondsSinceEpoch;
+    final checksum = SnapshotApply.computeSnapshotChecksum(snap);
+    final counts = SnapshotApply.computeTableCounts(snap);
     final root = _root(url, ws);
     await _putJson(
       '$root/joinSnapshot.json',
       {
+        'schemaVersion': AppDatabase.schemaVersion,
         'createdAt': DateTime.now().toIso8601String(),
         'hostDeviceId': ourId,
         'compacted_through_ts': snapTs,
+        'serverWatermarkMs': {'.sv': 'timestamp'},
+        'checksum': checksum,
+        'counts': counts,
         'data': snap,
       },
       timeout: const Duration(seconds: 25),
@@ -1860,20 +1866,46 @@ class CloudJoin {
     if (cloudCode.trim().isNotEmpty) {
       await repo.setSetting('cloudCode', cloudCode.trim().toUpperCase());
     }
-    // ضبط مؤشرات المزامنة عند خط الأساس الدقيق (serverWatermarkMs) بلا تراجع 60 ثانية
+    // ضبط مؤشرات المزامنة وحاجز المزامنة الذري عند خط الأساس الدقيق (serverWatermarkMs) بلا تراجع
     // لتجنب إعادة تشغيل التاريخ القديم وتعارضاته بعد الانضمام الذري.
+    var existingBarrierMs = 0;
+    try {
+      final bRows = await db.query(
+        'sync_meta',
+        columns: ['value'],
+        where: 'key = ?',
+        whereArgs: ['atomic_sync_barrier:$workspaceId'],
+        limit: 1,
+      );
+      if (bRows.isNotEmpty) {
+        existingBarrierMs = parseSyncMs(bRows.first['value']);
+      }
+    } catch (_) {}
     await db.delete('sync_meta',
         where: "key LIKE 'last_synced_cursor%' OR key LIKE 'lastCloudTs:%' "
             "OR key LIKE 'lastRosterPush:%' OR key LIKE 'lastLanTs:%'");
-    if (snapshotWatermarkMs > 0) {
+    final effectiveBarrierMs = snapshotWatermarkMs > existingBarrierMs
+        ? snapshotWatermarkMs
+        : existingBarrierMs;
+    if (effectiveBarrierMs > 0) {
       await db.insert(
         'sync_meta',
-        {'key': 'last_synced_cursor:$workspaceId', 'value': '$snapshotWatermarkMs'},
+        {'key': 'last_synced_cursor:$workspaceId', 'value': '$effectiveBarrierMs'},
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
       await db.insert(
         'sync_meta',
-        {'key': 'lastCloudTs:$workspaceId', 'value': '$snapshotWatermarkMs'},
+        {'key': 'lastCloudTs:$workspaceId', 'value': '$effectiveBarrierMs'},
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      await db.insert(
+        'sync_meta',
+        {'key': 'snapshotThroughTs:$workspaceId', 'value': '$effectiveBarrierMs'},
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      await db.insert(
+        'sync_meta',
+        {'key': 'atomic_sync_barrier:$workspaceId', 'value': '$effectiveBarrierMs'},
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
     }

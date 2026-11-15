@@ -6,7 +6,6 @@ import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:nexora_app/core/accounting.dart';
 import 'package:nexora_app/core/database.dart';
-import 'package:nexora_app/core/item_conflict.dart';
 import 'package:nexora_app/core/models.dart';
 import 'package:nexora_app/data/backup_engine.dart';
 import 'package:nexora_app/data/repository.dart';
@@ -17,6 +16,7 @@ import 'package:nexora_app/data/sync/cloud_join.dart';
 import 'package:nexora_app/data/sync/conflict_resolver.dart';
 import 'package:nexora_app/data/sync/device_id.dart';
 import 'package:nexora_app/data/sync/operation.dart';
+import 'package:nexora_app/data/sync/snapshot_apply.dart';
 import 'package:nexora_app/data/sync/sync_quarantine.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
@@ -348,7 +348,7 @@ void main() {
   });
 
   test(
-      'ISOLATION-01: تداخل معرف/PLU لدى العضو يُعزل بدون ترقيم وهمي، وناقل السحابة يرفض ops مساحتها default',
+      'ISOLATION-01: تطابق المعرف لدى العضو يطبق In-Place Upsert بدون ترقيم وهمي، وناقل السحابة يرفض ops مساحتها default',
       () async {
     await repoB.bindWorkspaceId('WS-ISOLATED-1');
     await dbB.insert(
@@ -371,28 +371,30 @@ void main() {
       },
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
-    // صنف محلي غير متزامن بمعرف 10 لدى العضو
+    // صنف محلي بمعرف 10 لدى العضو بطابع أقدم
+    final olderIso = now.subtract(const Duration(minutes: 5)).toIso8601String();
+    final newerIso = now.toIso8601String();
     await dbB.insert('items', {
       'id': 10,
       'workspace_id': 'WS-ISOLATED-1',
-      'name': 'صنف عضو غير متزامن',
+      'name': 'صنف عضو محلي',
       'plu': 10,
       'sku': '900010',
-      'created_at': now.toIso8601String(),
-      'updated_at': now.toIso8601String(),
+      'created_at': olderIso,
+      'updated_at': olderIso,
     });
     await dbB.insert('operations', {
-      'id': 'local-unsynced-item-10',
+      'id': 'local-item-10-old',
       'device_id': repoB.requireDeviceId,
       'workspace_id': 'WS-ISOLATED-1',
       'entity_type': 'item',
       'entity_id': '10',
       'op_type': 'create',
-      'payload': '{"id":10,"name":"صنف عضو غير متزامن"}',
+      'payload': '{"id":10,"name":"صنف عضو محلي"}',
       'version': 1,
       'parent_op_id': '',
-      'device_time': now.toIso8601String(),
-      'timestamp': now.toIso8601String(),
+      'device_time': olderIso,
+      'timestamp': olderIso,
       'synced': 0,
       'is_synced': 0,
     });
@@ -413,23 +415,20 @@ void main() {
         'name': 'صنف المالك رقم 10',
         'plu': 10,
         'sku': '900010',
+        'updated_at': newerIso,
       },
-      deviceTime: now.toIso8601String(),
-      timestamp: now.toIso8601String(),
+      deviceTime: newerIso,
+      timestamp: newerIso,
     );
 
     final applied = await dbB.transaction((txn) =>
         repoB.applyRemoteOperation(txn, cloudItem10, ConflictResolver()));
-    expect(applied, isFalse);
+    expect(applied, isTrue);
     final allItems = await dbB.query('items');
     expect(allItems, hasLength(1),
-        reason: 'يُمنع توليد أصناف بأرقام وهمية على جهاز العضو عند التصادم');
-    final q = await SyncQuarantineStore.pendingOps(
-      dbB,
-      workspaceId: 'WS-ISOLATED-1',
-      reason: SyncQuarantineStore.kReasonMemberItemCollision,
-    );
-    expect(q, hasLength(1));
+        reason: 'تطابق المعرف يعني نفس الصنف 100% — تحديث في مكانه بدون فصل أو ترقيم وهمي');
+    expect(allItems.single['id'], 10);
+    expect(allItems.single['name'], 'صنف المالك رقم 10');
 
     // التحقق من رفض ناقل السحابة لأي عملية قادمة بمساحة default عندما المساحة الحقيقية معيّنة
     final cloud = _AtomicMockCloud();
@@ -463,29 +462,27 @@ void main() {
   });
 
   test(
-      'RECOVERY-01: إلغاء عمليات الدمج التلقائي يسترجع الأصناف المدمجة والمحذوفة بدون المساس بالفواتير',
+      'RECOVERY-01: تعطيل أداة الاسترجاع الجماعي undoAutoMerges يمنع إحياء الأصناف المحذوفة ناعماً أو الإخلال بالأرصدة',
       () async {
     final ws = repoA.requireWorkspaceId;
     final nowIso = now.toIso8601String();
 
-    // الصنف الفائز بعد الدمج السابق: رصيده الأصلي 10 + 15 مضافة اصطناعياً = 25
     await dbA.insert('items', {
       'id': 1,
       'workspace_id': ws,
       'name': 'شاي كبوس',
       'sell_price': 500,
-      'quantity': 25.0,
+      'quantity': 10.0,
       'is_deleted': 0,
       'is_active': 1,
       'deleted_at': '',
       'created_at': nowIso,
       'updated_at': nowIso,
     });
-    // الصنف المكرر الذي حُذف ناعماً وأُلحق اسمه بلاحقة (محلي 2)
     await dbA.insert('items', {
       'id': 2,
       'workspace_id': ws,
-      'name': 'سكر ناعم (محلي 2)',
+      'name': 'سكر ناعم',
       'sell_price': 300,
       'quantity': 15.0,
       'is_deleted': 1,
@@ -494,52 +491,6 @@ void main() {
       'created_at': nowIso,
       'updated_at': nowIso,
     });
-    // حركة تسوية دمج تلقائي اصطناعية سابقة
-    await dbA.insert('stock_moves', {
-      'workspace_id': ws,
-      'item_id': 1,
-      'kind': 'purchase',
-      'quantity': 15.0,
-      'unit_price': 0,
-      'notes': 'تسوية تلقائية لدمج رصيد صنف مكرر (#2)',
-      'date': '2026-11-01',
-      'created_at': nowIso,
-    });
-    // صنف 3 محذوف نهائياً من جدول items وموجود في السلة trash
-    await dbA.insert('trash', {
-      'store': 'items',
-      'label': 'قهوة عربية',
-      'payload': jsonEncode({
-        'id': 3,
-        'name': 'قهوة عربية',
-        'sell_price': 2000,
-        'quantity': 8.0,
-        'created_at': nowIso,
-        'updated_at': nowIso,
-      }),
-      'created_at': nowIso,
-    });
-    // سجل تعارض مسجل كـ merged
-    final conflict = OfflineItemConflict(
-      key: 'item_conflict:1_2',
-      conflictType: 'sku',
-      sharedSku: '62910001',
-      item1Id: 1,
-      item1Name: 'شاي كبوس',
-      item1Creator: 'المدير',
-      item2Id: 2,
-      item2Name: 'سكر ناعم',
-      item2Creator: 'ايمن',
-      status: 'resolved',
-      resolution: 'merged',
-      createdAt: nowIso,
-      resolvedAt: nowIso,
-    );
-    await dbA.insert('settings', {
-      'key': conflict.key,
-      'value': conflict.toJson(),
-    });
-    // فاتورة ما بعد الانضمام — يجب ألا تُمس أبداً!
     await dbA.insert('accounts', {
       'id': 50,
       'workspace_id': ws,
@@ -561,29 +512,21 @@ void main() {
     });
 
     final preview = await CatalogRecoveryService.previewRecovery(repoA);
-    expect(preview.autoMergeMovesCount, 1);
-    expect(preview.softDeletedItemsCount, 1);
-    expect(preview.recoverableHardDeletedItemsCount, 1);
-    expect(preview.mergedConflictKeys, contains('item_conflict:1_2'));
+    expect(preview.hasRecoverableIssues, isFalse);
 
-    final result = await CatalogRecoveryService.undoAutoMerges(repoA);
-    expect(result.revertedQtyMoves, 1);
-    expect(result.restoredItems, greaterThanOrEqualTo(2));
-    expect(result.resetConflicts, 1);
+    await expectLater(
+      () => CatalogRecoveryService.undoAutoMerges(repoA),
+      throwsA(isA<UnsupportedError>()),
+    );
 
+    // الصنف النشط #1 والصنف المحذوف ناعماً #2 والفاتورة #700 بقيت دون أي تعديل أعمى
     final item1 = (await dbA.query('items', where: 'id = 1')).single;
     expect((item1['quantity'] as num).toDouble(), 10.0);
 
     final item2 = (await dbA.query('items', where: 'id = 2')).single;
-    expect(item2['name'], 'سكر ناعم');
-    expect(item2['is_deleted'], 0);
-    expect('${item2['deleted_at'] ?? ''}', isEmpty);
+    expect(item2['is_deleted'], 1);
+    expect('${item2['deleted_at'] ?? ''}', isNotEmpty);
 
-    final item3 = (await dbA.query('items', where: 'id = 3')).single;
-    expect(item3['name'], 'قهوة عربية');
-    expect((item3['quantity'] as num).toDouble(), 8.0);
-
-    // الفاتورة بعد الانضمام محفوظة بالكامل
     expect(await dbA.query('transactions', where: 'id = 700'), hasLength(1));
   });
 
@@ -674,5 +617,149 @@ void main() {
 
     // الفاتورة اللاحقة لم تُمس
     expect(await dbA.query('transactions', where: 'id = 910'), hasLength(1));
+  });
+
+  test(
+      'BARRIER-01: SnapshotApply يحفظ جدول operations ويثبت atomic_sync_barrier لمنع إعادة تشغيل التاريخ وتضاعف المخزون ورأس المال حتى مع resetCursor: true',
+      () async {
+    const ws = 'WS-PY4WHH9S';
+    const barrierMs = 1765000500000;
+    await repoB.bindWorkspaceId(ws);
+
+    // عملية مسجلة مسبقاً في جدول operations — يُحظر مسحها أثناء تطبيق اللقطة
+    await dbB.insert('operations', {
+      'id': 'pre-snap-op-1',
+      'device_id': repoB.requireDeviceId,
+      'workspace_id': ws,
+      'entity_type': 'account',
+      'entity_id': '10',
+      'op_type': 'create',
+      'payload': '{"id":10,"name":"عميل سابق"}',
+      'version': 1,
+      'parent_op_id': '',
+      'device_time': now.toIso8601String(),
+      'timestamp': now.toIso8601String(),
+      'synced': 0,
+      'is_synced': 0,
+    });
+
+    final snap = <String, Object?>{
+      'workspaces': [
+        {'id': ws, 'name': 'مركز عثمان الوصابي'}
+      ],
+      'items': [
+        {
+          'id': 7,
+          'workspace_id': ws,
+          'name': 'صنف نظيف بعد اللقطة',
+          'buy_price': 1000.0,
+          'sell_price': 1500.0,
+          'quantity': 10.0,
+          'created_at': now.toIso8601String(),
+          'updated_at': now.toIso8601String(),
+        }
+      ],
+      'accounts': [
+        {
+          'id': 1,
+          'workspace_id': ws,
+          'name': 'الصندوق الرئيسي',
+          'kind': 'cash',
+          'created_at': now.toIso8601String(),
+          'updated_at': now.toIso8601String(),
+        }
+      ],
+    };
+
+    await SnapshotApply.applySnapshot(
+      () async => dbB,
+      repoB.requireDeviceId,
+      snap,
+      serverWatermarkMs: barrierMs,
+    );
+
+    // 1) التحقق من بقاء سجل operations مع وسمه كمُزامن وعدم حذفه
+    final keptOps =
+        await dbB.query('operations', where: 'id = ?', whereArgs: ['pre-snap-op-1']);
+    expect(keptOps, hasLength(1));
+    expect(keptOps.single['synced'], 1);
+
+    // 2) التحقق من حفظ حاجز المزامنة الذري الصارم
+    final barrierRow = (await dbB.query(
+      'sync_meta',
+      where: 'key = ?',
+      whereArgs: ['atomic_sync_barrier:$ws'],
+    ))
+        .single;
+    expect(barrierRow['value'], '$barrierMs');
+
+    // 3) التحقق من أن السحب (حتى مع resetCursor: true و forceFullSync: true)
+    // لا يسحب ولا يعيد تطبيق العمليات التاريخية الواقعة <= barrierMs، بينما يطبّق الأحدث فقط!
+    final cloud = _AtomicMockCloud();
+    cloud.store['/workspaces/$ws/operations/OP-HISTORICAL-OLD.json'] = {
+      'id': 'OP-HISTORICAL-OLD',
+      'device_id': 'DEV-HOST',
+      'workspace_id': ws,
+      'entity_type': 'stockMove',
+      'entity_id': '801',
+      'op_type': 'create',
+      'version': 1,
+      'parent_op_id': '',
+      'payload': {
+        'id': 801,
+        'item_id': 7,
+        'kind': 'purchase',
+        'quantity': 20.0,
+        'unit_price': 1000.0,
+        'date': now.toIso8601String(),
+      },
+      'device_time': now.toIso8601String(),
+      'timestamp': now.toIso8601String(),
+      'server_time': barrierMs - 10000,
+    };
+    cloud.store['/workspaces/$ws/operations/OP-POST-BARRIER-NEW.json'] = {
+      'id': 'OP-POST-BARRIER-NEW',
+      'device_id': 'DEV-HOST',
+      'workspace_id': ws,
+      'entity_type': 'stockMove',
+      'entity_id': '802',
+      'op_type': 'create',
+      'version': 1,
+      'parent_op_id': '',
+      'payload': {
+        'id': 802,
+        'item_id': 7,
+        'kind': 'purchase',
+        'quantity': 5.0,
+        'unit_price': 1000.0,
+        'date': now.toIso8601String(),
+      },
+      'device_time': now.toIso8601String(),
+      'timestamp': now.toIso8601String(),
+      'server_time': barrierMs + 5000,
+    };
+
+    final transport = CloudFirebaseTransport(
+      repo: repoB,
+      dbProvider: () async => dbB,
+      backendUrl: url,
+      workspaceId: ws,
+    );
+    final pulledCount = await http.runWithClient(
+      () => transport.pull(
+        resolver: ConflictResolver(),
+        forceFullSync: true,
+        resetCursor: true,
+      ),
+      cloud.client,
+    );
+
+    expect(pulledCount, 1);
+    expect(await dbB.query('stock_moves', where: 'id = 801'), isEmpty);
+    expect(await dbB.query('stock_moves', where: 'id = 802'), hasLength(1));
+
+    // الكمية النهائية = 10 (اللقطة النظيفة) + 5 (الحركة الشرعية اللاحقة فقط) = 15 (وليس 35!)
+    final item7 = (await dbB.query('items', where: 'id = 7')).single;
+    expect((item7['quantity'] as num).toDouble(), 15.0);
   });
 }

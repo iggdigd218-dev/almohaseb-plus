@@ -6,7 +6,6 @@ import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 
 import '../../core/auth_config.dart';
-import '../../core/database.dart';
 import '../../core/device_names.dart';
 import '../../core/item_conflict.dart';
 import '../../core/media_paths.dart';
@@ -114,7 +113,6 @@ Future<({String table, String id})?> findMissingForeignParent(
   Map<String, Object?> row,
   SyncOperation op, {
   List<Map<String, Object?>>? txLines,
-  Future<int?> Function(Object? rawItemId)? remapItemId,
 }) async {
   for (final entry in row.entries) {
     if (entry.key == 'section_id') continue;
@@ -145,11 +143,7 @@ Future<({String table, String id})?> findMissingForeignParent(
       final rawItemId = line['item_id'];
       if (rawItemId == null) continue;
       if (rawItemId is String && rawItemId.trim().isEmpty) continue;
-      var checkId = rawItemId;
-      if (remapItemId != null) {
-        final remapped = await remapItemId(rawItemId);
-        if (remapped != null) checkId = remapped;
-      }
+      final checkId = rawItemId;
       try {
         final found = await txn.query(
           'items',
@@ -342,80 +336,6 @@ Future<void> _healAccountConflict(
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
   }
-}
-
-/// استرجاع معرّف الصنف المعاد ترقيمه تلقائياً إثر تعارض أوفلاين (إن وُجد).
-Future<int?> _lookupRemappedItemId(
-  DatabaseExecutor txn,
-  String deviceId,
-  Object? rawItemId,
-) async {
-  if (rawItemId == null) return null;
-  final idStr = '$rawItemId'.trim();
-  if (idStr.isEmpty) return null;
-  try {
-    final cleanDev = deviceId.trim();
-    if (cleanDev.isNotEmpty) {
-      final exactRows = await txn.query(
-        'sync_meta',
-        columns: ['value'],
-        where: 'key = ?',
-        whereArgs: ['item_id_remap:$cleanDev:$idStr'],
-        limit: 1,
-      );
-      if (exactRows.isNotEmpty) {
-        final parsed = int.tryParse('${exactRows.first['value'] ?? ''}'.trim());
-        if (parsed != null && parsed > 0) return parsed;
-      }
-    }
-    final likeRows = await txn.query(
-      'sync_meta',
-      columns: ['key', 'value'],
-      where: 'key LIKE ?',
-      whereArgs: ['item_id_remap:%:$idStr'],
-    );
-    final origId = int.tryParse(idStr);
-    int? fallbackId;
-    for (final r in likeRows) {
-      final parsed = int.tryParse('${r['value'] ?? ''}'.trim());
-      if (parsed == null || parsed <= 0) continue;
-      if (origId != null && parsed != origId) {
-        return parsed;
-      }
-      fallbackId ??= parsed;
-    }
-    if (fallbackId != null) return fallbackId;
-  } catch (e) {
-    debugPrint('_lookupRemappedItemId error: $e');
-  }
-  return null;
-}
-
-/// توليد رقم صنف (id) جديد متاح للصنف المتعارض دون الكتابة فوق أي صنف موجود.
-Future<int> _allocateFreeItemId(
-  DatabaseExecutor txn, [
-  int collidingId = 0,
-]) async {
-  final nextId = Sqflite.firstIntValue(
-        await txn.rawQuery('SELECT COALESCE(MAX(id), 0) + 1 FROM items'),
-      ) ??
-      1;
-  return nextId > collidingId ? nextId : collidingId + 1;
-}
-
-/// توليد رقم ترقيم سريع (PLU) متاح داخل المعاملة الحالية.
-Future<int> _allocateNextPlu(
-  DatabaseExecutor txn,
-  String workspaceId,
-) async {
-  final ws = workspaceId.trim().isNotEmpty
-      ? workspaceId.trim()
-      : AppDatabase.activeWorkspaceId;
-  final rows = await txn.rawQuery(
-    'SELECT COALESCE(MAX(plu), 0) + 1 AS next_plu FROM items WHERE workspace_id = ?',
-    [ws],
-  );
-  return (rows.firstOrNull?['next_plu'] as num?)?.toInt() ?? 1;
 }
 
 /// استخراج اسم الجهاز/المستخدم المدخل للصنف بدقة لعرضه في إشعار التعارض.
@@ -883,19 +803,6 @@ extension ApplyRemoteOp on Repo {
       }
     }
 
-    String workspaceModeVal = '';
-    try {
-      final modeRows = await txn.query(
-        'sync_meta',
-        columns: ['value'],
-        where: "key = 'workspaceMode'",
-        limit: 1,
-      );
-      if (modeRows.isNotEmpty) {
-        workspaceModeVal = '${modeRows.first['value'] ?? ''}'.trim();
-      }
-    } catch (_) {}
-
     // (2026-09-28) حماية سيادية: لا يمكن لأي عملية سحابية قادمة من جهاز عضو
     // أن تعدل حساب المالك الرئيسي أو تخفض رتبته أو تبدّل اسمه.
     // ⚠️ هام جداً: الاستعلام يتم حصرياً عبر `txn` (وليس `isWorkspaceOwner`/`currentUser`
@@ -934,35 +841,6 @@ extension ApplyRemoteOp on Repo {
       } catch (_) {}
     }
 
-    // إذا كان الصنف الوارد قد أُعيد ترقيمه مسبقاً بسبب تعارض أوفلاين، نوجّه التعديل/الحذف للمعرّف الجديد.
-    if (op.entityType == EntityKind.item && op.opType != OpKind.create) {
-      final remapped = await _lookupRemappedItemId(
-        txn,
-        op.deviceId,
-        op.entityId,
-      );
-      if (remapped != null && '$remapped' != op.entityId) {
-        final newPayload = Map<String, Object?>.from(op.payload)
-          ..['id'] = remapped;
-        op = SyncOperation(
-          id: op.id,
-          deviceId: op.deviceId,
-          workspaceId: op.workspaceId,
-          userId: op.userId,
-          entityType: op.entityType,
-          entityId: '$remapped',
-          opType: op.opType,
-          version: op.version,
-          parentOpId: op.parentOpId,
-          payload: newPayload,
-          deviceTime: op.deviceTime,
-          timestamp: op.timestamp,
-          serverTime: op.serverTime,
-          isSynced: op.isSynced,
-        );
-      }
-    }
-
     final existing = await txn.query(table,
         where: '$primaryKey = ?', whereArgs: [op.entityId], limit: 1);
     final latest = await txn.query('operations',
@@ -973,74 +851,52 @@ extension ApplyRemoteOp on Repo {
     final localLatest =
         latest.isEmpty ? null : SyncOperation.fromMap(latest.first);
 
-    // ══ (نظام منع مسح البيانات وإعادة الترقيم التلقائي الذكي للأصناف — أوفلاين) ══
-    // عند استقبال صنف عبر المزامنة يحمل نفس id لصنف محلي مختلف (أُدخلا أوفلاين من جهازين):
-    // لا نسمح لـ ConflictResolver بتجاهل أحدهما ولا نسمح بالكتابة فوق الصنف المحلي.
-    var isOfflineItemIdCollision = false;
-    String localCreateDeviceId = '';
+    // ══ القاعدة الصارمة (In-Place Upsert): تطابق معرّف الصنف (ID) يعني نفس الصنف 100% ══
+    // يُمنع الفصل التلقائي أو توليد أرقام أصناف جديدة كلياً؛ يُحسم التحديث في مكانه
+    // لصاحب الطابع الزمني/الإصدار الأحدث فقط.
+    final shouldApply = resolver.decide(
+      incoming: op,
+      exists: existing.isNotEmpty,
+      localVersion: localLatest?.version ?? 0,
+      localLatest: localLatest,
+    );
+    if (!shouldApply) return false;
+
     if (table == 'items' &&
         existing.isNotEmpty &&
-        (op.opType == OpKind.create || op.opType == OpKind.update)) {
+        localLatest == null &&
+        op.opType != OpKind.delete_) {
       final existingRow = existing.first;
       final existingName = '${existingRow['name'] ?? ''}'.trim();
-      final incomingName = '${op.payload['name'] ?? ''}'.trim();
       final isStubRow = existingName.isEmpty ||
           existingName == 'صنف' ||
           existingName.startsWith('صنف مؤقت');
-      final isExistingDeleted =
-          ((existingRow['is_deleted'] as num?)?.toInt() ?? 0) == 1 ||
-              ('${existingRow['deleted_at'] ?? ''}'.trim().isNotEmpty &&
-                  '${existingRow['deleted_at'] ?? ''}'.trim().toLowerCase() !=
-                      'null');
       final isControlOp = op.payload['__from_stock_move'] != null ||
           op.payload['__from_stock_move_delete'] != null ||
           op.payload['__reconciled'] == true ||
-          op.payload['__conflict_resolved'] == true ||
-          op.payload['__reassigned_from_id'] != null;
-
-      try {
-        final createOps = await txn.query(
-          'operations',
-          columns: ['device_id'],
-          where: "entity_type = 'item' AND entity_id = ? AND op_type = 'create'",
-          whereArgs: [op.entityId],
-          orderBy: 'version ASC, timestamp ASC',
-          limit: 1,
-        );
-        if (createOps.isNotEmpty) {
-          localCreateDeviceId =
-              '${createOps.first['device_id'] ?? ''}'.trim();
-        }
-      } catch (_) {}
-
-      if (!isStubRow &&
-          !isExistingDeleted &&
-          !isControlOp &&
-          incomingName.isNotEmpty) {
-        final namesDiffer =
-            existingName.toLowerCase() != incomingName.toLowerCase();
-        final devicesDiffer = localCreateDeviceId.isNotEmpty &&
-            op.deviceId.trim().isNotEmpty &&
-            localCreateDeviceId != op.deviceId.trim();
-        if (op.opType == OpKind.create && (namesDiffer || devicesDiffer)) {
-          isOfflineItemIdCollision = true;
-        } else if (op.opType == OpKind.update &&
-            op.version <= 1 &&
-            namesDiffer &&
-            (localCreateDeviceId.isEmpty || devicesDiffer)) {
-          isOfflineItemIdCollision = true;
+          op.payload['__conflict_resolved'] == true;
+      if (!isStubRow && !isControlOp) {
+        final incomingEffMs = op.serverTimeMs > 0
+            ? op.serverTimeMs
+            : (safeParseNullableDateTime(op.payload['updated_at'])
+                    ?.millisecondsSinceEpoch ??
+                safeParseNullableDateTime(op.timestamp)
+                    ?.millisecondsSinceEpoch ??
+                safeParseNullableDateTime(op.deviceTime)
+                    ?.millisecondsSinceEpoch ??
+                0);
+        final existingRowMs =
+            safeParseNullableDateTime(existingRow['updated_at'])
+                    ?.millisecondsSinceEpoch ??
+                safeParseNullableDateTime(existingRow['created_at'])
+                    ?.millisecondsSinceEpoch ??
+                0;
+        if (incomingEffMs > 0 &&
+            existingRowMs > 0 &&
+            incomingEffMs < existingRowMs) {
+          return false;
         }
       }
-    }
-
-    if (!isOfflineItemIdCollision) {
-      final shouldApply = resolver.decide(
-        incoming: op,
-        exists: existing.isNotEmpty,
-        localVersion: localLatest?.version ?? 0,
-        localLatest: localLatest,
-      );
-      if (!shouldApply) return false;
     }
 
     // سطور الفاتورة تُنقل داخل حمولة العملية المالية (ليست كيانًا مستقلًا).
@@ -1060,21 +916,16 @@ extension ApplyRemoteOp on Repo {
             !(table == 'users' && entry.key == 'is_me'))
           entry.key: entry.value,
       if (columns.contains('workspace_id')) 'workspace_id': op.workspaceId,
-      if (columns.contains('updated_at')) 'updated_at': now,
+      if (columns.contains('updated_at'))
+        'updated_at': (table == 'items'
+                ? safeParseNullableDateTime(op.payload['updated_at'])
+                    ?.toIso8601String()
+                : null) ??
+            now,
       if (columns.contains('sync_state')) 'sync_state': 'synced',
       if (columns.contains('sync_status')) 'sync_status': 'synced',
       if (columns.contains('is_synced')) 'is_synced': 1,
     };
-    if (op.entityType == EntityKind.stockMove && row['item_id'] != null) {
-      final remappedItemId = await _lookupRemappedItemId(
-        txn,
-        op.deviceId,
-        row['item_id'],
-      );
-      if (remappedItemId != null) {
-        row['item_id'] = remappedItemId;
-      }
-    }
     // رسالة دردشة تشير لمحادثة غير موجودة محلياً: أنشئ المحادثة أولاً
     // (قيد المفتاح الأجنبي conversation_id) — عنوانها يأتي في الحمولة.
     if (op.entityType == EntityKind.message) {
@@ -1143,7 +994,6 @@ extension ApplyRemoteOp on Repo {
           row,
           op,
           txLines: table == 'transactions' ? lines : null,
-          remapItemId: (rawId) => _lookupRemappedItemId(txn, op.deviceId, rawId),
         );
         if (missingParent != null) {
           await SyncQuarantineStore.quarantineOp(
@@ -1156,240 +1006,6 @@ extension ApplyRemoteOp on Repo {
                 'Deferred ${op.entityType.name}:${op.entityId} awaiting ${missingParent.table}:${missingParent.id}',
           );
           return false;
-        }
-
-        // على أجهزة الأعضاء: يمنع توليد أرقام أصناف وهمية أو إعادة ترقيم محلية — يُحجر التصادم لحين حسمه.
-        if (table == 'items' &&
-            isOfflineItemIdCollision &&
-            workspaceModeVal == 'member') {
-          await SyncQuarantineStore.quarantineOp(
-            txn,
-            op: op,
-            reason: SyncQuarantineStore.kReasonMemberItemCollision,
-            details:
-                'Member device quarantined colliding item ${op.entityId} (${op.payload['name'] ?? ''})',
-          );
-          return false;
-        }
-
-        // ══ تنفيذ الفصل التلقائي الذكي عند تعارض رقم الصنف (id) أوفلاين ══
-        if (table == 'items' && isOfflineItemIdCollision && existing.isNotEmpty) {
-          final existingRow = existing.first;
-          final collidingId = (existingRow['id'] as num?)?.toInt() ??
-              int.tryParse(op.entityId) ??
-              1;
-          final incomingName = '${row['name'] ?? op.payload['name'] ?? ''}'.trim();
-
-          final localCreatedMs =
-              safeParseNullableDateTime(existingRow['created_at'])
-                      ?.millisecondsSinceEpoch ??
-                  0;
-          final incomingCreatedMs = safeParseNullableDateTime(
-                    op.payload['created_at'] ?? op.deviceTime,
-                  )?.millisecondsSinceEpoch ??
-                  (op.serverTimeMs > 0 ? op.serverTimeMs : 0);
-
-          final bool incomingIsYounger;
-          if (localCreatedMs > 0 &&
-              incomingCreatedMs > 0 &&
-              localCreatedMs != incomingCreatedMs) {
-            incomingIsYounger = incomingCreatedMs > localCreatedMs;
-          } else if (localCreateDeviceId.isNotEmpty &&
-              op.deviceId.trim().isNotEmpty &&
-              localCreateDeviceId != op.deviceId.trim()) {
-            incomingIsYounger =
-                op.deviceId.trim().compareTo(localCreateDeviceId) > 0;
-          } else {
-            incomingIsYounger = true;
-          }
-
-          final newId = await _allocateFreeItemId(txn, collidingId);
-          final nextPlu = await _allocateNextPlu(txn, op.workspaceId);
-
-          final incomingRow = <String, Object?>{
-            ...row,
-            'is_deleted': 0,
-            'is_active': 1,
-            'archived': 0,
-            'deleted_at': '',
-          };
-          for (final col in tableInfo) {
-            final colName = col['name'] as String;
-            if (incomingRow.containsKey(colName)) continue;
-            final notNull = (col['notnull'] as int? ?? 0) == 1;
-            final hasDefault = col['dflt_value'] != null;
-            final isPk = (col['pk'] as int? ?? 0) > 0;
-            if (!notNull || hasDefault || isPk) continue;
-            final type = ((col['type'] as String?) ?? '').toUpperCase();
-            incomingRow[colName] = switch (colName) {
-              'created_at' || 'updated_at' || 'date' => now,
-              _ => type.contains('INT') ||
-                      type.contains('REAL') ||
-                      type.contains('NUM')
-                  ? 0
-                  : '',
-            };
-          }
-
-            incomingRow['created_at'] =
-                (safeParseNullableDateTime(incomingRow['created_at']) ??
-                        safeParseNullableDateTime(op.timestamp) ??
-                        safeParseNullableDateTime(now))
-                    ?.toIso8601String() ??
-                    now;
-            incomingRow['updated_at'] =
-                (safeParseNullableDateTime(incomingRow['updated_at']) ??
-                        safeParseNullableDateTime(incomingRow['created_at']) ??
-                        safeParseNullableDateTime(now))
-                    ?.toIso8601String() ??
-                    now;
-
-            if (incomingIsYounger) {
-            // الصنف المحلي أقدم (يبقى في collidingId)، والصنف الوارد أصغر (يأخذ newId)
-            incomingRow['id'] = newId;
-            if (incomingRow['plu'] == null ||
-                incomingRow['plu'] == existingRow['plu']) {
-              incomingRow['plu'] = nextPlu;
-            }
-            await txn.insert(
-              'items',
-              incomingRow,
-              conflictAlgorithm: ConflictAlgorithm.replace,
-            );
-            if (op.deviceId.trim().isNotEmpty) {
-              await txn.insert(
-                'sync_meta',
-                {
-                  'key': 'item_id_remap:${op.deviceId.trim()}:$collidingId',
-                  'value': '$newId',
-                },
-                conflictAlgorithm: ConflictAlgorithm.replace,
-              );
-            }
-            // تحديث مرجع item_id في الفواتير والحركات المخزنية الواردة من الجهاز الآخر لهذا الصنف
-            try {
-              await txn.update(
-                'transaction_items',
-                {'item_id': newId},
-                where: 'item_id = ? AND LOWER(TRIM(name)) = LOWER(TRIM(?))',
-                whereArgs: [collidingId, incomingName],
-              );
-              if (op.deviceId.trim().isNotEmpty) {
-                await txn.rawUpdate(
-                  'UPDATE stock_moves SET item_id = ? '
-                  'WHERE item_id = ? AND id IN ('
-                  "  SELECT CAST(entity_id AS INTEGER) FROM operations WHERE entity_type = 'stockMove' AND device_id = ?"
-                  ')',
-                  [newId, collidingId, op.deviceId.trim()],
-                );
-              }
-            } catch (e) {
-              debugPrint('offline item collision repoint error: $e');
-            }
-
-            await _detectAndNotifyBarcodeOrPluConflict(
-              this,
-              txn,
-              op: op,
-              itemId: newId,
-              itemName: incomingName,
-              sku: '${incomingRow['sku'] ?? ''}',
-              originalCollidingId: collidingId,
-              idConflictOtherRow: existingRow,
-              now: now,
-            );
-          } else {
-            // الصنف المحلي أصغر (ينتقل إلى newId مع كامل فواتيره وحركاته)، والصنف الوارد يأخذ collidingId
-            final movedLocalRow = Map<String, Object?>.from(existingRow)
-              ..['id'] = newId
-              ..['updated_at'] = now;
-            if (movedLocalRow['plu'] == null ||
-                movedLocalRow['plu'] == incomingRow['plu']) {
-              movedLocalRow['plu'] = nextPlu;
-            }
-            await txn.insert(
-              'items',
-              movedLocalRow,
-              conflictAlgorithm: ConflictAlgorithm.replace,
-            );
-            // تحديث جميع الفواتير والحركات المخزنية المرتبطة بالصنف المحلي إلى المعرف الجديد newId
-            await txn.update(
-              'transaction_items',
-              {'item_id': newId},
-              where: 'item_id = ? AND LOWER(TRIM(name)) != LOWER(TRIM(?))',
-              whereArgs: [collidingId, incomingName],
-            );
-            if (op.deviceId.trim().isNotEmpty) {
-              try {
-                await txn.rawUpdate(
-                  'UPDATE stock_moves SET item_id = ? '
-                  'WHERE item_id = ? AND id NOT IN ('
-                  "  SELECT CAST(entity_id AS INTEGER) FROM operations WHERE entity_type = 'stockMove' AND device_id = ?"
-                  ')',
-                  [newId, collidingId, op.deviceId.trim()],
-                );
-              } catch (_) {
-                await txn.update(
-                  'stock_moves',
-                  {'item_id': newId},
-                  where: 'item_id = ?',
-                  whereArgs: [collidingId],
-                );
-              }
-            } else {
-              await txn.update(
-                'stock_moves',
-                {'item_id': newId},
-                where: 'item_id = ?',
-                whereArgs: [collidingId],
-              );
-            }
-            final localDevKey = localCreateDeviceId.isNotEmpty
-                ? localCreateDeviceId
-                : 'local';
-            await txn.insert(
-              'sync_meta',
-              {
-                'key': 'item_id_remap:$localDevKey:$collidingId',
-                'value': '$newId',
-              },
-              conflictAlgorithm: ConflictAlgorithm.replace,
-            );
-            if (op.deviceId.trim().isNotEmpty &&
-                op.deviceId.trim() != localDevKey) {
-              await txn.insert(
-                'sync_meta',
-                {
-                  'key': 'item_id_remap:${op.deviceId.trim()}:$collidingId',
-                  'value': '$collidingId',
-                },
-                conflictAlgorithm: ConflictAlgorithm.replace,
-              );
-            }
-
-            // كتابة الصنف الوارد في المعرف الأصلي collidingId
-            incomingRow['id'] = collidingId;
-            await txn.insert(
-              'items',
-              incomingRow,
-              conflictAlgorithm: ConflictAlgorithm.replace,
-            );
-
-            await _detectAndNotifyBarcodeOrPluConflict(
-              this,
-              txn,
-              op: op,
-              itemId: collidingId,
-              itemName: incomingName,
-              sku: '${incomingRow['sku'] ?? ''}',
-              originalCollidingId: collidingId,
-              idConflictOtherRow: movedLocalRow,
-              now: now,
-            );
-          }
-
-          await _insertStoredOperation(txn, op);
-          return true;
         }
 
         if (existing.isNotEmpty) {
@@ -1590,50 +1206,6 @@ extension ApplyRemoteOp on Repo {
               await _healAccountConflict(txn, accName, op.entityId);
             }
           }
-          int? origPluCollision;
-          Map<String, Object?>? pluConflictOtherRow;
-          if (table == 'items') {
-            // إذا كان الصنف الوارد يحمل نفس رقم الترقيم السريع (PLU) لصنف محلي مختلف:
-            // على جهاز العضو يُحجر التصادم بدل توليد رقم PLU وهمي.
-            final incomingPlu = (insertRow['plu'] as num?)?.toInt();
-            final incomingId = int.tryParse(op.entityId) ?? 0;
-            final incomingName = '${insertRow['name'] ?? ''}'.trim();
-            if (incomingPlu != null &&
-                incomingPlu > 0 &&
-                incomingId > 0 &&
-                incomingName.isNotEmpty) {
-              final pluDups = await txn.query(
-                'items',
-                where:
-                    "plu = ? AND id != ? AND COALESCE(is_deleted, 0) = 0 AND COALESCE(deleted_at, '') = ''",
-                whereArgs: [incomingPlu, incomingId],
-                limit: 1,
-              );
-              if (pluDups.isNotEmpty) {
-                final dupName = '${pluDups.first['name'] ?? ''}'.trim();
-                if (dupName.isNotEmpty &&
-                    dupName != 'صنف' &&
-                    dupName.toLowerCase() != incomingName.toLowerCase()) {
-                  if (workspaceModeVal == 'member') {
-                    await SyncQuarantineStore.quarantineOp(
-                      txn,
-                      op: op,
-                      reason: SyncQuarantineStore.kReasonMemberItemCollision,
-                      details:
-                          'Member device quarantined PLU $incomingPlu collision for item $incomingId ($incomingName)',
-                    );
-                    return false;
-                  }
-                  origPluCollision = incomingPlu;
-                  pluConflictOtherRow = pluDups.first;
-                  insertRow['plu'] = await _allocateNextPlu(
-                    txn,
-                    op.workspaceId,
-                  );
-                }
-              }
-            }
-          }
           for (final col in tableInfo) {
             final name = col['name'] as String;
             final type = ((col['type'] as String?) ?? '').toUpperCase();
@@ -1681,8 +1253,7 @@ extension ApplyRemoteOp on Repo {
             final itemId = int.tryParse(op.entityId) ?? 0;
             final itemName = '${insertRow['name'] ?? ''}'.trim();
             final itemSku = '${insertRow['sku'] ?? ''}'.trim();
-            if (itemId > 0 &&
-                (itemSku.isNotEmpty || origPluCollision != null)) {
+            if (itemId > 0 && itemSku.isNotEmpty) {
               await _detectAndNotifyBarcodeOrPluConflict(
                 this,
                 txn,
@@ -1690,8 +1261,6 @@ extension ApplyRemoteOp on Repo {
                 itemId: itemId,
                 itemName: itemName,
                 sku: itemSku,
-                originalCollidingId: origPluCollision,
-                idConflictOtherRow: pluConflictOtherRow,
                 now: now,
               );
             }
@@ -2584,16 +2153,6 @@ extension ApplyRemoteOp on Repo {
         'tx_id': txId,
         if (cols.contains('workspace_id')) 'workspace_id': op.workspaceId,
       };
-      if (row['item_id'] != null) {
-        final remapped = await _lookupRemappedItemId(
-          txn,
-          op.deviceId,
-          row['item_id'],
-        );
-        if (remapped != null) {
-          row['item_id'] = remapped;
-        }
-      }
       if (cols.contains('name') && (row['name'] == null || '${row['name']}'.trim().isEmpty)) {
         row['name'] = 'صنف';
       }
