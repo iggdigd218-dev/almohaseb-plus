@@ -709,6 +709,16 @@ Future<int> _autoHealOrphanItems(
 }
 
 
+/// فحص ما إذا كان معرّف الصنف من المعرّفات المولّدة تلقائياً بسبب الانقسام السابق
+/// (`_allocateNonCollidingItemId` التي كانت تضيف `+1, +2...` لآحاد الـ Snowflake ID).
+bool isKnownAutoSplitItemId(int id) {
+  if (id <= 0) return false;
+  if (id >= 1881541471252432897 && id <= 1881541471252432898) return true;
+  if (id >= 1881793993336740609 && id <= 1881793993336740666) return true;
+  if (id >= 1881848145177768449 && id <= 1881848145177768635) return true;
+  return id > 1000000000000 && (id & 0xFF) != 0;
+}
+
 extension ApplyRemoteOp on Repo {
   /// حركات المخزون التي طُبّقت كميتها الابتدائية عبر لقطة صنف يتيم (بلا سجل محلي سابق)
   /// لمنع خصمها مرتين في نفس الدفعة، مع ضمان تطبيق كافة الحركات التراكمية (Delta) للأصناف الموجودة.
@@ -776,6 +786,35 @@ extension ApplyRemoteOp on Repo {
     // (2026-09-22) كيان من إصدار أحدث: نتجاهله صراحةً بدل كتابته في جدول
     // خاطئ (كان يسقط على transactions فيُتلف البيانات).
     if (op.entityType == EntityKind.unknown) return false;
+    if (op.entityType == EntityKind.item) {
+      final parsedItemId = int.tryParse(op.entityId) ?? 0;
+      if (isKnownAutoSplitItemId(parsedItemId)) {
+        return false;
+      }
+    }
+    if (op.entityType == EntityKind.setting &&
+        op.entityId.startsWith('item_conflict:')) {
+      final rawVal = '${op.payload['value'] ?? ''}'.trim();
+      final conflict =
+          rawVal.isEmpty ? null : OfflineItemConflict.tryParseJson(rawVal);
+      if (rawVal.isEmpty ||
+          conflict == null ||
+          isKnownAutoSplitItemId(conflict.item1Id) ||
+          isKnownAutoSplitItemId(conflict.item2Id)) {
+        await txn.delete(
+          'settings',
+          where: 'key = ?',
+          whereArgs: [op.entityId],
+        );
+        await txn.delete(
+          'notifications',
+          where: "entity_type = 'item_conflict' AND entity_id = ?",
+          whereArgs: [op.entityId],
+        );
+        await _insertStoredOperation(txn, op);
+        return true;
+      }
+    }
     final seen = await txn.query('operations',
         columns: ['id'], where: 'id = ?', whereArgs: [op.id], limit: 1);
     if (seen.isNotEmpty) return false;
@@ -864,7 +903,6 @@ extension ApplyRemoteOp on Repo {
 
     if (table == 'items' &&
         existing.isNotEmpty &&
-        localLatest == null &&
         op.opType != OpKind.delete_) {
       final existingRow = existing.first;
       final existingName = '${existingRow['name'] ?? ''}'.trim();
@@ -876,24 +914,34 @@ extension ApplyRemoteOp on Repo {
           op.payload['__reconciled'] == true ||
           op.payload['__conflict_resolved'] == true;
       if (!isStubRow && !isControlOp) {
+        final payloadItemMs =
+            safeParseNullableDateTime(op.payload['updated_at'])
+                    ?.millisecondsSinceEpoch ??
+                safeParseNullableDateTime(op.payload['created_at'])
+                    ?.millisecondsSinceEpoch ??
+                0;
         final incomingEffMs = op.serverTimeMs > 0
             ? op.serverTimeMs
-            : (safeParseNullableDateTime(op.payload['updated_at'])
-                    ?.millisecondsSinceEpoch ??
-                safeParseNullableDateTime(op.timestamp)
-                    ?.millisecondsSinceEpoch ??
-                safeParseNullableDateTime(op.deviceTime)
-                    ?.millisecondsSinceEpoch ??
-                0);
+            : (payloadItemMs > 0
+                ? payloadItemMs
+                : (safeParseNullableDateTime(op.timestamp)
+                        ?.millisecondsSinceEpoch ??
+                    safeParseNullableDateTime(op.deviceTime)
+                        ?.millisecondsSinceEpoch ??
+                    0));
         final existingRowMs =
             safeParseNullableDateTime(existingRow['updated_at'])
                     ?.millisecondsSinceEpoch ??
                 safeParseNullableDateTime(existingRow['created_at'])
                     ?.millisecondsSinceEpoch ??
                 0;
-        if (incomingEffMs > 0 &&
-            existingRowMs > 0 &&
-            incomingEffMs < existingRowMs) {
+        // منع أي عملية إنشاء قديمة أو عملية تحمل updated_at أقدم من تحديث الصنف المحلي
+        // من إرجاع اسم الصنف أو باركوده أو سعره إلى ما قبل التعديل.
+        if (existingRowMs > 0 &&
+            ((payloadItemMs > 0 && payloadItemMs < existingRowMs) ||
+                (localLatest == null &&
+                    incomingEffMs > 0 &&
+                    incomingEffMs < existingRowMs))) {
           return false;
         }
       }
@@ -1072,6 +1120,12 @@ extension ApplyRemoteOp on Repo {
                 }
               }
 
+              final isIncomingDeleted = op.opType == OpKind.delete_ ||
+                  ((op.payload['is_deleted'] as num?)?.toInt() ?? 0) == 1 ||
+                  (op.payload['deleted_at'] != null &&
+                      '${op.payload['deleted_at']}'.trim().isNotEmpty &&
+                      '${op.payload['deleted_at']}'.trim().toLowerCase() !=
+                          'null');
               final isLocallyDeleted = existing.isNotEmpty &&
                   (((existing.first['is_deleted'] ?? 0) as int) == 1 ||
                       (existing.first['deleted_at'] != null &&
@@ -1085,7 +1139,23 @@ extension ApplyRemoteOp on Repo {
                   0;
               final isOpNewerThanDel = opMs > localDelMs;
 
-              if (isLocallyDeleted && !isExplicitRestore && !isOpNewerThanDel) {
+              if (isIncomingDeleted) {
+                row['is_deleted'] = 1;
+                row['is_active'] = 0;
+                final incDelAt = '${op.payload['deleted_at'] ?? ''}'.trim();
+                row['deleted_at'] =
+                    (incDelAt.isNotEmpty && incDelAt.toLowerCase() != 'null')
+                        ? incDelAt
+                        : (existing.first['deleted_at']
+                                    ?.toString()
+                                    .trim()
+                                    .isNotEmpty ==
+                                true
+                            ? existing.first['deleted_at']
+                            : now);
+              } else if (isLocallyDeleted &&
+                  !isExplicitRestore &&
+                  !isOpNewerThanDel) {
                 // الحذف المحلي أحدث من العملية الواردة — نبقي الصنف محذوفاً (اعتماد الأحدث)
                 row['is_deleted'] = 1;
                 row['is_active'] = 0;
@@ -1141,7 +1211,9 @@ extension ApplyRemoteOp on Repo {
               );
               rethrow;
             }
-            if (table == 'items' && op.payload['__conflict_resolved'] != true) {
+            if (table == 'items' &&
+                op.payload['__conflict_resolved'] != true &&
+                ((row['is_deleted'] as num?)?.toInt() ?? 0) == 0) {
               final itemId = int.tryParse(op.entityId) ?? 0;
               final itemName =
                   '${row['name'] ?? existing.first['name'] ?? ''}'.trim();
@@ -1249,7 +1321,9 @@ extension ApplyRemoteOp on Repo {
             );
             rethrow;
           }
-          if (table == 'items' && op.payload['__conflict_resolved'] != true) {
+          if (table == 'items' &&
+              op.payload['__conflict_resolved'] != true &&
+              ((insertRow['is_deleted'] as num?)?.toInt() ?? 0) == 0) {
             final itemId = int.tryParse(op.entityId) ?? 0;
             final itemName = '${insertRow['name'] ?? ''}'.trim();
             final itemSku = '${insertRow['sku'] ?? ''}'.trim();
@@ -2376,6 +2450,410 @@ extension ApplyRemoteOp on Repo {
   Future<int> autoHealOrphanItems({int? sectionId, int? categoryId}) async {
     final db = await database;
     return _autoHealOrphanItems(db, sectionId: sectionId, categoryId: categoryId);
+  }
+
+  /// شفاء ذاتي شامل وحتمي لقاعدة البيانات المحلية من آثار انقسام الأصناف وتعارضاتها الوهمية:
+  /// 1) إعادة ربط كافة حركات المخزون (`stock_moves`) وسطور الفواتير (`transaction_items`)
+  ///    من المعرفات المنقسمة (`id % 256 != 0`) إلى معرفات الأصناف الأصلية (`id % 256 == 0`).
+  /// 2) حذف حركات التسوية الوهمية الناتجة عن الدمج التلقائي السابق.
+  /// 3) إزالة كافة الأصناف المنقسمة تلقائياً (`244` صنفاً) من `items` و`operations` و`sync_queue`.
+  /// 4) إصلاح بيانات الأصناف الأصلية التي تضررت أثناء التصادم وإعادة المحذوفات السابقة إلى سلة المهملات.
+  /// 5) تطهير كافة سجلات وإشعارات `item_conflict:*` و`item_id_remap:*` وإعادة احتساب الكميات بدقة.
+  static Future<int> healCorruptedItemCatalog(DatabaseExecutor db) async {
+    var fixed = 0;
+    try {
+      const explicitSplitToOrig = <int, int>{
+        1881848145177768498: 1881329839308291072,
+        1881848145177768572: 1880690538498209024,
+        1881848145177768575: 1880770260243085824,
+        1881848145177768577: 1880774142496027136,
+        1881848145177768578: 1880941528633812992,
+        1881848145177768579: 1880969333761939968,
+        1881848145177768580: 1881075804436520448,
+        1881848145177768581: 1881076302198693376,
+        1881848145177768582: 1881076376988376576,
+        1881848145177768583: 1881076490790329856,
+        1881848145177768585: 1881076680312053248,
+        1881848145177768589: 1881076913964146176,
+        1881848145177768590: 1881076949177425408,
+        1881848145177768591: 1881077002968325632,
+        1881848145177768594: 1881077375151988224,
+        1881848145177768595: 1881077422732172800,
+        1881848145177768601: 1881077989402566144,
+        1881848145177768602: 1881078029716119040,
+        1881848145177768603: 1881078117965323776,
+        1881848145177768604: 1881078159189040640,
+        1881848145177768605: 1881078209686363648,
+        1881848145177768606: 1881078253941513728,
+        1881848145177768609: 1881078464285859328,
+        1881848145177768611: 1881078591840935424,
+        1881848145177768612: 1881078679795490304,
+        1881848145177768617: 1881079442327752192,
+        1881848145177768619: 1881079591311527424,
+        1881848145177768621: 1880918273696684800,
+        1881848145177768622: 1881278325508392448,
+        1881848145177768623: 1881280727024466688,
+        1881848145177768625: 1881329839308291072,
+        1881848145177768628: 1881479782759624704,
+        1881848145177768630: 1881515210412496384,
+        1881848145177768631: 1881517352477103616,
+        1881848145177768632: 1881515537087960576,
+      };
+
+      final allItems = await db.query(
+        'items',
+        columns: ['id', 'created_at', 'plu'],
+      );
+      final origByCreatedAt = <String, int>{};
+      final splitIds = <int>{};
+      var hasSnowflakeItems = false;
+      for (final r in allItems) {
+        final id = (r['id'] as num?)?.toInt() ?? 0;
+        if (id <= 0) continue;
+        if (id > 1000000000000) hasSnowflakeItems = true;
+        final createdAt = '${r['created_at'] ?? ''}'.trim();
+        if (isKnownAutoSplitItemId(id)) {
+          splitIds.add(id);
+        } else if (createdAt.isNotEmpty) {
+          origByCreatedAt[createdAt] = id;
+        }
+      }
+
+      if (!hasSnowflakeItems && splitIds.isEmpty) {
+        // فحص سريع لأي إعدادات تعارض تالفة تشير لمعرفات منقسمة حتى لو كان جدول الأصناف فارغاً
+        try {
+          final conflictRows = await db.query(
+            'settings',
+            where: "key LIKE 'item_conflict:%' OR key LIKE 'item_id_remap:%'",
+          );
+          for (final cs in conflictRows) {
+            final k = '${cs['key'] ?? ''}';
+            final v = '${cs['value'] ?? ''}'.trim();
+            final parsed =
+                v.isEmpty ? null : OfflineItemConflict.tryParseJson(v);
+            if (k.startsWith('item_id_remap:') ||
+                v.isEmpty ||
+                parsed == null ||
+                isKnownAutoSplitItemId(parsed.item1Id) ||
+                isKnownAutoSplitItemId(parsed.item2Id)) {
+              await db.delete('settings', where: 'key = ?', whereArgs: [k]);
+              await db.delete(
+                'notifications',
+                where: "entity_type = 'item_conflict' AND entity_id = ?",
+                whereArgs: [k],
+              );
+              fixed++;
+            }
+          }
+        } catch (_) {}
+        return fixed;
+      }
+
+      final splitToOrig = <int, int>{...explicitSplitToOrig};
+      for (final r in allItems) {
+        final id = (r['id'] as num?)?.toInt() ?? 0;
+        if (!splitIds.contains(id)) continue;
+        final createdAt = '${r['created_at'] ?? ''}'.trim();
+        final matchedOrig = origByCreatedAt[createdAt];
+        if (matchedOrig != null && matchedOrig != id) {
+          splitToOrig[id] = matchedOrig;
+        }
+      }
+
+      // 1) إعادة ربط حركات المخزون وسطور الفواتير من الأصناف المنقسمة إلى الأصلية
+      for (final entry in splitToOrig.entries) {
+        final splitId = entry.key;
+        final origId = entry.value;
+        fixed += await db.update(
+          'stock_moves',
+          {'item_id': origId},
+          where: 'item_id = ?',
+          whereArgs: [splitId],
+        );
+        fixed += await db.update(
+          'transaction_items',
+          {'item_id': origId},
+          where: 'item_id = ?',
+          whereArgs: [splitId],
+        );
+      }
+
+      // 2) حذف حركات التسوية الوهمية الناتجة عن الدمج التلقائي السابق
+      final synthMoves = await db.query(
+        'stock_moves',
+        columns: ['id'],
+        where: "notes LIKE '%تسوية تلقائية لدمج رصيد صنف مكرر%'",
+      );
+      for (final sm in synthMoves) {
+        final smId = sm['id'];
+        if (smId == null) continue;
+        await db.delete('stock_moves', where: 'id = ?', whereArgs: [smId]);
+        await db.delete(
+          'operations',
+          where: "entity_type = 'stockMove' AND entity_id = ?",
+          whereArgs: ['$smId'],
+        );
+        fixed++;
+      }
+
+      // 3) حذف كافة الأصناف المنقسمة تلقائياً من items و operations و sync_queue
+      if (splitIds.isNotEmpty) {
+        for (final splitId in splitIds) {
+          await db.delete('items', where: 'id = ?', whereArgs: [splitId]);
+          final opRows = await db.query(
+            'operations',
+            columns: ['id'],
+            where: "entity_type = 'item' AND entity_id = ?",
+            whereArgs: ['$splitId'],
+          );
+          for (final opRow in opRows) {
+            final opId = '${opRow['id'] ?? ''}';
+            if (opId.isNotEmpty) {
+              try {
+                await db.delete(
+                  'sync_queue',
+                  where: 'operation_id = ?',
+                  whereArgs: [opId],
+                );
+              } catch (_) {}
+            }
+          }
+          await db.delete(
+            'operations',
+            where: "entity_type = 'item' AND entity_id = ?",
+            whereArgs: ['$splitId'],
+          );
+          fixed++;
+        }
+      }
+
+      // 4) إصلاح لمرة واحدة للأصناف الأصلية المتضررة من التصادم + الأصناف المحذوفة التي أُعيد إحياؤها بالخطأ
+      var alreadyHealedV2 = false;
+      try {
+        final healMeta = await db.query(
+          'sync_meta',
+          columns: ['value'],
+          where: "key = 'catalog_split_healed_v2'",
+          limit: 1,
+        );
+        alreadyHealedV2 =
+            healMeta.isNotEmpty && '${healMeta.first['value']}' == '1';
+      } catch (_) {}
+
+      if (!alreadyHealedV2) {
+        const nowIso = '2026-11-15T06:09:50.000Z';
+        final repairedOriginals = <int, Map<String, Object?>>{
+          1881515537087960576: {
+            'name': 'بلو اجمل',
+            'sku': '',
+            'plu': 263,
+            'is_deleted': 0,
+            'is_active': 1,
+            'deleted_at': '',
+            'updated_at': nowIso,
+          },
+          1881515877677719296: {
+            'name': 'شاشة LT-m15i',
+            'sku': '',
+            'plu': 336,
+            'is_deleted': 0,
+            'is_active': 1,
+            'deleted_at': '',
+            'updated_at': nowIso,
+          },
+          1881523606480877056: {
+            'name': 'جوال UMIDIG',
+            'sku': '',
+            'plu': 289,
+            'is_deleted': 0,
+            'is_active': 1,
+            'deleted_at': '',
+            'updated_at': nowIso,
+          },
+          1881538924963874816: {
+            'name': 'عطرهلرويس',
+            'sku': '',
+            'plu': 310,
+            'is_deleted': 0,
+            'is_active': 1,
+            'deleted_at': '',
+            'updated_at': nowIso,
+          },
+          1881471873199400960: {
+            'sku': '11087',
+            'is_deleted': 0,
+            'is_active': 1,
+            'deleted_at': '',
+            'updated_at': nowIso,
+          },
+          1881073883280662016: {
+            'sku': '562',
+            'is_deleted': 0,
+            'is_active': 1,
+            'deleted_at': '',
+            'updated_at': nowIso,
+          },
+          1880941528633812992: {
+            'plu': 335,
+            'is_deleted': 0,
+            'is_active': 1,
+            'deleted_at': '',
+            'updated_at': nowIso,
+          },
+        };
+        for (final entry in repairedOriginals.entries) {
+          fixed += await db.update(
+            'items',
+            entry.value,
+            where: 'id = ?',
+            whereArgs: [entry.key],
+          );
+        }
+
+        const resurrectedTrashItemIds = <int>[
+          1880690408348955904,
+          1880690457513538816,
+          1880690490109572352,
+          1880690597967148288,
+          1880690666786239744,
+          1880767116183625984,
+          1880768680810805760,
+          1880770260243085824,
+          1880773166893576704,
+          1880773558571315712,
+          1880773707760611840,
+          1880774331038380544,
+          1881073761371119104,
+          1881077857571397120,
+          1881079920969141760,
+          1881080115649859072,
+          1881080194454539776,
+          1881080368304246272,
+          1881080996039511552,
+          1881081652785729024,
+          1881082044338687488,
+          1881266772963228672,
+          1881334362074799104,
+          1881471719200286720,
+          1881515030582760960,
+          1881656122812913152,
+          1881656340091212288,
+        ];
+        for (final delId in resurrectedTrashItemIds) {
+          fixed += await db.update(
+            'items',
+            {
+              'is_deleted': 1,
+              'is_active': 0,
+              'deleted_at': nowIso,
+              'updated_at': nowIso,
+            },
+            where: 'id = ?',
+            whereArgs: [delId],
+          );
+        }
+
+        try {
+          await db.delete(
+            'settings',
+            where: "key LIKE 'item_conflict:%' OR key LIKE 'item_id_remap:%'",
+          );
+          await db.delete(
+            'notifications',
+            where: "entity_type = 'item_conflict'",
+          );
+          final conflictOpRows = await db.query(
+            'operations',
+            columns: ['id'],
+            where:
+                "entity_type = 'setting' AND (entity_id LIKE 'item_conflict:%' OR entity_id LIKE 'item_id_remap:%')",
+          );
+          for (final r in conflictOpRows) {
+            final opId = '${r['id'] ?? ''}';
+            if (opId.isNotEmpty) {
+              await db.delete(
+                'sync_queue',
+                where: 'operation_id = ?',
+                whereArgs: [opId],
+              );
+            }
+          }
+          await db.delete(
+            'operations',
+            where:
+                "entity_type = 'setting' AND (entity_id LIKE 'item_conflict:%' OR entity_id LIKE 'item_id_remap:%')",
+          );
+          await db.insert(
+            'sync_meta',
+            {'key': 'catalog_split_healed_v2', 'value': '1'},
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
+        } catch (_) {}
+      } else {
+        try {
+          final conflictSettings = await db.query(
+            'settings',
+            where: "key LIKE 'item_conflict:%' OR key LIKE 'item_id_remap:%'",
+          );
+          for (final cs in conflictSettings) {
+            final k = '${cs['key'] ?? ''}';
+            final v = '${cs['value'] ?? ''}'.trim();
+            if (k.startsWith('item_id_remap:') || v.isEmpty) {
+              await db.delete('settings', where: 'key = ?', whereArgs: [k]);
+              await db.delete(
+                'notifications',
+                where: "entity_type = 'item_conflict' AND entity_id = ?",
+                whereArgs: [k],
+              );
+              continue;
+            }
+            final parsed = OfflineItemConflict.tryParseJson(v);
+            if (parsed == null ||
+                isKnownAutoSplitItemId(parsed.item1Id) ||
+                isKnownAutoSplitItemId(parsed.item2Id)) {
+              await db.delete('settings', where: 'key = ?', whereArgs: [k]);
+              await db.delete(
+                'notifications',
+                where: "entity_type = 'item_conflict' AND entity_id = ?",
+                whereArgs: [k],
+              );
+            }
+          }
+        } catch (_) {}
+      }
+
+      // 5) إصلاح أي قيم PLU تالفة (معرّفات Snowflake ضخمة وُضعت في عمود plu بالخطأ)
+      final badPluRows = await db.query(
+        'items',
+        columns: ['id'],
+        where: 'plu IS NOT NULL AND plu > 1000000000',
+      );
+      if (badPluRows.isNotEmpty) {
+        final maxValidRows = await db.rawQuery(
+          'SELECT COALESCE(MAX(plu), 0) AS mx FROM items WHERE plu IS NOT NULL AND plu <= 1000000000',
+        );
+        var nextPluVal =
+            ((maxValidRows.firstOrNull?['mx'] as num?)?.toInt() ?? 0) + 1;
+        for (final r in badPluRows) {
+          await db.update(
+            'items',
+            {'plu': nextPluVal},
+            where: 'id = ?',
+            whereArgs: [r['id']],
+          );
+          nextPluVal++;
+          fixed++;
+        }
+      }
+
+      // 6) إعادة مصالحة كميات المخزون بعد استرداد الحركات للأصناف الأصلية
+      if (fixed > 0 || !alreadyHealedV2) {
+        await reconcileInventoryQuantities(db);
+      }
+    } catch (e) {
+      debugPrint('healCorruptedItemCatalog error: $e');
+    }
+    return fixed;
   }
 }
 

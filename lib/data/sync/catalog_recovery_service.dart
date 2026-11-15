@@ -5,6 +5,7 @@ import 'package:sqflite/sqflite.dart';
 
 import '../backup_engine.dart';
 import '../repository.dart';
+import 'apply_remote.dart';
 import 'operation.dart';
 import 'subscription_guard.dart';
 import 'sync_engine.dart';
@@ -323,13 +324,18 @@ class CatalogRecoveryService {
           final name = '${it['name'] ?? ''}'.trim();
           final isDelFlag = (it['is_deleted'] as num?)?.toInt() == 1;
           final delAt = '${it['deleted_at'] ?? ''}'.trim();
-          if (id == null || id <= 0 || name.isEmpty || isDelFlag || delAt.isNotEmpty) {
+          if (id == null ||
+              id <= 0 ||
+              isKnownAutoSplitItemId(id) ||
+              name.isEmpty ||
+              isDelFlag ||
+              delAt.isNotEmpty) {
             continue;
           }
 
           final existing = await txn.query(
             'items',
-            columns: ['id', 'quantity', 'is_deleted', 'deleted_at'],
+            columns: ['id', 'quantity', 'plu', 'is_deleted', 'deleted_at'],
             where: 'id = ?',
             whereArgs: [id],
             limit: 1,
@@ -350,13 +356,25 @@ class CatalogRecoveryService {
               ? ((existing.first['quantity'] as num?) ?? backupQty).toDouble()
               : backupQty;
 
+          final rawPlu = (it['plu'] as num?)?.toInt();
+          final existingPlu = existing.isNotEmpty
+              ? (existing.first['plu'] as num?)?.toInt()
+              : null;
+          final safePlu = (rawPlu != null && rawPlu > 0 && rawPlu <= 1000000000)
+              ? rawPlu
+              : ((existingPlu != null &&
+                      existingPlu > 0 &&
+                      existingPlu <= 1000000000)
+                  ? existingPlu
+                  : (id <= 1000000000 ? id : null));
+
           final row = <String, Object?>{
             'id': id,
             'workspace_id': wsId,
             'name': name,
             'category_id': safeCatId,
             'section_id': safeSecId,
-            'plu': (it['plu'] as num?)?.toInt() ?? id,
+            'plu': safePlu,
             'sku': '${it['sku'] ?? ''}'.trim(),
             'unit': '${it['unit'] ?? 'حبة'}'.trim().isEmpty
                 ? 'حبة'
@@ -506,7 +524,7 @@ class CatalogRecoveryService {
   static Future<void> _advanceLastPlu(DatabaseExecutor txn, String wsId) async {
     try {
       final maxRows = await txn.rawQuery(
-        'SELECT COALESCE(MAX(COALESCE(plu, id)), 0) AS mx FROM items',
+        'SELECT COALESCE(MAX(plu), 0) AS mx FROM items WHERE plu IS NOT NULL AND plu <= 1000000000',
       );
       final maxPlu = (maxRows.firstOrNull?['mx'] as num?)?.toInt() ?? 0;
       if (maxPlu <= 0) return;

@@ -499,6 +499,9 @@ class CloudFirebaseTransport implements SyncTransport {
     // ضمان وجود سجل المنشأة الرئيسية (workspaces) أولاً في قاعدة البيانات المحلية
     // قبل تطبيق أي عمليات مزامنة أو تحديث سجلات الأجهزة والأعضاء والأصناف.
     await AppDatabase.ensureWorkspaceRow(db, workspaceId);
+    try {
+      await ApplyRemoteOp.healCorruptedItemCatalog(db);
+    } catch (_) {}
     // استهلاك السحب بالمؤشر الزمني مع احترام حاجز المزامنة الذري الصارم:
     // إذا وُجد `atomic_sync_barrier:$workspaceId` فلا يُسمح لأي استدعاء
     // (حتى مع resetCursor: true أو forceFullSync: true) بالعودة لما قبل اللقطة.
@@ -1140,6 +1143,7 @@ class CloudFirebaseTransport implements SyncTransport {
         resetCursor ||
         lastCursorMs == 0) {
       try {
+        await ApplyRemoteOp.healCorruptedItemCatalog(db);
         await ApplyRemoteOp.reconcileInventoryQuantities(db);
       } catch (_) {}
     }
