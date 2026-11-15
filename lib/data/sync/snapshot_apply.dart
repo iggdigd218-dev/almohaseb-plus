@@ -2,6 +2,7 @@
 // تُستخدم حصرياً في مسار الانضمام السحابي (CloudJoin.join/completeApprovedJoin):
 // تمسح بيانات الجهاز المحلية كاملة وتستبدلها بنسخة المجموعة.
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
@@ -125,7 +126,33 @@ class SnapshotApply {
     'updated_at',
   };
 
-  /// يُطبّق لقطة البيانات القادمة من المضيف على الجهاز العضو (يمسح القديم ويستبدله).
+  static int _parseSyncMs(Object? v) {
+    if (v is int && v > 0) return v;
+    if (v is num && v > 0) return v.toInt();
+    if (v is String) {
+      final s = v.trim();
+      if (s.isEmpty) return 0;
+      final asInt = int.tryParse(s);
+      if (asInt != null && asInt > 0) return asInt;
+      final dt = DateTime.tryParse(s);
+      if (dt != null) return dt.millisecondsSinceEpoch;
+    }
+    return 0;
+  }
+
+  static int _extractWatermarkMs(Map<String, Object?> snap) {
+    for (final raw in [
+      snap['serverWatermarkMs'],
+      snap['compacted_through_ts'],
+      snap['updatedAt'],
+    ]) {
+      final ms = _parseSyncMs(raw);
+      if (ms > 0) return ms;
+    }
+    return 0;
+  }
+
+  /// يُطبّق لقطة البيانات القادمة من المضيف على الجهاز العضو (يمسح القديم ويستبدله مع حفظ سجل العمليات).
   static Future<void> applySnapshot(
     Future<Database> Function() dbProvider,
     String ourDeviceId,
@@ -186,9 +213,8 @@ class SnapshotApply {
       final knownSecrets = {
         for (final d in knownDevices) d['id']: d['auth_secret']
       };
-      // 1) مسح البيانات المحلية (نُبقي devices/workspaces/sync_meta جزئياً).
-      // «حذف كامل»: يشمل أيضاً القوالب والإشعارات وإعدادات العمل القديمة —
-      // لا يبقى من بيانات الجهاز القديمة أي أثر بعد الانضمام.
+      // 1) مسح جداول الكيانات المحلية (مع حظر مسح جدول operations نهائياً لمنع إعادة تشغيل التاريخ).
+      // نُبقي أيضاً devices/workspaces/sync_meta جزئياً.
       const clearTables = [
         'sections',
         'templates',
@@ -207,11 +233,27 @@ class SnapshotApply {
         'users',
         'trash',
         'activity',
-        'operations',
         'sync_queue',
       ];
       for (final t in clearTables) {
         await txn.delete(t);
+      }
+      // وسم أي عمليات سابقة في operations كمُزامَنة بدلاً من مسحها،
+      // لحماية عدم تكرار التطبيق السحابي ومنع إعادة الرفع فوق اللقطة النظيفة.
+      try {
+        await txn.update(
+          'operations',
+          {'synced': 1, 'is_synced': 1},
+          where: 'synced = 0 OR is_synced = 0',
+        );
+      } catch (_) {
+        try {
+          await txn.update(
+            'operations',
+            {'synced': 1},
+            where: 'synced = 0',
+          );
+        } catch (_) {}
       }
       try {
         await SyncQuarantineStore.ensureTable(txn);
@@ -704,7 +746,21 @@ class SnapshotApply {
         }
       }
 
-      // 4) تثبيت مؤشرات المزامنة والترقيم السريع (last_plu) ذرياً داخل نفس المعاملة
+      // 4) تثبيت مؤشرات المزامنة وحاجز المزامنة الذري والترقيم السريع (last_plu) ذرياً داخل نفس المعاملة
+      var existingBarrierMs = 0;
+      try {
+        final bRows = await txn.query(
+          'sync_meta',
+          columns: ['value'],
+          where: 'key = ?',
+          whereArgs: ['atomic_sync_barrier:$wsId'],
+          limit: 1,
+        );
+        if (bRows.isNotEmpty) {
+          existingBarrierMs = _parseSyncMs(bRows.first['value']);
+        }
+      } catch (_) {}
+
       await txn.delete('sync_meta',
           where: "key LIKE 'last_synced_cursor%' OR key LIKE 'lastCloudTs:%' "
               "OR key LIKE 'lastRosterPush:%' OR key LIKE 'lastLanTs:%' "
@@ -717,15 +773,30 @@ class SnapshotApply {
         {'key': 'last_plu:$wsId', 'value': '$maxPlu'},
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
-      if (serverWatermarkMs > 0) {
+      final incomingWatermarkMs = serverWatermarkMs > 0
+          ? serverWatermarkMs
+          : _extractWatermarkMs(snap);
+      final effectiveBarrierMs =
+          math.max(existingBarrierMs, incomingWatermarkMs);
+      if (effectiveBarrierMs > 0) {
         await txn.insert(
           'sync_meta',
-          {'key': 'last_synced_cursor:$wsId', 'value': '$serverWatermarkMs'},
+          {'key': 'last_synced_cursor:$wsId', 'value': '$effectiveBarrierMs'},
           conflictAlgorithm: ConflictAlgorithm.replace,
         );
         await txn.insert(
           'sync_meta',
-          {'key': 'lastCloudTs:$wsId', 'value': '$serverWatermarkMs'},
+          {'key': 'lastCloudTs:$wsId', 'value': '$effectiveBarrierMs'},
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+        await txn.insert(
+          'sync_meta',
+          {'key': 'snapshotThroughTs:$wsId', 'value': '$effectiveBarrierMs'},
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+        await txn.insert(
+          'sync_meta',
+          {'key': 'atomic_sync_barrier:$wsId', 'value': '$effectiveBarrierMs'},
           conflictAlgorithm: ConflictAlgorithm.replace,
         );
       }

@@ -10085,7 +10085,34 @@ class Repo {
 
     db = await _db;
     await db.delete('sync_queue');
-    await db.delete('operations');
+    // حظر مسح جدول operations لمنع إعادة تطبيق السجل التاريخي السابق للّقطة.
+    try {
+      await db.update(
+        'operations',
+        {'synced': 1, 'is_synced': 1},
+        where: 'synced = 0 OR is_synced = 0',
+      );
+    } catch (_) {
+      try {
+        await db.update('operations', {'synced': 1}, where: 'synced = 0');
+      } catch (_) {}
+    }
+
+    var existingBarrierMs = 0;
+    try {
+      final bRows = await db.query(
+        'sync_meta',
+        columns: ['value'],
+        where: 'key = ?',
+        whereArgs: ['atomic_sync_barrier:$ws'],
+        limit: 1,
+      );
+      if (bRows.isNotEmpty) {
+        existingBarrierMs =
+            CloudJoin.parseSyncMs(bRows.first['value']);
+      }
+    } catch (_) {}
+
     await db.delete('sync_meta',
         where: 'key IN (?, ?, ?, ?)',
         whereArgs: [
@@ -10094,12 +10121,15 @@ class Repo {
           'lastCloudTs:$ws',
           'selfRevoked',
         ]);
-    if (snapshotCompactedTs > 0) {
+    final effectiveBarrierMs = snapshotCompactedTs > existingBarrierMs
+        ? snapshotCompactedTs
+        : existingBarrierMs;
+    if (effectiveBarrierMs > 0) {
       await db.insert(
         'sync_meta',
         {
           'key': 'last_synced_cursor:$ws',
-          'value': '$snapshotCompactedTs',
+          'value': '$effectiveBarrierMs',
         },
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
@@ -10107,7 +10137,23 @@ class Repo {
         'sync_meta',
         {
           'key': 'lastCloudTs:$ws',
-          'value': '$snapshotCompactedTs',
+          'value': '$effectiveBarrierMs',
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      await db.insert(
+        'sync_meta',
+        {
+          'key': 'snapshotThroughTs:$ws',
+          'value': '$effectiveBarrierMs',
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+      await db.insert(
+        'sync_meta',
+        {
+          'key': 'atomic_sync_barrier:$ws',
+          'value': '$effectiveBarrierMs',
         },
         conflictAlgorithm: ConflictAlgorithm.replace,
       );
