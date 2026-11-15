@@ -752,4 +752,110 @@ void main() {
       }
     },
   );
+
+  test(
+    'QA-CONFLICT-ENGINE-6 healCorruptedItemCatalog remaps split moves, purges split items and stale conflicts, and blocks incoming split item ops',
+    () async {
+      final (tmp, db, repo) = await createTestRepo('nexora_eng_6_');
+      final resolver = ConflictResolver();
+      try {
+        const origId = 1881515537087960576;
+        const splitId = 1881848145177768632;
+        const tCreated = '2026-11-11T19:03:54.374645';
+
+        await db.insert('items', {
+          'id': origId,
+          'plu': origId,
+          'workspace_id': 'default',
+          'name': 'بلو شيرنس',
+          'sku': '100002',
+          'unit': 'مل',
+          'buy_price': 60.0,
+          'sell_price': 150.0,
+          'quantity': 50.0,
+          'min_quantity': 20.0,
+          'is_active': 1,
+          'is_deleted': 0,
+          'created_at': tCreated,
+          'updated_at': tCreated,
+        });
+        await db.insert('items', {
+          'id': splitId,
+          'plu': 263,
+          'workspace_id': 'default',
+          'name': 'بلو اجمل',
+          'sku': '',
+          'unit': 'مل',
+          'buy_price': 60.0,
+          'sell_price': 150.0,
+          'quantity': 28.0,
+          'min_quantity': 20.0,
+          'is_active': 1,
+          'is_deleted': 0,
+          'created_at': tCreated,
+          'updated_at': tCreated,
+        });
+        await db.insert('stock_moves', {
+          'id': 1881553655213031936,
+          'workspace_id': 'default',
+          'item_id': splitId,
+          'kind': 'sale',
+          'quantity': 22.0,
+          'unit_price': 150.0,
+          'date': '2026-11-12T20:18:36.020329',
+          'created_at': '2026-11-12T20:18:36.020329',
+        });
+        await repo.setSetting(
+          'item_conflict:${origId}_$splitId',
+          '{"key":"item_conflict:${origId}_$splitId","conflictType":"sku","sharedSku":"100001","item1Id":$origId,"item1Name":"بلو شيرنس","item2Id":$splitId,"item2Name":"بلو اجمل","status":"pending"}',
+        );
+
+        final activeItems = await repo.items();
+        expect(activeItems.length, 1);
+        expect(activeItems.single.id, origId);
+        expect(activeItems.single.name, 'بلو اجمل');
+        expect(activeItems.single.plu, 263);
+
+        final remappedMove = await db.query(
+          'stock_moves',
+          where: 'id = ?',
+          whereArgs: [1881553655213031936],
+        );
+        expect(remappedMove.single['item_id'], origId);
+        expect(await repo.pendingItemConflicts(), isEmpty);
+
+        // عملية واردة لمعرّف منقسم تُرفض فوراً
+        final splitOpApplied = await repo.applyRemoteOperation(
+          db,
+          const SyncOperation(
+            id: 'op-split-reject',
+            workspaceId: 'default',
+            deviceId: 'dev-remote',
+            userId: 1,
+            opType: OpKind.create,
+            entityType: EntityKind.item,
+            entityId: '$splitId',
+            payload: {
+              'id': splitId,
+              'name': 'صنف منقسم مرفوض',
+              'created_at': tCreated,
+              'updated_at': tCreated,
+            },
+            timestamp: tCreated,
+            deviceTime: tCreated,
+            version: 1,
+            parentOpId: '',
+          ),
+          resolver,
+        );
+        expect(splitOpApplied, isFalse);
+      } finally {
+        await db.close();
+        try {
+          await tmp.delete(recursive: true);
+        } catch (_) {}
+      }
+    },
+  );
 }
+

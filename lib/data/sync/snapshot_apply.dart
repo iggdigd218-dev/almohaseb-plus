@@ -11,6 +11,7 @@ import 'package:sqflite/sqflite.dart';
 import '../../core/database.dart';
 import '../../core/media_paths.dart';
 import '../../core/secret_store.dart';
+import 'apply_remote.dart';
 import 'sync_quarantine.dart';
 
 enum SnapshotApplyMode { memberJoin, ownerRestore }
@@ -341,6 +342,12 @@ class SnapshotApply {
               }
             }
             if (table == 'items') {
+              final itemId = (map['id'] as num?)?.toInt() ??
+                  int.tryParse('${map['id'] ?? ''}') ??
+                  0;
+              if (isKnownAutoSplitItemId(itemId)) {
+                continue;
+              }
               if ('${map['name'] ?? ''}'.trim().isEmpty) map['name'] = 'صنف';
               if ('${map['created_at'] ?? ''}'.trim().isEmpty) map['created_at'] = nowIso;
               if ('${map['updated_at'] ?? ''}'.trim().isEmpty) map['updated_at'] = nowIso;
@@ -589,6 +596,10 @@ class SnapshotApply {
       for (final k in orgKeys) {
         await txn.delete('settings', where: 'key = ?', whereArgs: [k]);
       }
+      await txn.delete(
+        'settings',
+        where: "key LIKE 'item_conflict:%' OR key LIKE 'item_id_remap:%'",
+      );
       Future<void> applyOrgSetting(String k, Object? v) async {
         final val = '${v ?? ''}'.trim();
         if (k == 'logo' || !orgKeys.contains(k) || val.isEmpty) return;

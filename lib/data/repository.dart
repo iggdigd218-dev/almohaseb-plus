@@ -8494,6 +8494,7 @@ class Repo {
     bool includeDeleted = false,
   }) async {
     final db = await _db;
+    await ApplyRemoteOp.healCorruptedItemCatalog(db);
     final where = <String>[];
     final args = <Object?>[];
     if (!includeArchived) where.add('i.archived = 0');
@@ -8882,16 +8883,59 @@ class Repo {
   /// جميع سجلات تعارض الأصناف المسجّلة (المعلقة والمعالجة).
   Future<List<OfflineItemConflict>> allItemConflicts() async {
     final db = await _db;
+    await ApplyRemoteOp.healCorruptedItemCatalog(db);
     final rows = await db.query(
       'settings',
       where: "key LIKE 'item_conflict:%'",
     );
+    if (rows.isEmpty) return const <OfflineItemConflict>[];
+
+    final activeItemRows = await db.query(
+      'items',
+      columns: ['id', 'name', 'sku', 'is_deleted', 'deleted_at'],
+      where:
+          "(is_deleted = 0 OR is_deleted IS NULL) AND (deleted_at IS NULL OR TRIM(deleted_at) = '' OR TRIM(deleted_at) = 'null')",
+    );
+    final activeById = <int, Map<String, Object?>>{
+      for (final r in activeItemRows)
+        if ((r['id'] as num?)?.toInt() != null)
+          (r['id'] as num).toInt(): r,
+    };
+
     final out = <OfflineItemConflict>[];
     for (final r in rows) {
       final k = '${r['key'] ?? ''}'.trim();
       final v = '${r['value'] ?? ''}'.trim();
       final c = OfflineItemConflict.tryParseJson(v, fallbackKey: k);
-      if (c != null) out.add(c);
+      if (c == null ||
+          isKnownAutoSplitItemId(c.item1Id) ||
+          isKnownAutoSplitItemId(c.item2Id)) {
+        await db.delete('settings', where: 'key = ?', whereArgs: [k]);
+        await db.delete(
+          'notifications',
+          where: "entity_type = 'item_conflict' AND entity_id = ?",
+          whereArgs: [k],
+        );
+        continue;
+      }
+      if (c.isPending &&
+          (c.item1Id > 1000000000000 || c.item2Id > 1000000000000)) {
+        final it1 = activeById[c.item1Id];
+        final it2 = activeById[c.item2Id];
+        final sku1 = '${it1?['sku'] ?? ''}'.trim().toLowerCase();
+        final sku2 = '${it2?['sku'] ?? ''}'.trim().toLowerCase();
+        // إذا حُذف أحد الصنفين أو تغيّر الباركود ولم يعد مشتركاً، يُمسح التعارض تلقائياً
+        if (it1 == null || it2 == null || sku1.isEmpty || sku1 != sku2) {
+          await db.delete('settings', where: 'key = ?', whereArgs: [k]);
+          await db.delete(
+            'notifications',
+            where: "entity_type = 'item_conflict' AND entity_id = ?",
+            whereArgs: [k],
+          );
+          continue;
+        }
+      }
+      out.add(c);
     }
     out.sort(
       (a, b) => safeParseDateTime(b.createdAt)

@@ -33,6 +33,7 @@ import 'operation.dart';
 import 'device_id.dart';
 import 'google_auth_service.dart';
 import 'device_registry.dart';
+import 'apply_remote.dart';
 import 'firebase_auth_service.dart';
 import 'snapshot_apply.dart';
 import 'subscription_guard.dart';
@@ -1128,6 +1129,9 @@ class CloudJoin {
     String? hostDeviceId,
   }) async {
     final db = await repo.database;
+    try {
+      await ApplyRemoteOp.healCorruptedItemCatalog(db);
+    } catch (_) {}
     final ourId = await ensureDeviceId(repo);
     final ownerDevs = await db.query('devices',
         columns: ['id'], where: 'is_owner = 1', limit: 1);
@@ -1179,6 +1183,10 @@ class CloudJoin {
           row['expelled_at'] = '';
         }
         if (t == 'items') {
+          final itemId = (row['id'] as num?)?.toInt() ?? 0;
+          if (isKnownAutoSplitItemId(itemId)) {
+            continue;
+          }
           if (allowMediaSync) {
             final imgPath = (row['image'] as String?)?.trim() ?? '';
             if (imgPath.isNotEmpty) {

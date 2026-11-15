@@ -8,6 +8,7 @@ import 'package:sqflite/sqflite.dart';
 import 'db_init.dart';
 import 'device_names.dart';
 import 'models.dart';
+import '../data/sync/apply_remote.dart';
 
 /// معرف Workspace الافتراضي (ثابت محلي لتجنب circular imports).
 const defaultWorkspaceIdConst = 'default';
@@ -2378,6 +2379,9 @@ class AppDatabase {
       await migrateToV30(db);
     } catch (_) {}
     await _healCatalogDates(db);
+    try {
+      await ApplyRemoteOp.healCorruptedItemCatalog(db);
+    } catch (_) {}
   }
 
   /// ترميم أي قيم `created_at` أو `updated_at` فارغة أو غير صالحة في جدولي
