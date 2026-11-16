@@ -1,1 +1,37 @@
-{"version": "3.98.53+368", "minSupported": "3.13.0", "sha256": "1f1141328255efeb304929d1bb6b9782a8f7b8484f1b8a965a7a73e608343d9f", "sha256Variants": {"arm64": "1f1141328255efeb304929d1bb6b9782a8f7b8484f1b8a965a7a73e608343d9f", "armv7": "926100c5460859329e439f334f1794f8e5d41bf8b9b60f34313f6505c7a77fd7", "windows": "e3d4ec91c5dd5222442445ef79c2fa3aef8d44c55abd315ca27d9d7151713877"}, "releaseUrl": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/tag/latest", "download_url": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/Almohaseb-Plus-arm64.apk", "downloads": {"android": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/Almohaseb-Plus-arm64.apk", "androidVariants": {"arm64": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/Almohaseb-Plus-arm64.apk", "armv7": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/nexora-armv7.apk"}, "windows": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/NexoraSetup.exe"}, "downloadsMirror": {"android": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.53-368/Almohaseb-Plus-arm64.apk", "androidVariants": {"arm64": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.53-368/Almohaseb-Plus-arm64.apk", "armv7": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.53-368/nexora-armv7.apk"}, "windows": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.53-368/NexoraSetup.exe"}, "downloadsFallbackGithub": {"android": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/Almohaseb-Plus-arm64.apk", "androidVariants": {"arm64": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/Almohaseb-Plus-arm64.apk", "armv7": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/nexora-armv7.apk"}, "windows": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/NexoraSetup.exe"}, "publishedAt": "2026-11-15T16:48:03Z", "notes": "• شفاء ذاتي شامل للأصناف والمخزون: تنظيف الأصناف المكررة الناتجة عن التصادم السابق، وإرجاع كافة حركات المخزون وسطور الفواتير إلى الأصناف الأصلية، ومسح إشعارات التعارض الوهمية تلقائياً.\n• تحديث الصنف في مكانه (In-Place Update): اعتماد تطابق معرّف الصنف (ID) لتحديث نفس الصنف بأحدث تعديل دون انقسامه إلى صنفين أو رجوعه للاسم القديم قبل التعديل.\n• لقطات انضمام ومزامنة نظيفة: استلام الأجهزة المنضمة أو المسترجعة لنسخة محدثة ونظيفة من الكتالوج دون إعادة تشغيل العمليات القديمة.", "mirror": {"provider": "github-pages", "baseUrl": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.53-368", "reason": "github-primary"}}
+{
+  "version": "3.98.54+369",
+  "minSupported": "3.13.0",
+  "sha256": "b5ad29994630ad7c1949a939b6ac5df26c5e4fbf32d7ef9f5f5fad1d8a1f37b9",
+  "sha256Variants": {
+    "arm64": "b5ad29994630ad7c1949a939b6ac5df26c5e4fbf32d7ef9f5f5fad1d8a1f37b9",
+    "armv7": "cb121a221a395606bead9247611456417885e68fcf5b6190a72cd0e685c48914"
+  },
+  "releaseUrl": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/tag/latest",
+  "download_url": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/Almohaseb-Plus-arm64.apk",
+  "downloads": {
+    "android": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/Almohaseb-Plus-arm64.apk",
+    "androidVariants": {
+      "arm64": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/Almohaseb-Plus-arm64.apk",
+      "armv7": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/nexora-armv7.apk"
+    },
+    "windows": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/NexoraSetup.exe"
+  },
+  "downloadsMirror": {
+    "android": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.54-369/Almohaseb-Plus-arm64.apk",
+    "androidVariants": {
+      "arm64": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.54-369/Almohaseb-Plus-arm64.apk",
+      "armv7": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.54-369/nexora-armv7.apk"
+    },
+    "windows": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.54-369/NexoraSetup.exe"
+  },
+  "downloadsFallbackGithub": {
+    "android": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/Almohaseb-Plus-arm64.apk",
+    "androidVariants": {
+      "arm64": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/Almohaseb-Plus-arm64.apk",
+      "armv7": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/nexora-armv7.apk"
+    },
+    "windows": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/NexoraSetup.exe"
+  },
+  "publishedAt": "2026-11-16T11:06:04Z",
+  "notes": "• شفاء ذاتي شامل للأصناف والمخزون: تنظيف الأصناف المكررة الناتجة عن التصادم السابق، وإرجاع كافة حركات المخزون وسطور الفواتير إلى الأصناف الأصلية، ومسح إشعارات التعارض الوهمية تلقائياً.\n• تحديث الصنف في مكانه (In-Place Update): اعتماد تطابق معرّف الصنف (ID) لتحديث نفس الصنف بأحدث تعديل دون انقسامه إلى صنفين أو رجوعه للاسم القديم قبل التعديل.\n• لقطات انضمام ومزامنة نظيفة: استلام الأجهزة المنضمة أو المسترجعة لنسخة محدثة ونظيفة من الكتالوج دون إعادة تشغيل العمليات القديمة."
+}
