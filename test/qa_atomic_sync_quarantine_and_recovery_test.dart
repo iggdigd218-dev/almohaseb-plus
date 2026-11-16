@@ -65,6 +65,11 @@ class _AtomicMockCloud {
           });
         }
         final path = req.url.path;
+        // (3.98.56) عقدة الفحص التشخيصي `_probe` لا تُخزَّن: هي ليست بيانات
+        // عمل، ووجودها كان يُربك عدّادات عقد المساحة في الاختبارات.
+        if (req.method == 'PUT' && req.url.path.contains('/_probe/')) {
+          return _jsonResp({'ok': true});
+        }
         if (req.method == 'PUT') {
           putOrder.add(path);
           final resolved = _resolveServerTimestamp(jsonDecode(req.body));
