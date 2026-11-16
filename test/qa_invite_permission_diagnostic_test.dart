@@ -153,7 +153,8 @@ void main() {
           allOf(
             contains('403'),
             contains('قواعد'),
-            isNot(contains('صلاحيتك')),
+            isNot(contains('ليس لديك الصلاحية')),
+            isNot(contains('مراجعة مدير النظام')),
           ),
         )),
       );
