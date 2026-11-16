@@ -1027,6 +1027,20 @@ extension ApplyRemoteOp on Repo {
           (op.payload.containsKey('thumb_b64') &&
               '${op.payload['thumb_b64'] ?? ''}'.trim().isEmpty)) {
         row['image'] = '';
+      } else {
+        // إذا لم تحمل العملية مصغّرة جديدة ولم يُطلب مسح الصورة صراحةً:
+        // نحافظ على الصورة المحلية الموجودة مسبقاً، ونمنع تخزين مسار ملف يخص جهازاً آخر ولا يوجد محلياً.
+        final rawImg = '${row['image'] ?? ''}'.trim();
+        final rawExistsLocally = rawImg.isNotEmpty &&
+            File(MediaPaths.toAbsolute(rawImg)).existsSync();
+        if (!rawExistsLocally) {
+          final prevImg = existing.isNotEmpty
+              ? '${existing.first['image'] ?? ''}'.trim()
+              : '';
+          final prevExistsLocally = prevImg.isNotEmpty &&
+              File(MediaPaths.toAbsolute(prevImg)).existsSync();
+          row['image'] = prevExistsLocally ? prevImg : '';
+        }
       }
     }
 

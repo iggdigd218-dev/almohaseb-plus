@@ -21,6 +21,7 @@ import 'package:sqflite/sqflite.dart';
 import '../../core/database.dart';
 import '../../core/desktop_net.dart';
 import '../../core/item_conflict.dart';
+import '../../core/media_paths.dart';
 import '../repository.dart';
 import 'apply_remote.dart';
 import 'cloud_join.dart';
@@ -355,6 +356,19 @@ class CloudFirebaseTransport implements SyncTransport {
       final tb = cloudPayload['thumb_b64'];
       if (tb is String && tb.trim().isNotEmpty) {
         cloudPayload.remove('thumb_b64');
+      }
+    } else if (op.entityType == EntityKind.item &&
+        op.opType != OpKind.delete_ &&
+        cloudPayload['image_cleared'] != 1 &&
+        '${cloudPayload['thumb_b64'] ?? ''}'.trim().isEmpty) {
+      final imgPath = '${op.payload['image'] ?? ''}'.trim();
+      if (imgPath.isNotEmpty) {
+        try {
+          final b64 = await MediaPaths.encodeThumbBase64(imgPath);
+          if (b64.isNotEmpty) {
+            cloudPayload['thumb_b64'] = b64;
+          }
+        } catch (_) {}
       }
     }
     final localSanitizedPayload = sanitizeOperationPayload(
