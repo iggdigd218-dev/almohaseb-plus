@@ -1127,11 +1127,15 @@ class CloudJoin {
   static Future<Map<String, Object?>> buildWorkspaceSnapshot(
     Repo repo, {
     String? hostDeviceId,
+    bool includeMediaThumbs = true,
+    bool skipCatalogHeal = false,
   }) async {
     final db = await repo.database;
-    try {
-      await ApplyRemoteOp.healCorruptedItemCatalog(db);
-    } catch (_) {}
+    if (!skipCatalogHeal) {
+      try {
+        await ApplyRemoteOp.healCorruptedItemCatalog(db);
+      } catch (_) {}
+    }
     final ourId = await ensureDeviceId(repo);
     final ownerDevs = await db.query('devices',
         columns: ['id'], where: 'is_owner = 1', limit: 1);
@@ -1162,6 +1166,11 @@ class CloudJoin {
         (await repo.getSetting('allow_cloud_media_sync')) == '1' ||
             SubscriptionGuard.lastState.features.allowCloudMediaSync;
     for (final t in tables) {
+      // في لقطة الانضمام السريعة، نتجنب تضخيم الحمولة بسجل النشاط أو سلة المحذوفات التاريخية
+      if (!includeMediaThumbs && (t == 'trash' || t == 'activity')) {
+        snapshot[t] = const <Map<String, Object?>>[];
+        continue;
+      }
       final rows = await db.query(t);
       final filteredRows = t == 'devices'
           ? rows.where((r) =>
@@ -1187,7 +1196,7 @@ class CloudJoin {
           if (isKnownAutoSplitItemId(itemId)) {
             continue;
           }
-          if (allowMediaSync) {
+          if (allowMediaSync && includeMediaThumbs) {
             final imgPath = (row['image'] as String?)?.trim() ?? '';
             if (imgPath.isNotEmpty) {
               final b64 = await MediaPaths.encodeThumbBase64(imgPath);
@@ -3809,35 +3818,16 @@ class CloudJoin {
       }
     }
 
-    Future<void> cleanCloudExpulsionOperations() async {
-      try {
-        final opsMap = await _getJson('$root/operations.json');
-        if (opsMap == null || opsMap.isEmpty) return;
-        for (final entry in opsMap.entries) {
-          final v = entry.value;
-          if (v is! Map) continue;
-          final entId = '${v['entity_id'] ?? v['entityId'] ?? ''}'.trim();
-          final entType = '${v['entity_type'] ?? v['entityType'] ?? ''}'.trim();
-          final opType = '${v['op_type'] ?? v['opType'] ?? ''}'.trim();
-          final payload = v['payload'] is Map ? (v['payload'] as Map) : const {};
-          final targetDev =
-              '${payload['expelled_device_id'] ?? payload['revoked_device_id'] ?? ''}'
-                  .trim();
-          final isStaleExpelOp = entId == 'deviceExpelled:$deviceId' ||
-              entId == 'deviceRevoked:$deviceId' ||
-              (entType == 'user' && opType == 'delete' && targetDev == deviceId);
-          if (isStaleExpelOp) {
-            await _delete(
-                '$root/operations/${Uri.encodeComponent(entry.key)}.json');
-          }
-        }
-      } catch (_) {}
-    }
-
     Future<void> uploadJoinSnapshotOnly() async {
       try {
-        final snap =
-            await buildWorkspaceSnapshot(repo, hostDeviceId: ourOwnDeviceId);
+        // بناء لقطة انضمام سريعة وخفيفة بدون تضمين صور الأصناف (تتزامن لاحقاً عبر العمليات)
+        // لتجنب تجاوز مهلة الرفع على شبكات الجوال البطيئة.
+        final snap = await buildWorkspaceSnapshot(
+          repo,
+          hostDeviceId: ourOwnDeviceId,
+          includeMediaThumbs: false,
+          skipCatalogHeal: true,
+        );
         final snapTs = DateTime.now().millisecondsSinceEpoch;
         final checksum = SnapshotApply.computeSnapshotChecksum(snap);
         final counts = SnapshotApply.computeTableCounts(snap);
@@ -3854,7 +3844,7 @@ class CloudJoin {
         await _putJson(
           '$root/joinSnapshot.json',
           snapPayload,
-          timeout: const Duration(seconds: 25),
+          timeout: const Duration(seconds: 30),
         );
         final dbSnap = await repo.database;
         if (dbSnap.isOpen) {
@@ -3876,13 +3866,11 @@ class CloudJoin {
       }
     }
 
-    // الترتيب الذري الإلزامي: تنظيف آثار الطرد ورفع اللقطة والتحقق من اكتمالها أولاً،
-    // ثم إعلان حالة approved وكتابة roster حتى لا يستلم العضو موافقة قبل جاهزية اللقطة.
-    await cleanCloudExpulsionOperations();
-    await uploadJoinSnapshotOnly();
-
+    // الترتيب الذري السريع:
+    // 1) رفع اللقطة الخفيفة + تحديث الروستر والمقاعد وحذف شواهد الطرد بالتوازي (دون سحب /operations.json الضخم).
+    // 2) فور اكتمال رفع اللقطة، نكتب إشارة approved حتى يجد العضو اللقطة جاهزة فوراً.
     await Future.wait<void>([
-      writeApprovedSignal(),
+      uploadJoinSnapshotOnly(),
       _putJson(
         '$root/roster/$encApproved.json',
         {
@@ -3899,7 +3887,7 @@ class CloudJoin {
           'user_role': role.code,
           'user_permissions': permStr,
         },
-        timeout: const Duration(seconds: 15),
+        timeout: const Duration(seconds: 20),
       ).catchError((_) {}),
       if (memberUid.isNotEmpty)
         _putJson(
@@ -3910,7 +3898,7 @@ class CloudJoin {
             'deviceId': deviceId,
             'joined_at': {'.sv': 'timestamp'},
           },
-          timeout: const Duration(seconds: 15),
+          timeout: const Duration(seconds: 20),
         ).catchError((_) {}),
       for (final node in const [
         'evictions',
@@ -3919,6 +3907,8 @@ class CloudJoin {
       ])
         _delete('$root/$node/$encApproved.json').catchError((_) {}),
     ]);
+
+    await writeApprovedSignal();
   }
 
   /// ══ (2026-09-22 — توجيه العمليات بين الأجهزة) ══
