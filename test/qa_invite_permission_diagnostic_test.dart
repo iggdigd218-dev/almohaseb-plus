@@ -17,10 +17,12 @@
 //     «ليس لديك الصلاحية». 401 (هوية) و403 (قواعد) يُفرَّق بينهما.
 //  2. نقص صلاحية حقيقي (`permission denied` من طبقة أخرى بلا سياق سحابي)
 //     يبقى يُترجم إلى «ليس لديك الصلاحية» — لم يُكسر السلوك القديم الصحيح.
-//  3. `createInvite` يفشل مبكراً برسالة واضحة حين لا توجد هوية سحابية،
-//     بدل إرسال طلب عارٍ يُترجم إلى رسالة صلاحيات خاطئة.
-//  4. العقدة التشخيصية `_probe` مصرّح بها في ملفَّي قواعد Firebase، حتى لا
-//     يكون الفحص التشخيصي نفسه سبباً لرفض 403.
+//  3. `createInvite` يتحقق من الهوية ومن قراءة مساحة العمل قبل توليد أي
+//     رمز، بدل إرسال طلب عارٍ يُترجم إلى رسالة صلاحيات خاطئة. والقراءة
+//     المرفوضة (401/403) لا تُنتج رمزاً ولا تُنشئ عقداً.
+//  4. الفحص التشخيصي **قراءة فقط**: لا يكتب أي عقدة جديدة في Firebase، فلا
+//     يحتاج أي تغيير في القواعد المنشورة. (الكتابة إلى عقدة `_probe` كانت
+//     تجعل الفحص نفسه سبباً لرفض 403 حين تكون القواعد قديمة/غير منشورة.)
 import 'dart:convert';
 import 'dart:io';
 
@@ -38,6 +40,7 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 class _RejectingCloud {
   _RejectingCloud(this.statusCode);
   final int statusCode;
+  /// كل مسار كتابة حاول التطبيق تنفيذه (يجب أن يبقى فارغاً للدعوة).
   final List<String> puts = [];
 
   static http.Response _json(String body, int status) =>
@@ -54,12 +57,15 @@ class _RejectingCloud {
           return _json('{"idToken":"TOK-QA","refreshToken":"REF-QA",'
               '"expiresIn":"3600","localId":"UID-QA"}', 200);
         }
-        if (req.method == 'PUT' || req.method == 'PATCH') {
+        // كل محاولة كتابة تُسجَّل — حتى نتأكد أن رفض القراءة يمنع أي كتابة.
+        if (req.method == 'PUT' || req.method == 'PATCH' ||
+            req.method == 'DELETE') {
           puts.add(req.url.path);
           return _json('{"error":"Permission denied"}', statusCode);
         }
-        if (req.method == 'DELETE') return _json('null', 200);
-        return _json('null', 200);
+        // GET: القواعد/الهوية ترفض القراءة أيضاً (403/401) — هذه هي الحالة
+        // الواقعية حين تكون القواعد غير منشورة أو التوكن غير فعّال.
+        return _json('{"error":"Permission denied"}', statusCode);
       });
 }
 
@@ -158,11 +164,10 @@ void main() {
           ),
         )),
       );
-      // الفحص التشخيصي نفسه جرى قبل أي كتابة حقيقية للدعوة.
-      expect(cloud.puts.any((p) => p.contains('/_probe/')), isTrue,
-          reason: 'يجب فحص صلاحية الكتابة قبل توليد الرمز');
-      expect(cloud.puts.any((p) => p.contains('/invites/')), isFalse,
-          reason: 'لا تُكتب دعوة أبداً على مساحة ترفض الكتابة');
+      // الفحص التشخيصي قراءة فقط: لم تُحاول أي كتابة إطلاقاً — لا عقدة فحص
+      // جديدة ولا دعوة ولا فهرس. هذا ما يجعل الإصلاح لا يحتاج تغيير القواعد.
+      expect(cloud.puts, isEmpty,
+          reason: 'لا كتابة قبل التأكد من صلاحية القراءة/الهوية: ${cloud.puts}');
     });
 
     test('401 من السحابة يعطي رسالة هوية منتهية لا صلاحية', () async {
@@ -179,22 +184,31 @@ void main() {
     });
   });
 
-  // ── ٣) العقدة التشخيصية مصرّح بها في القواعد المنشورة ──────────────────
-  group('INV-PERM-03 قواعد Firebase تحوي عقدة الفحص _probe', () {
+  // ── ٣) لا يتطلب الإصلاح أي تغيير في قواعد Firebase ────────────────────
+  //
+  // هذا هو العقد الأهم بالنسبة لبيئة المستخدم: قاعدته المنشورة قد تكون
+  // قديمة أو ناقصة. لذلك يجب ألا يضيف التطبيق أي عقدة جديدة إلى القواعد،
+  // وألا يعتمد التشخيص على `_probe` أو أي مفتاح غير موجود في النسخة المنشورة.
+  group('INV-PERM-03 الفحص التشخيصي لا يفرض أي تعديل على قواعد Firebase', () {
     for (final path in const [
       'firebase/database.rules.json',
       'firebase/rules.license-hardened.json',
     ]) {
-      test('INV-PERM-03 $path يسمح بكتابة _probe داخل مساحة العمل', () {
+      test('INV-PERM-03 $path خالٍ من أي عقدة تشخيصية مضافة', () {
         final rules = jsonDecode(File(path).readAsStringSync()) as Map;
         final ws = rules['rules']['workspaces'][r'$ws'] as Map;
-        expect(ws.containsKey('_probe'), isTrue,
-            reason: 'الفحص التشخيصي يحتاج عقدة مصرّحاً بها وإلا صار 403 بنفسه');
-        final probe = ws['_probe'] as Map;
-        expect('${probe['.write']}', isNot(isEmpty));
-        // نفس شرط الكتابة المعتمد لبقية عقد المساحة (ملكية/email/عضوية).
-        expect('${probe['.write']}', contains('auth != null'));
+        expect(ws.containsKey('_probe'), isFalse,
+            reason: 'الفحص قراءة فقط: إضافة عقدة كانت ستُرفض 403 على قواعد '
+                'قديمة فتصير هي سبب العطل');
       });
     }
+
+    test('INV-PERM-03 رمز المصدر لا يكتب أي عقدة تشخيصية', () {
+      final src = File('lib/data/sync/cloud_join.dart').readAsStringSync();
+      expect(src, isNot(contains('/_probe/')),
+          reason: 'لا كتابة تشخيصية على السحابة — قراءة meta.json تكفي');
+      // القواعد المنشورة تسمح بقراءة meta للجميع (auth != null).
+      expect(src, contains('_probeWorkspaceAccess'));
+    });
   });
 }

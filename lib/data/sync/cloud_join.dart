@@ -746,40 +746,34 @@ class CloudJoin {
     }
   }
 
-  /// (3.98.56) فحص تشخيصي مبكر لصلاحية الكتابة في مساحة العمل.
+  /// (3.98.57) فحص تشخيصي مبكر **بقراءة فقط** لصلاحية مساحة العمل.
   ///
   /// إنشاء الدعوة يكتب ٤ عقد (`invites/{tok}`، فهرسي `/invite_index`،
   /// وربما `members/{uid}`). كان أول فشل يظهر كـ HTTP 401/403 عام يُترجم
   /// إلى «ليس لديك الصلاحية… راجع مدير النظام» — رسالة خاطئة تماماً على
   /// جهاز المالك، فلا يعرف أن المشكلة في قواعد RTDB أو في هويته السحابية.
   ///
-  /// الآن نكتب عقدة تحقق صغيرة (`_probe/write.json`) بهوية الجهاز نفسها
-  /// قبل أي كتابة حقيقية؛ فإن رُفضت نفشل مبكراً برسالة تشخيصية صحيحة
-  /// (قواعد غير منشورة / هوية غير عضوة)، وإن نجحت نمضي. الفشل الشبكي
-  /// يُتجاهل (fail-open) لأن الشبكة نفسها ستُبلّغ عن نفسها.
-  static Future<void> _probeWorkspaceWrite(String backendUrl,
+  /// الإصدار السابق من هذا الفحص كتب عقدة جديدة `_probe` — وهذا خطأ في
+  /// بيئة تكون فيها القواعد غير منشورة أو قديمة: كان الفحص نفسه يُرفض بـ 403
+  /// فيصير هو سبب العطل بدل أن يوضّحه. الفحص الآن **لا يكتب شيئاً**:
+  ///   • يقرأ عقدة قائمة (`meta.json`) — إن رُفضت القراءة فالقواعد/الهوية لا
+  ///     تسمح أصلاً، والرسالة تقول ذلك صراحةً.
+  ///   • يتحقق من وجود هوية وتوكن فعّال قبل أي كتابة.
+  ///
+  /// النتيجة: صفر تغييرات مطلوبة على قاعدة Firebase، وصفر عقد جديدة، ومعرفة
+  /// دقيقة للسبب (401 هوية / 403 قواعد) قبل الإبلاغ عنه.
+  static Future<void> _probeWorkspaceAccess(String backendUrl,
       String workspaceId) async {
-    final url = '${_root(backendUrl, workspaceId)}/_probe/write.json';
+    final token = await _requireToken(action: 'التحقق من مساحة العمل السحابية');
+    final url = '${_root(backendUrl, workspaceId)}/meta.json';
     try {
-      final token = await _ensureToken();
       final res = await http
-          .put(_authedUrl(url, token),
-              headers: {'Content-Type': 'application/json'},
-              body: jsonEncode({
-                'at': DateTime.now().millisecondsSinceEpoch,
-                'by': 'nexora-write-probe',
-              }))
+          .get(_authedUrl(url, token))
           .timeout(const Duration(seconds: 10));
       if (res.statusCode == 401 || res.statusCode == 403) {
         throw CloudJoinException(
-            _cloudRejectedMessage(res.statusCode, node: 'مساحة العمل'));
+            _cloudRejectedMessage(res.statusCode, node: 'بيانات المنشأة'));
       }
-      // حذف العقدة التشخيصية — فشل الحذف لا يعني شيئاً.
-      try {
-        await http
-            .delete(_authedUrl(url, token))
-            .timeout(const Duration(seconds: 6));
-      } catch (_) {}
     } on CloudJoinException {
       rethrow;
     } catch (_) {
@@ -1354,7 +1348,7 @@ class CloudJoin {
     await _requireToken(action: 'إنشاء دعوة الانضمام');
     // (3.98.56) فحص كتابة مبكر: يكشف قواعد RTDB غير المنشورة أو هوية غير
     // عضوة قبل توليد الرمز، برسالة تشرح السبب الحقيقي بدل «راجع المدير».
-    await _probeWorkspaceWrite(url, ws);
+    await _probeWorkspaceAccess(url, ws);
 
     // التحقق من المقاعد وتهيئة سجل المالك بالتوازي لتسريع التوليد
     try {
