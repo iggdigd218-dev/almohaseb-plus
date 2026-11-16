@@ -50,15 +50,19 @@ const _tokenChars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 /// offline لحظياً (شبكة ضعيفة) ضاع القرار. الآن 10 دقائق آمنة.
 const Duration _approvedRequestTtl = Duration(minutes: 10);
 
-  /// (أ-2) فهرس الدعوات على الجذر: `{base}/invite_index/{pin_XXXXXX|tok_XXXXXXXX}`.
+/// (أ-2) فهرس الدعوات: المسار الأساسي `{base}/workspaces/_invite_index/invites/{key}`
+/// والمسار التراثي على الجذر `{base}/invite_index/{key}`.
 ///
-/// كان اكتشاف مساحة المدير يتم بمسح `/workspaces?shallow=true` ثم قراءة
-/// عقدة `invites` لكل مساحة (سقف 500) — أي استطلاعاً جماعياً لبيانات كل
-/// المنشآت واستهلاكاً شبكياً هائلاً من طرف العميل. الفهرس يجعل الاكتشاف
-/// **قراءةً واحدة لعقدة واحدة**، ويتيح لقواعد الأمان منع قراءة الجذر.
+/// مثل `device_index` تحت `_registry`، الجذر `/invite_index` قد يُحجب في قواعد
+/// RTDB المنشورة (HTTP 401 Permission denied)، بينما `workspaces/$ws/invites`
+/// مفتوح قراءةً وكتابةً للموثّقين (`auth != null`) بدون أي نشر قواعد إضافي.
 /// مفتاحان في أب واحد: `pin_` للرمز الرقمي و`tok_` لتوكن الدعوة.
 String _inviteIndexPath(String base, String key) =>
     '${base.replaceAll(RegExp(r'/+$'), '')}/invite_index/'
+    '${Uri.encodeComponent(key)}.json';
+
+String _workspaceInviteIndexPath(String base, String key) =>
+    '${base.replaceAll(RegExp(r'/+$'), '')}/workspaces/_invite_index/invites/'
     '${Uri.encodeComponent(key)}.json';
 
 String _invitePinKey(String pin) => 'pin_${pin.trim().toUpperCase()}';
@@ -66,7 +70,7 @@ String _invitePinKey(String pin) => 'pin_${pin.trim().toUpperCase()}';
 String _inviteTokenKey(String token) => 'tok_${token.trim().toUpperCase()}';
 
 /// (توافق مؤقت) المسح القديم إن تعذّر الفهرس — تم إيقافه نهائياً للاكتفاء
-/// بفهرس `/invite_index` السريع وتجنب مسح كامل عقدة `/workspaces`.
+/// بفهرس الدعوات السريع وتجنب مسح كامل عقدة `/workspaces`.
 const bool legacyInviteScanFallback = false;
 
 String _newToken([int len = 8]) {
@@ -702,18 +706,65 @@ class CloudJoin {
   }
 
   /// (أ-2) محو فهرسي الدعوة (PIN + توكن) بعد استهلاكها أو انتهائها —
-  /// يمنع تراكم مفاتيح ميتة في `/invite_index`.
+  /// ينظّف المسار الأساسي تحت `workspaces/_invite_index/invites` والجذر التراثي.
   static Future<void> _purgeInviteIndex(String base,
       {String pin = '', String token = ''}) async {
-    if (pin.trim().isNotEmpty) {
-      try {
-        await _delete(_inviteIndexPath(base, _invitePinKey(pin)));
-      } catch (_) {}
+    for (final key in [
+      if (pin.trim().isNotEmpty) _invitePinKey(pin),
+      if (token.trim().isNotEmpty) _inviteTokenKey(token),
+    ]) {
+      await _delete(_workspaceInviteIndexPath(base, key));
+      await _delete(_inviteIndexPath(base, key), refreshOnReject: false);
     }
-    if (token.trim().isNotEmpty) {
+  }
+
+  static Future<Map<String, dynamic>?> _readInviteIndex(
+    String base,
+    String key,
+  ) async {
+    CloudJoinException? primaryErr;
+    try {
+      final primary = await _getJson(_workspaceInviteIndexPath(base, key));
+      if (primary != null) return primary;
+    } on CloudJoinException catch (e) {
+      primaryErr = e;
+    }
+    try {
+      final legacy = await _getJson(
+        _inviteIndexPath(base, key),
+        refreshOnReject: primaryErr != null,
+      );
+      if (legacy != null) return legacy;
+    } catch (_) {
+      // الجذر /invite_index قد يكون محجوباً في القواعد المنشورة (401/403).
+    }
+    if (primaryErr != null) throw primaryErr;
+    return null;
+  }
+
+  static Future<void> _writeInviteIndex(
+    String base,
+    String key,
+    Object body, {
+    Duration timeout = const Duration(seconds: 60),
+  }) async {
+    try {
+      await _putJson(
+        _workspaceInviteIndexPath(base, key),
+        body,
+        timeout: timeout,
+      );
+    } on CloudJoinException catch (primaryErr) {
       try {
-        await _delete(_inviteIndexPath(base, _inviteTokenKey(token)));
-      } catch (_) {}
+        await _putJson(
+          _inviteIndexPath(base, key),
+          body,
+          timeout: timeout,
+          refreshOnReject: false,
+        );
+      } catch (_) {
+        throw primaryErr;
+      }
     }
   }
 
@@ -779,8 +830,11 @@ class CloudJoin {
         }
       }
       if (res.statusCode == 401 || res.statusCode == 403) {
-        throw CloudJoinException(
-            _cloudRejectedMessage(res.statusCode, node: 'بيانات المنشأة'));
+        throw CloudJoinException(_cloudRejectedMessage(
+          res.statusCode,
+          node: 'بيانات المنشأة',
+          responseBody: res.body,
+        ));
       }
     } on CloudJoinException {
       rethrow;
@@ -814,14 +868,22 @@ class CloudJoin {
     return t;
   }
 
-  /// (3.98.56) رسالة موحّدة لرفض السحابة، تُفرّق بين 401 (هوية) و403 (قواعد).
-  static String _cloudRejectedMessage(int code, {String? node}) {
+  /// (3.98.59) رسالة موحّدة لرفض السحابة، تُفرّق بين انتهاء التوكن (401)
+  /// ورفض قواعد RTDB (403 أو 401 مع "Permission denied").
+  static String _cloudRejectedMessage(
+    int code, {
+    String? node,
+    String? responseBody,
+  }) {
     final where = (node == null || node.isEmpty) ? '' : ' عند "$node"';
-    if (code == 403) {
-      return 'رفضت السحابة الكتابة$where (HTTP 403). هذا ليس نقصاً في '
-          'صلاحيتك كمالك — الأرجح أن قواعد Firebase Realtime Database لم '
-          'تُنشر على المشروع، أو أن هوية الجهاز السحابية لم تعد عضواً في '
-          'المساحة. انشر firebase/database.rules.json ثم أعد المحاولة.';
+    final bodyLower = (responseBody ?? '').toLowerCase();
+    final isRuleDenial =
+        code == 403 || (code == 401 && bodyLower.contains('permission denied'));
+    if (isRuleDenial) {
+      return 'رفضت السحابة الوصول$where (HTTP $code). هذا ليس نقصاً في '
+          'صلاحيتك كمالك ولا يعني بالضرورة انتهاء تسجيل الدخول — الأرجح أن '
+          'قواعد Firebase Realtime Database تمنع العملية على هذا المسار '
+          'أو لم تُنشر بعد، أو أن هوية الجهاز لم تُربط بالمنشأة.';
     }
     return 'انتهت صلاحية هوية هذا الجهاز على السحابة$where (HTTP 401). '
         'سجّل الدخول بحساب Google من الإعدادات ← حساب المؤسسة ثم أعد المحاولة.';
@@ -891,11 +953,14 @@ class CloudJoin {
     }
   }
 
-  static Future<Map<String, dynamic>?> _getJson(String url) async {
+  static Future<Map<String, dynamic>?> _getJson(
+    String url, {
+    bool refreshOnReject = true,
+  }) async {
     var token = await _ensureToken();
     var uri = _authedUrl(url, token);
     var res = await http.get(uri).timeout(const Duration(seconds: 30));
-    if (res.statusCode == 401 || res.statusCode == 403) {
+    if (refreshOnReject && (res.statusCode == 401 || res.statusCode == 403)) {
       final fresh = await FirebaseAuthRest.forceRefreshToken();
       if (fresh != null && fresh.isNotEmpty) {
         token = fresh;
@@ -905,8 +970,11 @@ class CloudJoin {
       }
     }
     if (res.statusCode == 401 || res.statusCode == 403) {
-      throw CloudJoinException(
-          _cloudRejectedMessage(res.statusCode, node: _nodeName(url)));
+      throw CloudJoinException(_cloudRejectedMessage(
+        res.statusCode,
+        node: _nodeName(url),
+        responseBody: res.body,
+      ));
     }
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw CloudJoinException('تعذّر الاتصال بالسحابة (HTTP ${res.statusCode})');
@@ -917,8 +985,12 @@ class CloudJoin {
     return d is Map ? Map<String, dynamic>.from(d) : null;
   }
 
-  static Future<void> _putJson(String url, Object body,
-      {Duration timeout = const Duration(seconds: 60)}) async {
+  static Future<void> _putJson(
+    String url,
+    Object body, {
+    Duration timeout = const Duration(seconds: 60),
+    bool refreshOnReject = true,
+  }) async {
     var token = await _ensureToken();
     var uri = _authedUrl(url, token);
     var res = await http
@@ -926,7 +998,7 @@ class CloudJoin {
             headers: {'Content-Type': 'application/json'},
             body: jsonEncode(body))
         .timeout(timeout);
-    if (res.statusCode == 401 || res.statusCode == 403) {
+    if (refreshOnReject && (res.statusCode == 401 || res.statusCode == 403)) {
       final fresh = await FirebaseAuthRest.forceRefreshToken();
       if (fresh != null && fresh.isNotEmpty) {
         res = await http
@@ -937,8 +1009,11 @@ class CloudJoin {
       }
     }
     if (res.statusCode == 401 || res.statusCode == 403) {
-      throw CloudJoinException(
-          _cloudRejectedMessage(res.statusCode, node: _nodeName(url)));
+      throw CloudJoinException(_cloudRejectedMessage(
+        res.statusCode,
+        node: _nodeName(url),
+        responseBody: res.body,
+      ));
     }
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw CloudJoinException('فشل الرفع إلى السحابة (HTTP ${res.statusCode})');
@@ -1003,12 +1078,15 @@ class CloudJoin {
     }
   }
 
-  static Future<void> _delete(String url) async {
+  static Future<void> _delete(
+    String url, {
+    bool refreshOnReject = true,
+  }) async {
     try {
       var token = await _ensureToken();
       var uri = _authedUrl(url, token);
       var res = await http.delete(uri).timeout(const Duration(seconds: 20));
-      if (res.statusCode == 401 || res.statusCode == 403) {
+      if (refreshOnReject && (res.statusCode == 401 || res.statusCode == 403)) {
         final fresh = await FirebaseAuthRest.forceRefreshToken();
         if (fresh != null) {
           await http
@@ -1387,8 +1465,8 @@ class CloudJoin {
     for (var attempt = 0; attempt < 5; attempt++) {
       try {
         final checks = await Future.wait<Map<String, Object?>?>([
-          _getJson(_inviteIndexPath(url, _inviteTokenKey(token))),
-          _getJson(_inviteIndexPath(url, _invitePinKey(pin))),
+          _readInviteIndex(url, _inviteTokenKey(token)),
+          _readInviteIndex(url, _invitePinKey(pin)),
         ]);
         final existTok = checks[0];
         final existPin = checks[1];
@@ -1429,9 +1507,9 @@ class CloudJoin {
     await Future.wait<void>([
       _putJson('$root/invites/$token.json', invitePayload,
           timeout: const Duration(seconds: 15)),
-      _putJson(_inviteIndexPath(url, _invitePinKey(pin)), indexPayload,
+      _writeInviteIndex(url, _invitePinKey(pin), indexPayload,
           timeout: const Duration(seconds: 15)),
-      _putJson(_inviteIndexPath(url, _inviteTokenKey(token)), indexPayload,
+      _writeInviteIndex(url, _inviteTokenKey(token), indexPayload,
           timeout: const Duration(seconds: 15)),
     ]);
 
@@ -2977,8 +3055,8 @@ class CloudJoin {
     // (أ-2) الفهرس أولاً: **قراءة واحدة** لعقدة واحدة بدل مسح كل المساحات
     // وقراءة invites كل واحدة (حتى 500 قراءة). هذا هو المسار الطبيعي الآن.
     try {
-      final Map<String, dynamic>? rec = await _getJson(_inviteIndexPath(
-          url, isPin ? _invitePinKey(input) : _inviteTokenKey(input)));
+      final Map<String, dynamic>? rec = await _readInviteIndex(
+          url, isPin ? _invitePinKey(input) : _inviteTokenKey(input));
       if (rec != null) {
         final exp = DateTime.tryParse('${rec['expiresAt'] ?? ''}');
         final ws = '${rec['ws'] ?? ''}'.trim();
@@ -3093,7 +3171,7 @@ class CloudJoin {
     if (RegExp(r'^\d{6}$').hasMatch(input)) {
       // 1) فحص الفهرس O(1) السريع للحصول على التوكن ومساحة العمل الحقيقية للمدير مباشرة
       try {
-        final rec = await _getJson(_inviteIndexPath(url, _invitePinKey(input)));
+        final rec = await _readInviteIndex(url, _invitePinKey(input));
         if (rec != null) {
           final tok = '${rec['token'] ?? ''}'.trim();
           final invWs = '${rec['ws'] ?? ''}'.trim();
@@ -3127,7 +3205,7 @@ class CloudJoin {
       }
     } else {
       try {
-        final rec = await _getJson(_inviteIndexPath(url, _inviteTokenKey(input)));
+        final rec = await _readInviteIndex(url, _inviteTokenKey(input));
         if (rec != null) {
           final invWs = '${rec['ws'] ?? ''}'.trim();
           if (invWs.isNotEmpty) {
@@ -4100,7 +4178,7 @@ class CloudJoin {
     } catch (_) {}
     final ids = <String>[];
     wsMap?.forEach((k, _) {
-      if (k.isEmpty || k == '_registry') return;
+      if (k.isEmpty || k == '_registry' || k.startsWith('_')) return;
       if (ids.length < maxScan) ids.add(k);
     });
     if (ids.isEmpty) return (workspaceId: '', scanned: scanned);
@@ -4815,7 +4893,7 @@ class CloudJoin {
   /// تدمير مساحة سحابية مع الاحتفاظ بالاشتراك إن وُجد.
   static Future<void> destroyWorkspaceKeepSubscription(
       String base, String ws) async {
-    if (ws.isEmpty || ws == '_registry') return;
+    if (ws.isEmpty || ws == '_registry' || ws.startsWith('_')) return;
     final root = _root(base, ws);
     for (final node in const [
       'roster',
@@ -5168,32 +5246,49 @@ class CloudJoin {
     return removed;
   }
 
-  /// (أ-2) تقليم فهرس الدعوات المنتهية على الجذر — يمنع تراكم مفاتيح
-  /// ميتة في `/invite_index` بعد انتهاء مهلتها (15 دقيقة).
+  /// (أ-2) تقليم فهرس الدعوات المنتهية — ينظّف المسار الأساسي
+  /// `workspaces/_invite_index/invites` والجذر التراثي `/invite_index`.
   /// يعيد عدد المفاتيح المُقلَّمة.
   static Future<int> pruneExpiredInviteIndex({
     required String backendUrl,
   }) async {
-    Map<String, dynamic>? all;
     final base = backendUrl.trim().replaceAll(RegExp(r'/+$'), '');
-    try {
-      all = await _getJson('$base/invite_index.json');
-    } catch (_) {
-      return 0;
-    }
-    if (all == null || all.isEmpty) return 0;
     final now = DateTime.now();
     var pruned = 0;
-    for (final e in all.entries) {
-      final v = e.value;
-      if (v is! Map) continue;
-      final exp = DateTime.tryParse('${v['expiresAt'] ?? ''}');
-      if (exp != null && now.isBefore(exp)) continue;
+
+    Future<void> pruneMap(
+      String listUrl,
+      String Function(String key) entryUrl, {
+      bool refreshOnReject = true,
+    }) async {
+      Map<String, dynamic>? all;
       try {
-        await _delete(_inviteIndexPath(backendUrl, e.key));
-        pruned++;
-      } catch (_) {}
+        all = await _getJson(listUrl, refreshOnReject: refreshOnReject);
+      } catch (_) {
+        return;
+      }
+      if (all == null || all.isEmpty) return;
+      for (final e in all.entries) {
+        final v = e.value;
+        if (v is! Map) continue;
+        final exp = DateTime.tryParse('${v['expiresAt'] ?? ''}');
+        if (exp != null && now.isBefore(exp)) continue;
+        try {
+          await _delete(entryUrl(e.key), refreshOnReject: refreshOnReject);
+          pruned++;
+        } catch (_) {}
+      }
     }
+
+    await pruneMap(
+      '$base/workspaces/_invite_index/invites.json',
+      (k) => _workspaceInviteIndexPath(backendUrl, k),
+    );
+    await pruneMap(
+      '$base/invite_index.json',
+      (k) => _inviteIndexPath(backendUrl, k),
+      refreshOnReject: false,
+    );
     return pruned;
   }
 
