@@ -3574,9 +3574,13 @@ class CloudJoin {
         }
         return;
       }
+      final curUid = FirebaseAuthRest.currentUid.trim();
       await _putJson(
         '$root/roster/$enc.json',
-        _safeDeviceRow(deviceRow),
+        {
+          ..._safeDeviceRow(deviceRow),
+          if (curUid.isNotEmpty) 'uid': curUid,
+        },
         timeout: const Duration(seconds: 15),
       );
     } catch (_) {}
@@ -3820,6 +3824,22 @@ class CloudJoin {
 
     Future<void> uploadJoinSnapshotOnly() async {
       try {
+        // سحب تفاضلي سريع للعمليات الحديثة فقط (إن كان للمدير مؤشر مزامنة سابق > 0)
+        // لضمان احتواء اللقطة على آخر حركات الأعضاء قبل ختم serverWatermarkMs.
+        try {
+          final transport = CloudFirebaseTransport(
+            repo: repo,
+            baseUrl: url,
+            workspaceId: targetWsId,
+          );
+          final prevCursor = await transport.getLastSyncedCursor();
+          if (prevCursor > 0) {
+            await transport
+                .pull(repo)
+                .timeout(const Duration(milliseconds: 2500));
+          }
+        } catch (_) {}
+
         // بناء لقطة انضمام سريعة وخفيفة بدون تضمين صور الأصناف (تتزامن لاحقاً عبر العمليات)
         // لتجنب تجاوز مهلة الرفع على شبكات الجوال البطيئة.
         final snap = await buildWorkspaceSnapshot(
@@ -3866,29 +3886,58 @@ class CloudJoin {
       }
     }
 
+    Future<void> writeRosterStrict() async {
+      try {
+        await _putJson(
+          '$root/roster/$encApproved.json',
+          {
+            ..._safeDeviceRow(deviceRow),
+            if (memberUid.isNotEmpty) 'uid': memberUid,
+            'status': 'active',
+            'revoked': false,
+            'joined_at_ms': approvalNowMs,
+            'approved_at_ms': approvalNowMs,
+            'is_paired': 1,
+            'is_owner': 0,
+            'revoked_at': '',
+            'expelled_at': '',
+            'user_id': uid,
+            'user_role': role.code,
+            'user_permissions': permStr,
+          },
+          timeout: const Duration(seconds: 20),
+        );
+      } catch (e) {
+        throw CloudJoinException(
+          '❌ فشل تسجيل العضو في سجل المنشأة السحابي (roster).\n'
+          'السبب: $e\n'
+          'الحل: تأكد من استقرار الإنترنت وأعد المحاولة.',
+        );
+      }
+    }
+
+    Future<void> clearEvictionsStrict() async {
+      for (final node in const [
+        'evictions',
+        'revoked_devices',
+        'ejected_devices',
+      ]) {
+        try {
+          await _delete('$root/$node/$encApproved.json');
+        } catch (_) {
+          // محاولة ثانية لتأكيد إزالة شواهد الطرد السابقة قبل اعتماد العضو
+          await _delete('$root/$node/$encApproved.json').catchError((_) {});
+        }
+      }
+    }
+
     // الترتيب الذري السريع:
-    // 1) رفع اللقطة الخفيفة + تحديث الروستر والمقاعد وحذف شواهد الطرد بالتوازي (دون سحب /operations.json الضخم).
-    // 2) فور اكتمال رفع اللقطة، نكتب إشارة approved حتى يجد العضو اللقطة جاهزة فوراً.
+    // 1) رفع اللقطة الخفيفة + تحديث الروستر الإلزامي وحذف شواهد الطرد بالتوازي.
+    // 2) فور اكتمال رفع اللقطة والروستر، نكتب إشارة approved حتى يجد العضو اللقطة جاهزة فوراً.
     await Future.wait<void>([
       uploadJoinSnapshotOnly(),
-      _putJson(
-        '$root/roster/$encApproved.json',
-        {
-          ..._safeDeviceRow(deviceRow),
-          'status': 'active',
-          'revoked': false,
-          'joined_at_ms': approvalNowMs,
-          'approved_at_ms': approvalNowMs,
-          'is_paired': 1,
-          'is_owner': 0,
-          'revoked_at': '',
-          'expelled_at': '',
-          'user_id': uid,
-          'user_role': role.code,
-          'user_permissions': permStr,
-        },
-        timeout: const Duration(seconds: 20),
-      ).catchError((_) {}),
+      writeRosterStrict(),
+      clearEvictionsStrict(),
       if (memberUid.isNotEmpty)
         _putJson(
           '$root/members/${Uri.encodeComponent(memberUid)}.json',
@@ -3900,15 +3949,19 @@ class CloudJoin {
           },
           timeout: const Duration(seconds: 20),
         ).catchError((_) {}),
-      for (final node in const [
-        'evictions',
-        'revoked_devices',
-        'ejected_devices',
-      ])
-        _delete('$root/$node/$encApproved.json').catchError((_) {}),
     ]);
 
     await writeApprovedSignal();
+
+    // 3) في الخلفية بعد إتمام الموافقة فوراً: إعادة جدولة ضخ مصغّرات صور الأصناف والشعار
+    //    بطابع زمني أحدث من serverWatermarkMs ليحصل العضو الجديد على كافة صور المنتجات.
+    unawaited(Future<void>(() async {
+      try {
+        await Future<void>.delayed(const Duration(seconds: 2));
+        await repo.setSetting('media_backfilled_v1:$targetWsId', '0');
+        await repo.backfillCloudMediaIfNeeded();
+      } catch (_) {}
+    }));
   }
 
   /// ══ (2026-09-22 — توجيه العمليات بين الأجهزة) ══
