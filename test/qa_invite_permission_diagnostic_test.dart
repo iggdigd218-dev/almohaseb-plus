@@ -40,8 +40,10 @@ import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 /// سحابة وهمية ترفض الكتابة بكود محدد (401/403) لمحاكاة قواعد RTDB.
 class _RejectingCloud {
-  _RejectingCloud(this.statusCode);
+  _RejectingCloud(this.statusCode,
+      {this.errorBody = '{"error":"Permission denied"}'});
   final int statusCode;
+  final String errorBody;
   /// كل مسار كتابة حاول التطبيق تنفيذه (يجب أن يبقى فارغاً للدعوة).
   final List<String> puts = [];
 
@@ -63,11 +65,11 @@ class _RejectingCloud {
         if (req.method == 'PUT' || req.method == 'PATCH' ||
             req.method == 'DELETE') {
           puts.add(req.url.path);
-          return _json('{"error":"Permission denied"}', statusCode);
+          return _json(errorBody, statusCode);
         }
         // GET: القواعد/الهوية ترفض القراءة أيضاً (403/401) — هذه هي الحالة
         // الواقعية حين تكون القواعد غير منشورة أو التوكن غير فعّال.
-        return _json('{"error":"Permission denied"}', statusCode);
+        return _json(errorBody, statusCode);
       });
 }
 
@@ -256,16 +258,10 @@ void main() {
 
     test('401 مع "Permission denied" يُفسّر كرفض قواعد RTDB لا انتهاء تسجيل الدخول', () async {
       FirebaseAuthRest.setMockTokenForTest();
-      http.Client client() => MockClient((req) async {
-            if (req.method == 'POST') {
-              return _RejectingCloud._json(
-                  '{"id_token":"TOK-QA","refresh_token":"REF-QA","expires_in":"3600","user_id":"UID-QA"}',
-                  200);
-            }
-            return _RejectingCloud._json('{"error":"Permission denied"}', 401);
-          });
+      final cloud =
+          _RejectingCloud(401, errorBody: '{"error":"Permission denied"}');
       await expectLater(
-        http.runWithClient(() => CloudJoin.createInvite(repo), client),
+        http.runWithClient(() => CloudJoin.createInvite(repo), cloud.client),
         throwsA(isA<CloudJoinException>().having(
           (e) => e.message,
           'message',
@@ -282,16 +278,10 @@ void main() {
 
     test('401 مع "Auth token is expired" يطلب إعادة تسجيل الدخول بحساب Google', () async {
       FirebaseAuthRest.setMockTokenForTest();
-      http.Client client() => MockClient((req) async {
-            if (req.method == 'POST') {
-              return _RejectingCloud._json(
-                  '{"id_token":"TOK-QA","refresh_token":"REF-QA","expires_in":"3600","user_id":"UID-QA"}',
-                  200);
-            }
-            return _RejectingCloud._json('{"error":"Auth token is expired"}', 401);
-          });
+      final cloud =
+          _RejectingCloud(401, errorBody: '{"error":"Auth token is expired"}');
       await expectLater(
-        http.runWithClient(() => CloudJoin.createInvite(repo), client),
+        http.runWithClient(() => CloudJoin.createInvite(repo), cloud.client),
         throwsA(isA<CloudJoinException>().having(
           (e) => e.message,
           'message',
@@ -313,8 +303,13 @@ void main() {
       http.Client liveSimClient() => MockClient((req) async {
             final p = req.url.path;
             if (req.method == 'POST') {
+              if (req.url.host.contains('securetoken')) {
+                return _RejectingCloud._json(
+                    '{"id_token":"TOK-LIVE","refresh_token":"REF-LIVE","expires_in":"3600","user_id":"UID-LIVE"}',
+                    200);
+              }
               return _RejectingCloud._json(
-                  '{"id_token":"TOK-LIVE","refresh_token":"REF-LIVE","expires_in":"3600","user_id":"UID-LIVE"}',
+                  '{"idToken":"TOK-LIVE","refreshToken":"REF-LIVE","expiresIn":"3600","localId":"UID-LIVE"}',
                   200);
             }
             if (p.startsWith('/invite_index')) {
