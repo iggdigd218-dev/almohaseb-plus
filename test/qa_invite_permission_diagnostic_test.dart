@@ -254,6 +254,152 @@ void main() {
       );
     });
 
+    test('401 مع "Permission denied" يُفسّر كرفض قواعد RTDB لا انتهاء تسجيل الدخول', () async {
+      FirebaseAuthRest.setMockTokenForTest();
+      http.Client client() => MockClient((req) async {
+            if (req.method == 'POST') {
+              return _RejectingCloud._json(
+                  '{"id_token":"TOK-QA","refresh_token":"REF-QA","expires_in":"3600","user_id":"UID-QA"}',
+                  200);
+            }
+            return _RejectingCloud._json('{"error":"Permission denied"}', 401);
+          });
+      await expectLater(
+        http.runWithClient(() => CloudJoin.createInvite(repo), client),
+        throwsA(isA<CloudJoinException>().having(
+          (e) => e.message,
+          'message',
+          allOf(
+            contains('401'),
+            contains('رفضت السحابة'),
+            contains('قواعد Firebase Realtime Database'),
+            isNot(contains('انتهت صلاحية')),
+            isNot(contains('ليس لديك الصلاحية')),
+          ),
+        )),
+      );
+    });
+
+    test('401 مع "Auth token is expired" يطلب إعادة تسجيل الدخول بحساب Google', () async {
+      FirebaseAuthRest.setMockTokenForTest();
+      http.Client client() => MockClient((req) async {
+            if (req.method == 'POST') {
+              return _RejectingCloud._json(
+                  '{"id_token":"TOK-QA","refresh_token":"REF-QA","expires_in":"3600","user_id":"UID-QA"}',
+                  200);
+            }
+            return _RejectingCloud._json('{"error":"Auth token is expired"}', 401);
+          });
+      await expectLater(
+        http.runWithClient(() => CloudJoin.createInvite(repo), client),
+        throwsA(isA<CloudJoinException>().having(
+          (e) => e.message,
+          'message',
+          allOf(
+            contains('401'),
+            contains('انتهت صلاحية'),
+            contains('Google'),
+            isNot(contains('ليس لديك الصلاحية')),
+          ),
+        )),
+      );
+    });
+
+    test('حجب الجذر /invite_index بـ 401 لا يمنع إنشاء الدعوة واكتشافها وتقديم طلب الانضمام', () async {
+      FirebaseAuthRest.setMockTokenForTest();
+      final store = <String, Map<String, dynamic>>{
+        '/workspaces/$_ws/meta.json': {'storeName': 'منشأة التحقق'},
+      };
+      http.Client liveSimClient() => MockClient((req) async {
+            final p = req.url.path;
+            if (req.method == 'POST') {
+              return _RejectingCloud._json(
+                  '{"id_token":"TOK-LIVE","refresh_token":"REF-LIVE","expires_in":"3600","user_id":"UID-LIVE"}',
+                  200);
+            }
+            if (p.startsWith('/invite_index')) {
+              return _RejectingCloud._json('{"error":"Permission denied"}', 401);
+            }
+            if (p == '/workspaces.json') {
+              throw StateError('Must not scan /workspaces.json');
+            }
+            if (req.method == 'PUT') {
+              final decoded = jsonDecode(req.body);
+              if (decoded is Map) {
+                store[p] = Map<String, dynamic>.from(decoded);
+              }
+              return _RejectingCloud._json(req.body, 200);
+            }
+            if (req.method == 'PATCH') {
+              final existing = store[p] ?? <String, dynamic>{};
+              final decoded = jsonDecode(req.body) as Map;
+              store[p] = {...existing, ...Map<String, dynamic>.from(decoded)};
+              return _RejectingCloud._json('{}', 200);
+            }
+            if (req.method == 'DELETE') {
+              store.remove(p);
+              return _RejectingCloud._json('null', 200);
+            }
+            final v = store[p];
+            return _RejectingCloud._json(v == null ? 'null' : jsonEncode(v), 200);
+          });
+
+      final invite = await http.runWithClient(
+        () => CloudJoin.createInvite(repo),
+        liveSimClient,
+      );
+      expect(invite.token, isNotEmpty);
+      expect(invite.pin.length, 6);
+      expect(
+        store['/workspaces/_invite_index/invites/pin_${invite.pin}.json']?['ws'],
+        _ws,
+      );
+      expect(
+        store['/workspaces/_invite_index/invites/tok_${invite.token}.json']?['ws'],
+        _ws,
+      );
+      expect(store['/workspaces/$_ws/invites/${invite.token}.json'], isNotNull);
+
+      final byPin = await http.runWithClient(
+        () => CloudJoin.findWorkspaceByInvite(
+            backendUrl: _url, tokenOrPin: invite.pin),
+        liveSimClient,
+      );
+      expect(byPin, _ws);
+
+      final byTok = await http.runWithClient(
+        () => CloudJoin.findWorkspaceByInvite(
+            backendUrl: _url, tokenOrPin: invite.token),
+        liveSimClient,
+      );
+      expect(byTok, _ws);
+
+      final memberDb = await databaseFactory.openDatabase(
+          '${tmp.path}/member.db',
+          options: OpenDatabaseOptions(
+              onConfigure: (d) => d.execute('PRAGMA foreign_keys = ON')));
+      try {
+        await AppDatabase.createSchema(memberDb);
+        final memberRepo = Repo(databaseProvider: () async => memberDb);
+        await memberRepo.initSyncInfra();
+        await http.runWithClient(
+          () => CloudJoin.requestJoin(
+            memberRepo,
+            backendUrl: _url,
+            tokenOrPin: invite.pin,
+            deviceName: 'جهاز عضو للاختبار',
+          ),
+          liveSimClient,
+        );
+        expect(
+          store.keys.any((k) => k.startsWith('/workspaces/$_ws/joinRequests/')),
+          isTrue,
+        );
+      } finally {
+        await memberDb.close();
+      }
+    });
+
     test('401 بسبب توكن مخزّن قديم يتجدد تلقائياً في _probeWorkspaceAccess وتنجح الدعوة', () async {
       debugFirebaseApiKeyOverride = 'AIzaSyTestKeyForInviteRecovery123456';
       FirebaseAuthRest.setMockTokenForTest(token: 'TOK-OLD', uid: 'UID-OLD');
