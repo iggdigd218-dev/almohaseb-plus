@@ -731,6 +731,94 @@ class CloudJoin {
     return t;
   }
 
+  /// (3.98.56) اسم العقدة السحابية الأخير من الرابط — لتسمية سبب الرفض
+  /// بدقة («عند "invite_index"») بلا كشف الرابط الكامل أو أي سر.
+  static String _nodeName(String url) {
+    try {
+      final clean = Uri.parse(url).path.replaceAll(RegExp(r'/+$'), '');
+      final parts = clean
+          .split('/')
+          .where((p) => p.isNotEmpty && !p.endsWith('.json'))
+          .toList();
+      return parts.isEmpty ? '' : parts.last;
+    } catch (_) {
+      return '';
+    }
+  }
+
+  /// (3.98.57) فحص تشخيصي مبكر **بقراءة فقط** لصلاحية مساحة العمل.
+  ///
+  /// إنشاء الدعوة يكتب ٤ عقد (`invites/{tok}`، فهرسي `/invite_index`،
+  /// وربما `members/{uid}`). كان أول فشل يظهر كـ HTTP 401/403 عام يُترجم
+  /// إلى «ليس لديك الصلاحية… راجع مدير النظام» — رسالة خاطئة تماماً على
+  /// جهاز المالك، فلا يعرف أن المشكلة في قواعد RTDB أو في هويته السحابية.
+  ///
+  /// الإصدار السابق من هذا الفحص كتب عقدة جديدة `_probe` — وهذا خطأ في
+  /// بيئة تكون فيها القواعد غير منشورة أو قديمة: كان الفحص نفسه يُرفض بـ 403
+  /// فيصير هو سبب العطل بدل أن يوضّحه. الفحص الآن **لا يكتب شيئاً**:
+  ///   • يقرأ عقدة قائمة (`meta.json`) — إن رُفضت القراءة فالقواعد/الهوية لا
+  ///     تسمح أصلاً، والرسالة تقول ذلك صراحةً.
+  ///   • يتحقق من وجود هوية وتوكن فعّال قبل أي كتابة.
+  ///
+  /// النتيجة: صفر تغييرات مطلوبة على قاعدة Firebase، وصفر عقد جديدة، ومعرفة
+  /// دقيقة للسبب (401 هوية / 403 قواعد) قبل الإبلاغ عنه.
+  static Future<void> _probeWorkspaceAccess(String backendUrl,
+      String workspaceId) async {
+    final token = await _requireToken(action: 'التحقق من مساحة العمل السحابية');
+    final url = '${_root(backendUrl, workspaceId)}/meta.json';
+    try {
+      final res = await http
+          .get(_authedUrl(url, token))
+          .timeout(const Duration(seconds: 10));
+      if (res.statusCode == 401 || res.statusCode == 403) {
+        throw CloudJoinException(
+            _cloudRejectedMessage(res.statusCode, node: 'بيانات المنشأة'));
+      }
+    } on CloudJoinException {
+      rethrow;
+    } catch (_) {
+      // شبكة/مهلة: لا نمنع الإنشاء — بقية المسار سيبلّغ عن الخطأ الحقيقي.
+    }
+  }
+
+  /// (3.98.56) توكن إلزامي لعمليات الكتابة الحسّاسة (دعوة/فهرس/عضوية).
+  ///
+  /// كان غياب التوكن يمرّ صامتاً إلى الطلب، فيرد RTDB بـ 401/403 ويُترجم
+  /// الخطأ إلى «ليس لديك الصلاحية… راجع مدير النظام» — على جهاز المالك نفسه.
+  /// الآن نفشل قبل الشبكة برسالة تشخيصية صحيحة تُخبره أن الهوية السحابية
+  /// غير فعّالة (لا أن صلاحياته ناقصة).
+  static Future<String> _requireToken({String action = 'العملية'}) async {
+    var t = await _ensureToken();
+    if (t == null || t.isEmpty) {
+      // محاولة أخيرة: تجديد قسري يعيد ضبط تبريد مزوّد الهوية ويعيد إنشاء
+      // الهوية المجهولة/الحساب إن انتهت. بلا هذه المحاولة كان انتهاء
+      // التوكن يعني طلباً بلا `?auth` ⇒ 401 ⇒ «راجع مدير النظام» زوراً.
+      try {
+        t = await FirebaseAuthRest.forceRefreshToken();
+      } catch (_) {}
+    }
+    if (t == null || t.isEmpty) {
+      throw CloudJoinException(
+          'تعذّر $action: لا توجد هوية سحابية فعّالة على هذا الجهاز. '
+          'اتصل بالإنترنت وسجّل الدخول بحساب Google من الإعدادات ← '
+          'حساب المؤسسة، ثم أعد المحاولة.');
+    }
+    return t;
+  }
+
+  /// (3.98.56) رسالة موحّدة لرفض السحابة، تُفرّق بين 401 (هوية) و403 (قواعد).
+  static String _cloudRejectedMessage(int code, {String? node}) {
+    final where = (node == null || node.isEmpty) ? '' : ' عند "$node"';
+    if (code == 403) {
+      return 'رفضت السحابة الكتابة$where (HTTP 403). هذا ليس نقصاً في '
+          'صلاحيتك كمالك — الأرجح أن قواعد Firebase Realtime Database لم '
+          'تُنشر على المشروع، أو أن هوية الجهاز السحابية لم تعد عضواً في '
+          'المساحة. انشر firebase/database.rules.json ثم أعد المحاولة.';
+    }
+    return 'انتهت صلاحية هوية هذا الجهاز على السحابة$where (HTTP 401). '
+        'سجّل الدخول بحساب Google من الإعدادات ← حساب المؤسسة ثم أعد المحاولة.';
+  }
+
   /// (401) توقيع أي طلب إلى RTDB بـ `?auth=` — القواعد تشترط `auth != null`.
   static Uri _authedUrl(String url, [String? overrideToken]) {
     final token = overrideToken;
@@ -810,9 +898,7 @@ class CloudJoin {
     }
     if (res.statusCode == 401 || res.statusCode == 403) {
       throw CloudJoinException(
-          'فشل المصادقة مع السحابة (HTTP ${res.statusCode}). '
-          'تحقق من اتصال الإنترنت ومفتاح Firebase ApiKey. '
-          'إن استمرت المشكلة، أعد تشغيل التطبيق.');
+          _cloudRejectedMessage(res.statusCode, node: _nodeName(url)));
     }
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw CloudJoinException('تعذّر الاتصال بالسحابة (HTTP ${res.statusCode})');
@@ -844,9 +930,7 @@ class CloudJoin {
     }
     if (res.statusCode == 401 || res.statusCode == 403) {
       throw CloudJoinException(
-          'فشل الرفع إلى السحابة: المصادقة مرفوضة (HTTP ${res.statusCode}). '
-          'السبب المحتمل: توكن Firebase منتهٍ أو ApiKey غير صحيح أو قواعد RTDB تمنع الكتابة. '
-          'الحل: تأكد من الإنترنت، وأن قواعد Firebase هي auth != null، وأن ApiKey صحيح، ثم أعد المحاولة.');
+          _cloudRejectedMessage(res.statusCode, node: _nodeName(url)));
     }
     if (res.statusCode < 200 || res.statusCode >= 300) {
       throw CloudJoinException('فشل الرفع إلى السحابة (HTTP ${res.statusCode})');
@@ -1256,10 +1340,15 @@ class CloudJoin {
           'اضبط رابط قاعدة البيانات السحابية أولاً من الإعدادات ← المزامنة السحابية.');
     }
     _validateHttps(url);
-    await _ensureToken();
-
     final ws = await repo.activeWorkspaceId();
     final ourId = await ensureDeviceId(repo);
+
+    // (3.98.56) هوية إلزامية قبل أي كتابة: بلا توكن كان الطلب يُرسل عارياً
+    // فيرد RTDB بـ 401/403 ويظهر «ليس لديك الصلاحية» للمالك نفسه.
+    await _requireToken(action: 'إنشاء دعوة الانضمام');
+    // (3.98.56) فحص كتابة مبكر: يكشف قواعد RTDB غير المنشورة أو هوية غير
+    // عضوة قبل توليد الرمز، برسالة تشرح السبب الحقيقي بدل «راجع المدير».
+    await _probeWorkspaceAccess(url, ws);
 
     // التحقق من المقاعد وتهيئة سجل المالك بالتوازي لتسريع التوليد
     try {
