@@ -1,1 +1,37 @@
-{"version": "3.98.57+372", "minSupported": "3.13.0", "sha256": "801038db7c59f0bb7cffee4198e0347fe8091bfa7bffd62d86140d034dab3c6a", "sha256Variants": {"arm64": "801038db7c59f0bb7cffee4198e0347fe8091bfa7bffd62d86140d034dab3c6a", "armv7": "8bfaea7cb300b143ea04dc6613dee945264800216bd414f2a3fd43c52139f096", "windows": "4266eaa49af934e6f7c430bec8cf15fae98aa1c4fca46c6e58cadd556cae2ba2"}, "releaseUrl": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/tag/latest", "download_url": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/Almohaseb-Plus-arm64.apk", "downloads": {"android": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/Almohaseb-Plus-arm64.apk", "androidVariants": {"arm64": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/Almohaseb-Plus-arm64.apk", "armv7": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/nexora-armv7.apk"}, "windows": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/NexoraSetup.exe"}, "downloadsMirror": {"android": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.57-372/Almohaseb-Plus-arm64.apk", "androidVariants": {"arm64": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.57-372/Almohaseb-Plus-arm64.apk", "armv7": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.57-372/nexora-armv7.apk"}, "windows": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.57-372/NexoraSetup.exe"}, "downloadsFallbackGithub": {"android": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/Almohaseb-Plus-arm64.apk", "androidVariants": {"arm64": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/Almohaseb-Plus-arm64.apk", "armv7": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/nexora-armv7.apk"}, "windows": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/NexoraSetup.exe"}, "publishedAt": "2026-11-16T21:03:47Z", "notes": "• رسالة إنشاء كود الدعوة على جهاز المدير لم تعد «ليس لديك الصلاحية»: صارت تشخّص السبب الحقيقي — هوية سحابية منتهية (401) أو قواعد Firebase ترفض (403).\n• التشخيص قراءة فقط بلا أي كتابة على Firebase: لا يحتاج تعديل قواعدك المنشورة، ولا يُنشئ رمز دعوة على مساحة غير قابلة للوصول.\n• تحقّق مسبق من الهوية السحابية مع تجديد تلقائي للتوكن قبل الدعوة، ونص الخطأ يوضّح ما يجب عمله في قاعدة البيانات خطوة بخطوة.", "mirror": {"provider": "github-pages", "baseUrl": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.57-372", "reason": "github-primary"}}
+{
+  "version": "3.98.58+373",
+  "minSupported": "3.13.0",
+  "sha256": "ce18c57682499c001f99eac680992438afd654674cf47ba083d4f177848dc138",
+  "sha256Variants": {
+    "arm64": "ce18c57682499c001f99eac680992438afd654674cf47ba083d4f177848dc138",
+    "armv7": "c32adcbf6147a8e9a1f7bfa0a4c1c0bbea6983d478d239aa3235c5020fd4a3e0"
+  },
+  "releaseUrl": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/tag/latest",
+  "download_url": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/Almohaseb-Plus-arm64.apk",
+  "downloads": {
+    "android": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/Almohaseb-Plus-arm64.apk",
+    "androidVariants": {
+      "arm64": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/Almohaseb-Plus-arm64.apk",
+      "armv7": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/nexora-armv7.apk"
+    },
+    "windows": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/NexoraSetup.exe"
+  },
+  "downloadsMirror": {
+    "android": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.58-373/Almohaseb-Plus-arm64.apk",
+    "androidVariants": {
+      "arm64": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.58-373/Almohaseb-Plus-arm64.apk",
+      "armv7": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.58-373/nexora-armv7.apk"
+    },
+    "windows": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.58-373/NexoraSetup.exe"
+  },
+  "downloadsFallbackGithub": {
+    "android": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/Almohaseb-Plus-arm64.apk",
+    "androidVariants": {
+      "arm64": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/Almohaseb-Plus-arm64.apk",
+      "armv7": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/nexora-armv7.apk"
+    },
+    "windows": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/NexoraSetup.exe"
+  },
+  "publishedAt": "2026-11-16T21:39:24Z",
+  "notes": "• إصلاح ظهور رسالة «ليس لديك الصلاحية» الخاطئة على جهاز المالك عند إنشاء دعوة الانضمام: صار التشخيص السحابي يظهر بوضوح مع العقدة وكود الحالة (401/403).\n• تجديد تلقائي فوري لتوكن Firebase في فحص صلاحية مساحة العمل وفحص تاريخ انتهاء JWT محلياً ومنع تعارض الهوية عند التبديل بين المنشآت.\n• تنظيف تلقائي لرموز التحديث التالفة ومتابعة الاسترداد بالهوية المجهولة الصالحة لضمان نجاح ربط الأعضاء عبر السحابة."
+}
