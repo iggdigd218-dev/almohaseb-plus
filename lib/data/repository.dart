@@ -33,6 +33,7 @@ import 'sync/operation.dart';
 import 'sync/apply_remote.dart';
 import 'sync/recorder.dart';
 import 'sync/snapshot_apply.dart';
+import 'sync/subscription_guard.dart';
 import 'sync/sync_diagnostics.dart';
 import 'sync/sync_queue.dart';
 import 'daily_harvest_service.dart';

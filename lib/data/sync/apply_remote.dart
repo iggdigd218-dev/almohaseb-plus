@@ -1034,8 +1034,9 @@ extension ApplyRemoteOp on Repo {
         final rawExistsLocally = rawImg.isNotEmpty &&
             File(MediaPaths.toAbsolute(rawImg)).existsSync();
         if (!rawExistsLocally) {
-          final prevImg =
-              existingRow != null ? '${existingRow['image'] ?? ''}'.trim() : '';
+          final prevImg = existing.isNotEmpty
+              ? '${existing.first['image'] ?? ''}'.trim()
+              : '';
           final prevExistsLocally = prevImg.isNotEmpty &&
               File(MediaPaths.toAbsolute(prevImg)).existsSync();
           row['image'] = prevExistsLocally ? prevImg : '';
