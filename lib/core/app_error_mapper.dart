@@ -32,6 +32,21 @@ class AppErrorMapper {
   static const String genericErrorMessage =
       'تعذر إتمام العملية حالياً، يرجى المحاولة مرة أخرى.';
 
+  /// هل الرسالة صيغت مسبقاً بواسطة طبقة السحابة (`CloudJoin`) كتشخيص واضح
+  /// باللغة العربية (بما فيها اسم العقدة ورمز HTTP 401/403) وخالية من
+  /// الآثار البرمجية الخام؟ تُعرض كما هي دون بتر أو استبدال برسالة عامة.
+  static bool _isPreformattedCloudDiagnostic(String raw, String lower) {
+    if (lower.contains('stacktrace') ||
+        lower.contains('#0 ') ||
+        lower.contains('http://') ||
+        lower.contains('https://')) {
+      return false;
+    }
+    return raw.contains('رفضت السحابة') ||
+        raw.contains('انتهت صلاحية هوية هذا الجهاز على السحابة') ||
+        raw.contains('لا توجد هوية سحابية فعّالة');
+  }
+
   /// هل الخطأ صادر من طبقة السحابة (RTDB / Identity Toolkit) وليس من صلاحيات
   /// التطبيق الداخلية؟ يميّزه ما يزرعه العميل في نص الاستثناء أو كود الحالة.
   static bool _isCloudAuthFailure(String lower, String upper) {
@@ -41,9 +56,19 @@ class AppErrorMapper {
         lower.contains('subscription-put-http-') ||
         lower.contains('فشل الرفع إلى السحابة') ||
         lower.contains('فشل المصادقة مع السحابة') ||
+        lower.contains('تعذّر الاتصال بالسحابة') ||
+        lower.contains('رفضت السحابة') ||
+        lower.contains('انتهت صلاحية هوية') ||
+        lower.contains('لا توجد هوية سحابية') ||
+        lower.contains('firebase realtime database') ||
+        lower.contains('database.rules.json') ||
+        lower.contains('ليس نقصاً في صلاحيتك') ||
+        lower.contains('هوية الجهاز السحابية') ||
+        lower.contains('مساحة العمل السحابية') ||
         lower.contains('join-sse-http-') ||
         lower.contains('rtdb') ||
         upper.contains('INVALID_ID_TOKEN') ||
+        upper.contains('ID_TOKEN_EXPIRED') ||
         upper.contains('TOKEN_EXPIRED') ||
         upper.contains('AUTH_REVOKED');
   }
@@ -165,6 +190,19 @@ class AppErrorMapper {
 
     // 3. أخطاء الصلاحيات والوصول (HTTP 401 / 403 / PermissionDenied)
     //
+    // (3.98.58) الحفاظ الكامل على رسائل التشخيص السحابية المصاغة في CloudJoin
+    // (تتضمّن العقدة المتأثرة وتمييز 401 عن 403) قبل أي تصنيف عام.
+    if (_isPreformattedCloudDiagnostic(raw, lower)) {
+      return raw
+          .replaceFirst(
+            RegExp(
+              r'^(Exception|StateError|FormatException|ArgumentError|UnsupportedError|Error)\s*:\s*',
+              caseSensitive: false,
+            ),
+            '',
+          )
+          .trim();
+    }
     // (3.98.56) تمييز حاسم: رفض السحابة (RTDB) لطلب صادر من جهاز المالك
     // نفسه لا يعني «نقص صلاحية» داخلية. كان `HTTP 403` يُترجم دائماً إلى
     // «راجع مدير النظام» حتى على جهاز المالك، فيبحث عن صلاحية لا وجود لها
