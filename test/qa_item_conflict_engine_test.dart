@@ -857,5 +857,119 @@ void main() {
       }
     },
   );
+
+  test(
+    'QA-CONFLICT-ENGINE-7 preserves legitimate Snowflake items with non-zero sequence byte and avoids double-deducting pre-adjust sales',
+    () async {
+      final (tmp, db, repo) = await createTestRepo('nexora_eng_7_');
+      try {
+        // 1) P0-1: معرّف Snowflake شرعي بعدّاد تسلسلي > 0 في نفس الملي ثانية ((id & 0xFF) == 1)
+        const legitimateSeq1Id = (1763290000000 << 20) | (42 << 8) | 1;
+        expect(isKnownAutoSplitItemId(legitimateSeq1Id), isFalse);
+
+        const tOldSale = '2026-11-10T10:00:00.000Z';
+        const tAdjust = '2026-11-12T12:00:00.000Z';
+        const tNewSale = '2026-11-13T15:00:00.000Z';
+
+        await db.insert('items', {
+          'id': legitimateSeq1Id,
+          'plu': 501,
+          'workspace_id': 'default',
+          'name': 'صنف شرعي عداد 1',
+          'sku': 'SEQ-01',
+          'unit': 'حبة',
+          'buy_price': 100.0,
+          'sell_price': 150.0,
+          'quantity': 20.0,
+          'min_quantity': 2.0,
+          'is_active': 1,
+          'is_deleted': 0,
+          'created_at': tOldSale,
+          'updated_at': tAdjust,
+        });
+
+        await ApplyRemoteOp.healCorruptedItemCatalog(db);
+        final afterHeal = await db.query(
+          'items',
+          where: 'id = ?',
+          whereArgs: [legitimateSeq1Id],
+        );
+        expect(afterHeal.length, 1,
+            reason: 'لا يجوز حذف صنف شرعي بسبب البايت المنخفض غير الصفري');
+
+        // 2) P1-6: فاتورة قديمة قبل الجرد المطلق (بلا حركة مخزون)، ثم جرد مطلق (20)، ثم فاتورة بيع بعد الجرد (3)
+        await db.insert('transactions', {
+          'id': 9001,
+          'workspace_id': 'default',
+          'type': 'revenue',
+          'amount': 750.0,
+          'status': 'done',
+          'date': tOldSale,
+          'created_at': tOldSale,
+          'updated_at': tOldSale,
+        });
+        await db.insert('transaction_items', {
+          'id': 9101,
+          'tx_id': 9001,
+          'item_id': legitimateSeq1Id,
+          'name': 'صنف شرعي عداد 1',
+          'quantity': 5.0,
+          'unit_price': 150.0,
+          'total': 750.0,
+          'created_at': tOldSale,
+          'updated_at': tOldSale,
+        });
+
+        await db.insert('stock_moves', {
+          'id': 9201,
+          'workspace_id': 'default',
+          'item_id': legitimateSeq1Id,
+          'kind': 'adjust',
+          'quantity': 20.0,
+          'unit_price': 150.0,
+          'date': tAdjust,
+          'created_at': tAdjust,
+        });
+
+        await db.insert('transactions', {
+          'id': 9002,
+          'workspace_id': 'default',
+          'type': 'revenue',
+          'amount': 450.0,
+          'status': 'done',
+          'date': tNewSale,
+          'created_at': tNewSale,
+          'updated_at': tNewSale,
+        });
+        await db.insert('transaction_items', {
+          'id': 9102,
+          'tx_id': 9002,
+          'item_id': legitimateSeq1Id,
+          'name': 'صنف شرعي عداد 1',
+          'quantity': 3.0,
+          'unit_price': 150.0,
+          'total': 450.0,
+          'created_at': tNewSale,
+          'updated_at': tNewSale,
+        });
+
+        await ApplyRemoteOp.reconcileInventoryQuantities(db);
+        final afterReconcile = await db.query(
+          'items',
+          columns: ['quantity'],
+          where: 'id = ?',
+          whereArgs: [legitimateSeq1Id],
+        );
+        // الجرد المطلق = 20، والفاتورة السابقة للجرد (5) لا تُخصم مرة ثانية، وتُخصم الفاتورة اللاحقة فقط (3) => 17
+        expect((afterReconcile.single['quantity'] as num).toDouble(), 17.0);
+      } finally {
+        await db.close();
+        try {
+          await tmp.delete(recursive: true);
+        } catch (_) {}
+      }
+    },
+  );
 }
+
 
