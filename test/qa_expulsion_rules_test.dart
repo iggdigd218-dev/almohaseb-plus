@@ -40,7 +40,7 @@ class _FakeCloud {
         // (3.98.56) عقدة الفحص التشخيصي `_probe` لا تُخزَّن: هي ليست بيانات
         // عمل، ووجودها كان يُربك عدّادات عقد المساحة في الاختبارات.
         if (req.method == 'PUT' && req.url.path.contains('/_probe/')) {
-          return _utf8Json('{"ok":true}', 200);
+          return _json('{"ok":true}', 200);
         }
         if (req.method == 'PUT') {
           store[key] = jsonDecode(req.body);
