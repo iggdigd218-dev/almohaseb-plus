@@ -1016,7 +1016,8 @@ extension ApplyRemoteOp on Repo {
           // فشل حفظ المرفق لا يمنع وصول الرسالة نفسها.
         }
       }
-    } else if (op.entityType == EntityKind.item) {
+    } else if (op.entityType == EntityKind.item &&
+        columns.contains('image')) {
       final thumbB64 = op.payload['thumb_b64'];
       if (thumbB64 is String && thumbB64.trim().isNotEmpty) {
         final localImg = await MediaPaths.materializeThumbBase64(thumbB64);

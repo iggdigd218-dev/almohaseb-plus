@@ -1335,11 +1335,11 @@ final txDeliveryBadgesProvider = FutureProvider<Map<String, TxDeliveryBadge>>((
     '''
     SELECT t.id AS tx_id,
            t.cashier_name AS tx_cashier_name,
-           t.user_id AS tx_user_id,
            t.sync_state AS tx_sync_state,
            t.updated_at AS tx_updated_at,
            t.created_at AS tx_created_at,
            o.device_id AS op_device_id,
+           o.user_id AS tx_user_id,
            o.synced AS op_synced,
            o.is_synced AS op_is_synced,
            o.server_time AS op_server_time,

@@ -10310,17 +10310,15 @@ class Repo {
     try {
       final db = await _db;
       String cashierName = '';
-      int? txUserId;
       final txRows = await db.query(
         'transactions',
-        columns: ['cashier_name', 'user_id'],
+        columns: ['cashier_name'],
         where: 'id = ?',
         whereArgs: [txId],
         limit: 1,
       );
       if (txRows.isNotEmpty) {
         cashierName = '${txRows.first['cashier_name'] ?? ''}'.trim();
-        txUserId = (txRows.first['user_id'] as num?)?.toInt();
       }
 
       final allDevs = await db.rawQuery(
@@ -10332,7 +10330,7 @@ class Repo {
         ''',
       );
 
-      // 1) مطابقة الكاشير أو المستخدم المسجل على العملية مع أجهزة المنشأة
+      // 1) مطابقة الكاشير المسجل على العملية مع أجهزة المنشأة
       String matchedDevNameByCashier = '';
       if (cashierName.isNotEmpty) {
         final normCashier = cashierName.toLowerCase();
@@ -10346,22 +10344,11 @@ class Repo {
           }
         }
       }
-      if (matchedDevNameByCashier.isEmpty && txUserId != null && txUserId > 0) {
-        for (final d in allDevs) {
-          final dUid = (d['user_id'] as num?)?.toInt();
-          if (dUid == txUserId) {
-            final dName = '${d['name'] ?? ''}'.trim();
-            final uName = '${d['user_name'] ?? ''}'.trim();
-            matchedDevNameByCashier = dName.isNotEmpty ? dName : uName;
-            if (matchedDevNameByCashier.isNotEmpty) break;
-          }
-        }
-      }
 
       // 2) فحص عملية الإنشاء الأولى (op_type = 'create') في جدول operations
       final ops = await db.rawQuery(
         '''
-        SELECT device_id, op_type FROM operations
+        SELECT device_id, user_id, op_type FROM operations
         WHERE entity_type = 'tx' AND entity_id = ?
           AND COALESCE(device_id, '') <> ''
         ORDER BY CASE WHEN op_type = 'create' THEN 0 ELSE 1 END,
@@ -10372,6 +10359,20 @@ class Repo {
       );
 
       if (ops.isNotEmpty) {
+        final opUserId = (ops.first['user_id'] as num?)?.toInt();
+        if (matchedDevNameByCashier.isEmpty &&
+            opUserId != null &&
+            opUserId > 0) {
+          for (final d in allDevs) {
+            final dUid = (d['user_id'] as num?)?.toInt();
+            if (dUid == opUserId) {
+              final dName = '${d['name'] ?? ''}'.trim();
+              final uName = '${d['user_name'] ?? ''}'.trim();
+              matchedDevNameByCashier = dName.isNotEmpty ? dName : uName;
+              if (matchedDevNameByCashier.isNotEmpty) break;
+            }
+          }
+        }
         final devId = '${ops.first['device_id'] ?? ''}'.trim();
         final opType = '${ops.first['op_type'] ?? ''}'.trim();
         // إذا كانت العملية الوحيدة في السجل هي update من جهازنا الحالي (بسبب استعادة أو إعادة بث)
