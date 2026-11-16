@@ -53,7 +53,8 @@ jobs:
           flutter analyze 2>&1 | tee /tmp/analyze.txt
           CODE=${PIPESTATUS[0]}
           if grep -qE "^\s*error •" /tmp/analyze.txt; then
-            echo "::error::يوجد أخطاء تحليل تمنع البناء."
+            ERRORS=$(grep -E "^\s*error •" /tmp/analyze.txt | head -n 25 | tr '\n' '|')
+            echo "::error::ANALYZE_FAIL: $ERRORS"
             exit 1
           fi
           if [ "$CODE" != "0" ]; then
