@@ -134,7 +134,8 @@ Future<void> showCloudInviteDialog(BuildContext context, WidgetRef ref) async {
       context,
       detail.startsWith('رفضت السحابة') ||
               detail.startsWith('انتهت صلاحية') ||
-              detail.startsWith('تعذّر إنشاء')
+              detail.startsWith('تعذّر ') ||
+              detail.startsWith('لا توجد هوية')
           ? detail
           : '❌ تعذّر إنشاء الدعوة: $detail',
       error: true,

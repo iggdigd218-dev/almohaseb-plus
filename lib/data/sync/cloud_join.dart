@@ -767,9 +767,17 @@ class CloudJoin {
     final token = await _requireToken(action: 'التحقق من مساحة العمل السحابية');
     final url = '${_root(backendUrl, workspaceId)}/meta.json';
     try {
-      final res = await http
+      var res = await http
           .get(_authedUrl(url, token))
           .timeout(const Duration(seconds: 10));
+      if (res.statusCode == 401 || res.statusCode == 403) {
+        final fresh = await FirebaseAuthRest.forceRefreshToken();
+        if (fresh != null && fresh.isNotEmpty) {
+          res = await http
+              .get(_authedUrl(url, fresh))
+              .timeout(const Duration(seconds: 10));
+        }
+      }
       if (res.statusCode == 401 || res.statusCode == 403) {
         throw CloudJoinException(
             _cloudRejectedMessage(res.statusCode, node: 'بيانات المنشأة'));

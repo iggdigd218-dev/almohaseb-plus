@@ -30,10 +30,12 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:nexora_app/core/app_error_mapper.dart';
+import 'package:nexora_app/core/auth_config.dart';
 import 'package:nexora_app/core/database.dart';
 import 'package:nexora_app/data/repository.dart';
 import 'package:nexora_app/data/sync/cloud_join.dart';
 import 'package:nexora_app/data/sync/firebase_auth_service.dart';
+import 'package:nexora_app/ui/widgets.dart' show friendlyErrorText;
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 
 /// سحابة وهمية ترفض الكتابة بكود محدد (401/403) لمحاكاة قواعد RTDB.
@@ -69,6 +71,50 @@ class _RejectingCloud {
       });
 }
 
+/// سحابة ترفض التوكن القديم بـ 401 وتقبل التوكن المجدّد بـ 200 — للتحقق من
+/// تعافي `_probeWorkspaceAccess` و`createInvite` تلقائياً دون ظهور أي خطأ.
+class _RecoveringCloud {
+  final List<String> seenTokens = [];
+  final List<String> puts = [];
+
+  static http.Response _json(String body, int status) =>
+      http.Response.bytes(utf8.encode(body), status,
+          headers: {'content-type': 'application/json; charset=utf-8'});
+
+  http.Client client() => MockClient((req) async {
+        if (req.method == 'POST') {
+          if (req.url.host.contains('securetoken')) {
+            return _json('{"id_token":"TOK-FRESH","refresh_token":"REF-NEW",'
+                '"expires_in":"3600","user_id":"UID-FRESH"}', 200);
+          }
+          return _json('{"idToken":"TOK-FRESH","refreshToken":"REF-NEW",'
+              '"expiresIn":"3600","localId":"UID-FRESH"}', 200);
+        }
+        final tok = req.url.queryParameters['auth'] ?? '';
+        seenTokens.add(tok);
+        if (tok != 'TOK-FRESH') {
+          return _json('{"error":"Auth token is expired"}', 401);
+        }
+        if (req.method == 'PUT' || req.method == 'PATCH') {
+          puts.add(req.url.path);
+          return _json('{}', 200);
+        }
+        if (req.url.path.endsWith('/meta.json')) {
+          return _json('{"storeName":"منشأة التحقق"}', 200);
+        }
+        return _json('null', 200);
+      });
+}
+
+String _makeJwt({required int expSeconds}) {
+  final header = base64Url.encode(utf8.encode('{"alg":"RS256","typ":"JWT"}'))
+      .replaceAll('=', '');
+  final payload = base64Url
+      .encode(utf8.encode('{"sub":"UID-JWT","exp":$expSeconds}'))
+      .replaceAll('=', '');
+  return '$header.$payload.sig';
+}
+
 const _url = 'https://qa-invite-perm.firebaseio.com';
 const _ws = 'WS-QA-INVITE-PERM';
 
@@ -102,6 +148,30 @@ void main() {
       expect(msg, contains('403'));
     });
 
+    test('رسائل _cloudRejectedMessage الفعليّة تحافظ على تفاصيلها عبر friendlyErrorText', () {
+      const msg403 = 'رفضت السحابة الكتابة عند "بيانات المنشأة" (HTTP 403). '
+          'هذا ليس نقصاً في صلاحيتك كمالك — الأرجح أن قواعد Firebase Realtime Database لم تُنشر على المشروع.';
+      const msg401 = 'انتهت صلاحية هوية هذا الجهاز على السحابة عند "invites" (HTTP 401). '
+          'سجّل الدخول بحساب Google من الإعدادات ← حساب المؤسسة ثم أعد المحاولة.';
+      const msgNoAuth = 'تعذّر إنشاء دعوة الانضمام: لا توجد هوية سحابية فعّالة على هذا الجهاز.';
+
+      for (final raw in const [msg403, msg401, msgNoAuth]) {
+        final viaUi = friendlyErrorText(raw);
+        final viaMapper = AppErrorMapper.toUserFriendlyMessage(raw);
+        for (final out in [viaUi, viaMapper]) {
+          expect(out, isNot(contains('ليس لديك الصلاحية')),
+              reason: 'ممنوع استبدال رسالة السحابة الصريحة برسالة الصلاحية: $raw');
+          expect(out, isNot(contains('مراجعة مدير النظام')));
+          expect(out, isNot(contains('رمز الاقتران')));
+        }
+      }
+      expect(friendlyErrorText(msg403), contains('بيانات المنشأة'));
+      expect(friendlyErrorText(msg403), contains('403'));
+      expect(friendlyErrorText(msg401), contains('invites'));
+      expect(friendlyErrorText(msg401), contains('401'));
+      expect(friendlyErrorText('INVALID_ID_TOKEN'), isNot(contains('رمز الاقتران')));
+    });
+
     test('نقص صلاحية حقيقي من طبقة داخلية يبقى كما هو', () {
       expect(
         AppErrorMapper.toUserFriendlyMessage('permission denied for table tx'),
@@ -116,7 +186,7 @@ void main() {
     });
   });
 
-  // ── ٢) createInvite يفشل مبكراً برسالة صحيحة ───────────────────────────
+  // ── ٢) createInvite يفشل مبكراً برسالة صحيحة ويتعافى من التوكن المنتهي ──
   group('INV-PERM-02 إنشاء الدعوة على جهاز المالك', () {
     late Directory tmp;
     late Database db;
@@ -143,6 +213,7 @@ void main() {
     });
 
     tearDown(() async {
+      debugFirebaseApiKeyOverride = null;
       FirebaseAuthRest.clearMockForTest();
       await db.close();
       await tmp.delete(recursive: true);
@@ -181,6 +252,35 @@ void main() {
           allOf(contains('401'), isNot(contains('ليس لديك'))),
         )),
       );
+    });
+
+    test('401 بسبب توكن مخزّن قديم يتجدد تلقائياً في _probeWorkspaceAccess وتنجح الدعوة', () async {
+      debugFirebaseApiKeyOverride = 'AIzaSyTestKeyForInviteRecovery123456';
+      FirebaseAuthRest.setMockTokenForTest(token: 'TOK-OLD', uid: 'UID-OLD');
+      final cloud = _RecoveringCloud();
+      final invite = await http.runWithClient(
+        () => CloudJoin.createInvite(repo),
+        cloud.client,
+      );
+      expect(invite.token, isNotEmpty);
+      expect(invite.pin.length, 6);
+      expect(cloud.seenTokens.first, 'TOK-OLD');
+      expect(cloud.seenTokens, contains('TOK-FRESH'));
+      expect(cloud.puts, isNotEmpty);
+    });
+
+    test('كشف انتهاء JWT محلياً من حقل exp دون التأثير على التوكنات الصالحة', () {
+      final expiredJwt = _makeJwt(expSeconds: 1000000);
+      FirebaseAuthRest.setMockTokenForTest(token: expiredJwt, uid: 'UID-EXP');
+      expect(FirebaseAuthRest.hasValidToken, isFalse);
+      expect(FirebaseAuthRest.cachedIdToken, isNull);
+
+      final futureExp =
+          (DateTime.now().millisecondsSinceEpoch ~/ 1000) + 3600;
+      final validJwt = _makeJwt(expSeconds: futureExp);
+      FirebaseAuthRest.setMockTokenForTest(token: validJwt, uid: 'UID-OK');
+      expect(FirebaseAuthRest.hasValidToken, isTrue);
+      expect(FirebaseAuthRest.cachedIdToken, validJwt);
     });
   });
 
