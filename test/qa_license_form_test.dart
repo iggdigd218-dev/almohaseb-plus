@@ -208,6 +208,26 @@ void main() {
       expect(savedTrial['clientName'], 'زيد العماد');
       expect(savedTrial['phone'], '771234567');
       expect(savedTrial['licenseKey'], 'NX-REQS-1111-2222');
+
+      // تحقق من ضمان وجود عقدتي subscription.json و meta.json ليظهر الحساب في تطبيق الأدمن
+      expect(cloud.store.containsKey('/workspaces/$wsId/subscription.json'), isTrue);
+      expect(cloud.store.containsKey('/workspaces/$wsId/meta.json'), isTrue);
+
+      // التحقق من منع الكتابة في المساحة الوهمية default
+      await http.runWithClient(
+        () => SubscriptionGuard.registerLicenseRequest(
+          repo,
+          backendUrl: backendUrl,
+          workspaceId: 'default',
+          clientName: 'المدير',
+          storeName: 'متجري',
+          phone: '0544981857',
+          deviceId: devId,
+          licenseKey: 'NX-REQS-0000-0000',
+        ),
+        cloud.client,
+      );
+      expect(cloud.store.containsKey('/workspaces/default/license_request.json'), isFalse);
     });
   });
 
@@ -276,6 +296,12 @@ void main() {
       final formState = tester.state<FormState>(find.byType(Form));
       expect(formState.validate(), isTrue);
 
+      // وبسبب عدم وجود بريد إلكتروني مسجل، يرفض النظام فتح واتساب ويطالب بالتسجيل بالبريد الإلكتروني
+      expect(
+        find.textContaining('لا يمكن إرسال طلب الاشتراك قبل التسجيل بالبريد الإلكتروني'),
+        findsOneWidget,
+      );
+
       // unmount widget before tearDown
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump(const Duration(seconds: 11));
@@ -312,6 +338,65 @@ void main() {
       expect(find.byIcon(Icons.copy), findsNWidgets(2));
 
       // unmount widget before tearDown
+      await tester.pumpWidget(const SizedBox.shrink());
+      await tester.pump(const Duration(seconds: 11));
+    });
+
+    testWidgets('LIC-UI03 يرفض الأسماء الافتراضية (متجري / المدير) ويسمح بالإرسال بعد تسجيل البريد الإلكتروني',
+        (tester) async {
+      tester.view.physicalSize = const Size(800, 1600);
+      tester.view.devicePixelRatio = 1.0;
+      addTearDown(() => tester.view.resetPhysicalSize());
+
+      final launchedMessages = <String>[];
+      debugLaunchActivationWhatsAppOverride = (msg) {
+        launchedMessages.add(msg);
+        return true;
+      };
+      await repo.setSetting('account.email', 'owner@example.com');
+
+      await tester.pumpWidget(
+        UncontrolledProviderScope(
+          container: container,
+          child: MaterialApp(
+            theme: AppTheme.light(),
+            home: const Directionality(
+              textDirection: TextDirection.rtl,
+              child: PurchaseScreen(
+                initialDeviceId: "DEVICE-QA-TEST1234",
+                initialLicenseKey: "NX-QA01-TEST-1234",
+              ),
+            ),
+          ),
+        ),
+      );
+      await tester.pumpAndSettle();
+
+      final clientField = find.widgetWithText(TextFormField, 'اسم العميل / المسؤول *');
+      final storeField = find.widgetWithText(TextFormField, 'اسم المنشأة / المحل *');
+      final phoneField = find.widgetWithText(TextFormField, 'رقم الهاتف / الواتساب *');
+      final submitBtn = find.text('إرسال طلب الترخيص ومعرف الجهاز (واتساب)');
+
+      await tester.enterText(storeField, 'متجري');
+      await tester.enterText(clientField, 'المدير');
+      await tester.enterText(phoneField, '0544981857');
+      await tester.ensureVisible(submitBtn);
+      await tester.tap(submitBtn, warnIfMissed: false);
+      await tester.pumpAndSettle();
+
+      expect(launchedMessages, isEmpty,
+          reason: 'يجب رفض الاسم الافتراضي متجري / المدير');
+
+      await tester.enterText(storeField, 'مؤسسة النور التجارية');
+      await tester.enterText(clientField, 'عثمان الوصابي');
+      await tester.ensureVisible(submitBtn);
+      await tester.tap(submitBtn, warnIfMissed: false);
+      await tester.pumpAndSettle();
+
+      expect(launchedMessages, hasLength(1));
+      expect(launchedMessages.first, contains('owner@example.com'));
+      expect(launchedMessages.first, contains('مؤسسة النور التجارية'));
+
       await tester.pumpWidget(const SizedBox.shrink());
       await tester.pump(const Duration(seconds: 11));
     });
