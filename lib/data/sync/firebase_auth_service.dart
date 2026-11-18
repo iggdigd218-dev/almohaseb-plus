@@ -846,10 +846,24 @@ class FirebaseAuthRest {
     return null;
   }
 
-  /// (401/403) تحديث قسري للتوكن ثم إعادته — لإعادة محاولة واحدة فقط.
-  static Future<String?> forceRefreshToken() async {
+  static Future<String?>? _forceRefreshInFlight;
+
+  /// (401/403) تحديث قسري للتوكن ثم إعادته — مع دمج الاستدعاءات المتزامنة
+  /// في طلب واحد لمنع تصفير التوكن أثناء عمليات الرفع المتوازية.
+  static Future<String?> forceRefreshToken() {
+    final inflight = _forceRefreshInFlight;
+    if (inflight != null) return inflight;
+    final fut = _doForceRefreshToken();
+    _forceRefreshInFlight = fut;
+    return fut.whenComplete(() {
+      if (identical(_forceRefreshInFlight, fut)) {
+        _forceRefreshInFlight = null;
+      }
+    });
+  }
+
+  static Future<String?> _doForceRefreshToken() async {
     if (hasAccountSession) {
-      _accountExpiryMs = 0;
       final fresh = await _refreshAccountToken();
       if (fresh != null &&
           _accountUid != null &&
@@ -861,6 +875,7 @@ class FirebaseAuthRest {
       // كي يتحوّل `cachedIdToken` تلقائياً للهوية المجهولة الصالحة.
       if (_accountRefreshToken == null || _accountRefreshToken!.isEmpty) {
         _accountIdToken = null;
+        _accountExpiryMs = 0;
       }
     }
     _anonExpiryMs = 0;

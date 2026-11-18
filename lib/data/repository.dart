@@ -10159,7 +10159,8 @@ class Repo {
     var snapChecksum = '';
     Map<String, int>? snapCounts;
     try {
-      final snapRec = await CloudJoin.getJson('$root/joinSnapshot.json');
+      var snapRec = await CloudJoin.getJson('$root/joinSnapshot.json');
+      snapRec ??= await CloudJoin.getJson('$root/snapshot.json');
       if (snapRec != null) {
         snapshotCompactedTs = CloudJoin.extractSnapshotWatermarkMs(snapRec);
         snapChecksum = '${snapRec['checksum'] ?? ''}'.trim();

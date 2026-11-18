@@ -1001,6 +1001,7 @@ Future<void> showJoinApprovalSheet(
     return; // نافذة مفتوحة بالفعل لنفس الطلب — لا تكرار
   }
   try {
+    dismissActiveCloudInviteDialog();
     // (دفعة 58 — متطلب 11) طلب مغادرة عضو يمر من نفس القناة بوسم kind=leave
     // — له حوار خاص (موافقة = طرد نظيف، رفض = بقاء العضو).
     if ('${request['kind'] ?? ''}' == 'leave') {
@@ -1141,6 +1142,9 @@ Future<void> showJoinApprovalSheet(
                                       .broadcastRosterChange()
                                       .catchError((_) {}));
                                   Sfx.pair();
+                                  try {
+                                    bump(ref);
+                                  } catch (_) {}
                                   if (ctx.mounted) Navigator.pop(ctx);
                                   return;
                                 } on TimeoutException catch (_) {

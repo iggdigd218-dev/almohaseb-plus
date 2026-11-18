@@ -150,6 +150,15 @@ Future<void> showCloudInviteDialog(BuildContext context, WidgetRef ref) async {
   );
 }
 
+VoidCallback? _activeCloudInviteDialogDismiss;
+
+/// إغلاق نافذة دعوة QR المفتوحة تلقائياً فور وصول طلب انضمام وعرض نافذة الموافقة.
+void dismissActiveCloudInviteDialog() {
+  final fn = _activeCloudInviteDialogDismiss;
+  _activeCloudInviteDialogDismiss = null;
+  fn?.call();
+}
+
 /// حوار دعوة الاقتران (دفعة 51): QR + رمز PIN كبير من 6 أرقام
 /// + عدّاد تنازلي لصلاحية 15 دقيقة.
 class _CloudInviteDialog extends ConsumerStatefulWidget {
@@ -172,10 +181,22 @@ class _CloudInviteDialogState extends ConsumerState<_CloudInviteDialog> {
   @override
   void initState() {
     super.initState();
+    _activeCloudInviteDialogDismiss = _dismissSelfIfMounted;
     _tick = Timer.periodic(
         const Duration(seconds: 1), (_) => mounted ? setState(() {}) : null);
     _startWatcher();
     _startJoinPolling();
+  }
+
+  void _dismissSelfIfMounted() {
+    if (!mounted) return;
+    _openingApproval = true;
+    _joinPoll?.cancel();
+    _tick?.cancel();
+    _watcher?.stop();
+    try {
+      Navigator.of(context).pop();
+    } catch (_) {}
   }
 
   void _startWatcher() {
@@ -224,15 +245,9 @@ class _CloudInviteDialogState extends ConsumerState<_CloudInviteDialog> {
         }
       }
       if (reqs.isNotEmpty && mounted && !_openingApproval) {
-        _openingApproval = true;
-        _joinPoll?.cancel();
-        _tick?.cancel();
-        _watcher?.stop();
+        final rootCtx = Navigator.of(context, rootNavigator: true).context;
+        _dismissSelfIfMounted();
         Sfx.notify();
-        // إغلاق حوار الدعوة وفتح حوار الموافقة مباشرة
-        final nav = Navigator.of(context, rootNavigator: true);
-        if (nav.canPop()) nav.pop();
-        final rootCtx = nav.context;
         if (rootCtx.mounted) {
           await showJoinApprovalSheet(
             rootCtx,
@@ -252,6 +267,9 @@ class _CloudInviteDialogState extends ConsumerState<_CloudInviteDialog> {
 
   @override
   void dispose() {
+    if (identical(_activeCloudInviteDialogDismiss, _dismissSelfIfMounted)) {
+      _activeCloudInviteDialogDismiss = null;
+    }
     // (دفعة الواجهات) تفكيك صريح وكامل: إلغاء المؤقتين وإيقاف مراقب SSE
     // وتحرير المراجع، فلا تبقى أي نبضة حيّة بعد إغلاق حوار الدعوة.
     _tick?.cancel();
