@@ -620,6 +620,7 @@ class FirebaseAuthRest {
   static Future<void> clearSession(
     Repo repo, {
     bool keepDatabaseOpen = false,
+    bool preserveAnonymous = false,
   }) async {
     try {
       final st = await repo.settings();
@@ -653,11 +654,18 @@ class FirebaseAuthRest {
     _accountIdToken = null;
     _accountRefreshToken = null;
     _accountExpiryMs = 0;
-    // (دفعة التدقيق) الخروج يستدعي resetAnonymousSession كاملة: مسح
-    // الهوية المجهولة من الذاكرة والتخزين معاً — بقاء uid الجهاز القديم
-    // بعد الخروج يورّث الجلسة التالية هوية سحابية مستعملة (عضوية
-    // /members ونطاق القواعد) بدل هوية جديدة مستقلة عن السابقة.
-    await resetAnonymousSession(repo);
+    if (preserveAnonymous &&
+        _anonUid != null &&
+        _anonUid!.isNotEmpty &&
+        hasValidToken) {
+      _activeTokenUid = _anonUid;
+    } else {
+      // (دفعة التدقيق) الخروج يستدعي resetAnonymousSession كاملة: مسح
+      // الهوية المجهولة من الذاكرة والتخزين معاً — بقاء uid الجهاز القديم
+      // بعد الخروج يورّث الجلسة التالية هوية سحابية مستعملة (عضوية
+      // /members ونطاق القواعد) بدل هوية جديدة مستقلة عن السابقة.
+      await resetAnonymousSession(repo);
+    }
     await purgeAllSessionPrefs();
     if (!keepDatabaseOpen) {
       repo.debugSetWorkspaceId(defaultWorkspaceIdConst);

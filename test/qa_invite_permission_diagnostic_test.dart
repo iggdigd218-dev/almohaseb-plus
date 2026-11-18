@@ -423,6 +423,89 @@ void main() {
       expect(FirebaseAuthRest.hasValidToken, isTrue);
       expect(FirebaseAuthRest.cachedIdToken, validJwt);
     });
+
+    test('تطبيع رمز الاقتران يقبل الأرقام العربية والمسافات والشرطات وفروق التوقيت والمسح الاحتياطي', () async {
+      expect(CloudJoin.normalizeInviteCode(' ٦٠٦ ١٠٨ '), '606108');
+      expect(CloudJoin.normalizeInviteCode('606-108'), '606108');
+      expect(CloudJoin.normalizeInviteCode('۶۰۶_۱۰۸'), '606108');
+      expect(CloudJoin.normalizeInviteCode('  9pjl-2kb6 '), '9PJL2KB6');
+
+      FirebaseAuthRest.setMockTokenForTest();
+      final localTz = DateTime.now().timeZoneOffset.inMinutes;
+      // محاكاة مدير في منطقة زمنية متأخرة بـ 3 ساعات (بلا tzOffsetMin أو معه)
+      final managerNow = DateTime.now().subtract(const Duration(hours: 3));
+      final managerExp = managerNow.add(const Duration(minutes: 15));
+      final store = <String, dynamic>{
+        '/workspaces.json': {'WS-LEGACY99': true, '_invite_index': true},
+        '/workspaces/WS-LEGACY99/invites.json': {
+          'TOKLEG99': {
+            'pin': '606108',
+            'ws': 'WS-LEGACY99',
+            'createdAt': managerNow.toIso8601String(),
+            'expiresAt': managerExp.toIso8601String(),
+            'tzOffsetMin': localTz - 180,
+          },
+        },
+        '/workspaces/WS-LEGACY99/invites/TOKLEG99.json': {
+          'pin': '606108',
+          'ws': 'WS-LEGACY99',
+          'createdAt': managerNow.toIso8601String(),
+          'expiresAt': managerExp.toIso8601String(),
+          'tzOffsetMin': localTz - 180,
+        },
+      };
+
+      http.Client fallbackClient() => MockClient((req) async {
+            final p = req.url.path;
+            if (req.method == 'POST') {
+              return _RejectingCloud._json(
+                  '{"idToken":"TOK-LIVE","refreshToken":"REF-LIVE","expiresIn":"3600","localId":"UID-LIVE"}',
+                  200);
+            }
+            if (req.method == 'PUT') {
+              store[p] = jsonDecode(req.body);
+              return _RejectingCloud._json(req.body, 200);
+            }
+            final v = store[p];
+            return _RejectingCloud._json(
+                v == null ? 'null' : jsonEncode(v), 200);
+          });
+
+      // على الرغم من غياب السجل من _invite_index واختلاف التوقيت بـ 3 ساعات وإدخال أرقام عربية بمسافة:
+      final resolved = await http.runWithClient(
+        () => CloudJoin.verifyAndResolveInvite(
+          backendUrl: _url,
+          tokenOrPin: '٦٠٦ ١٠٨',
+        ),
+        fallbackClient,
+      );
+      expect(resolved.workspaceId, 'WS-LEGACY99');
+      expect(resolved.token, 'TOKLEG99');
+    });
+
+    test('عدم ابتلاع أخطاء رفض القواعد (403/401) أثناء التحقق من رمز الاقتران', () async {
+      FirebaseAuthRest.setMockTokenForTest();
+      final cloud =
+          _RejectingCloud(403, errorBody: '{"error":"Permission denied"}');
+      await expectLater(
+        http.runWithClient(
+          () => CloudJoin.verifyAndResolveInvite(
+            backendUrl: _url,
+            tokenOrPin: '606108',
+          ),
+          cloud.client,
+        ),
+        throwsA(isA<CloudJoinException>().having(
+          (e) => e.message,
+          'message',
+          allOf(
+            contains('رفضت السحابة'),
+            contains('403'),
+            isNot(contains('رمز الاقتران غير صحيح')),
+          ),
+        )),
+      );
+    });
   });
 
   // ── ٣) لا يتطلب الإصلاح أي تغيير في قواعد Firebase ────────────────────
