@@ -604,7 +604,8 @@ class SnapshotApply {
         'settings',
         where: "key LIKE 'item_conflict:%' OR key LIKE 'item_id_remap:%'",
       );
-      Future<void> applyOrgSetting(String k, Object? v) async {
+      Future<void> applyOrgSetting(String rawKey, Object? v) async {
+        final k = rawKey == 'org_icon_b64' ? 'org.icon.b64' : rawKey;
         final val = '${v ?? ''}'.trim();
         if (k == 'logo' || !orgKeys.contains(k) || val.isEmpty) return;
         await txn.insert(

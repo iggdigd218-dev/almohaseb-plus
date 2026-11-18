@@ -33,8 +33,8 @@ class AppErrorMapper {
       'تعذر إتمام العملية حالياً، يرجى المحاولة مرة أخرى.';
 
   /// هل الرسالة صيغت مسبقاً بواسطة طبقة السحابة (`CloudJoin`) كتشخيص واضح
-  /// باللغة العربية (بما فيها اسم العقدة ورمز HTTP 401/403) وخالية من
-  /// الآثار البرمجية الخام؟ تُعرض كما هي دون بتر أو استبدال برسالة عامة.
+  /// باللغة العربية وخالية من الآثار البرمجية الخام؟ تُعرض كما هي دون بتر أو
+  /// استبدال برسالة عامة.
   static bool _isPreformattedCloudDiagnostic(String raw, String lower) {
     if (lower.contains('stacktrace') ||
         lower.contains('#0 ') ||
@@ -44,33 +44,38 @@ class AppErrorMapper {
     }
     return raw.contains('رفضت السحابة') ||
         raw.contains('انتهت صلاحية هوية هذا الجهاز على السحابة') ||
-        raw.contains('لا توجد هوية سحابية فعّالة');
+        raw.contains('لا توجد هوية سحابية فعّالة') ||
+        raw.startsWith('❌ فشل ');
   }
 
-  /// هل الخطأ صادر من طبقة السحابة (RTDB / Identity Toolkit) وليس من صلاحيات
-  /// التطبيق الداخلية؟ يميّزه ما يزرعه العميل في نص الاستثناء أو كود الحالة.
-  static bool _isCloudAuthFailure(String lower, String upper) {
-    return lower.contains('cloud-auth-failed') ||
-        lower.contains('cloud-http-') ||
-        lower.contains('subscription-http-') ||
-        lower.contains('subscription-put-http-') ||
-        lower.contains('فشل الرفع إلى السحابة') ||
+  /// هل الخطأ يمثل رفض مصادقة/صلاحية فعلياً من طبقة السحابة (401/403/Token)؟
+  /// لا نصنّف أخطاء HTTP 400/404/500 أو فشل الرفع العام كخطأ هوية سحابية 401/403.
+  static bool _isCloudAuthFailure(String raw, String lower, String upper) {
+    if (lower.contains('cloud-auth-failed') ||
         lower.contains('فشل المصادقة مع السحابة') ||
-        lower.contains('تعذّر الاتصال بالسحابة') ||
         lower.contains('رفضت السحابة') ||
         lower.contains('انتهت صلاحية هوية') ||
         lower.contains('لا توجد هوية سحابية') ||
-        lower.contains('firebase realtime database') ||
         lower.contains('database.rules.json') ||
         lower.contains('ليس نقصاً في صلاحيتك') ||
         lower.contains('هوية الجهاز السحابية') ||
-        lower.contains('مساحة العمل السحابية') ||
-        lower.contains('join-sse-http-') ||
-        lower.contains('rtdb') ||
         upper.contains('INVALID_ID_TOKEN') ||
         upper.contains('ID_TOKEN_EXPIRED') ||
         upper.contains('TOKEN_EXPIRED') ||
-        upper.contains('AUTH_REVOKED');
+        upper.contains('AUTH_REVOKED')) {
+      return true;
+    }
+    final has401Or403 = RegExp(r'\b(401|403)\b').hasMatch(raw);
+    if (!has401Or403) return false;
+    return lower.contains('cloud-http-') ||
+        lower.contains('subscription-http-') ||
+        lower.contains('subscription-put-http-') ||
+        lower.contains('فشل الرفع إلى السحابة') ||
+        lower.contains('تعذّر الاتصال بالسحابة') ||
+        lower.contains('firebase realtime database') ||
+        lower.contains('مساحة العمل السحابية') ||
+        lower.contains('join-sse-http-') ||
+        lower.contains('rtdb');
   }
 
   /// رسالة السحابة، مع ذكر كود الحالة إن وُجد ليُميّز 401 (هوية منتهية) عن
@@ -207,7 +212,7 @@ class AppErrorMapper {
     // نفسه لا يعني «نقص صلاحية» داخلية. كان `HTTP 403` يُترجم دائماً إلى
     // «راجع مدير النظام» حتى على جهاز المالك، فيبحث عن صلاحية لا وجود لها
     // بينما السبب الحقيقي: هوية Firebase غير فعّالة أو قواعد RTDB لا تسمح.
-    if (_isCloudAuthFailure(lower, upper)) {
+    if (_isCloudAuthFailure(raw, lower, upper)) {
       return _cloudAuthFailureMessage(raw);
     }
     if (upper.contains('PERMISSION_DENIED') ||

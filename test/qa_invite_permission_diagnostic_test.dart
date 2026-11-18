@@ -174,6 +174,25 @@ void main() {
       expect(friendlyErrorText('INVALID_ID_TOKEN'), isNot(contains('رمز الاقتران')));
     });
 
+    test('خطأ HTTP 400 أو فشل رفع اللقطة لا يُصنَّف زوراً كخطأ هوية سحابية 401/403', () {
+      const err400 = 'CloudJoinException: فشل الرفع إلى السحابة (HTTP 400)';
+      const errSnap = '❌ فشل رفع اللقطة الذرية للمنشأة قبل اعتماد العضو.\n'
+          'السبب: CloudJoinException: فشل الرفع إلى السحابة (HTTP 400)\n'
+          'الحل: تأكد من استقرار الإنترنت وأعد المحاولة.';
+      expect(
+        AppErrorMapper.toUserFriendlyMessage(err400),
+        isNot(contains('401/403')),
+      );
+      expect(
+        AppErrorMapper.toUserFriendlyMessage(errSnap),
+        isNot(contains('401/403')),
+      );
+      expect(
+        AppErrorMapper.toUserFriendlyMessage(errSnap),
+        contains('فشل رفع اللقطة الذرية'),
+      );
+    });
+
     test('نقص صلاحية حقيقي من طبقة داخلية يبقى كما هو', () {
       expect(
         AppErrorMapper.toUserFriendlyMessage('permission denied for table tx'),
@@ -505,6 +524,109 @@ void main() {
           ),
         )),
       );
+    });
+
+    test('approveJoinRequest ينجح مع وجود شعار org.icon.b64 وقواعد ترفض النقطة في المفاتيح وترفض evictions/members', () async {
+      FirebaseAuthRest.setMockTokenForTest(token: 'TOK-OWNER', uid: 'UID-OWNER');
+      await repo.setSetting('org.icon.b64', 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB');
+      await repo.setSetting('businessName', 'مركز عثمان الوصابي');
+      await repo.setSetting('allow_cloud_media_sync', '1');
+
+      final store = <String, Object?>{
+        '/workspaces/$_ws/joinRequests/DEVICE-VE5WXPUKS3VA.json': {
+          'deviceId': 'DEVICE-VE5WXPUKS3VA',
+          'deviceName': 'ااااا',
+          'fingerprint': 'VE5WXPUKS3VAMHUXYA87HGFL',
+          'kind': 'join',
+          'status': 'pending',
+          'uid': 'UID-MEMBER-1',
+        },
+      };
+
+      bool hasIllegalRtdbKey(Object? v) {
+        if (v is Map) {
+          if (v.length == 1 && v.containsKey('.sv')) return false;
+          for (final e in v.entries) {
+            final k = '${e.key}';
+            if (RegExp(r'[.$#\[\]/]').hasMatch(k)) return true;
+            if (hasIllegalRtdbKey(e.value)) return true;
+          }
+        } else if (v is List) {
+          for (final item in v) {
+            if (hasIllegalRtdbKey(item)) return true;
+          }
+        }
+        return false;
+      }
+
+      var authRefreshCalls = 0;
+      http.Client strictRtdbClient() => MockClient((req) async {
+            final p = req.url.path;
+            if (req.url.host.contains('googleapis.com')) {
+              authRefreshCalls++;
+              return _RejectingCloud._json(
+                  '{"error":{"message":"TOKEN_EXPIRED"}}', 400);
+            }
+            if (p.contains('/evictions/') ||
+                p.contains('/revoked_devices/') ||
+                p.contains('/ejected_devices/') ||
+                p.contains('/members/')) {
+              return _RejectingCloud._json(
+                  '{"error":"Permission denied"}', 401);
+            }
+            if (req.method == 'PUT' || req.method == 'PATCH') {
+              final decoded = jsonDecode(req.body);
+              if (hasIllegalRtdbKey(decoded)) {
+                return _RejectingCloud._json(
+                  r'{"error":"Invalid data; cannot parse key containing $ # [ ] / or ."}',
+                  400,
+                );
+              }
+              store[p] = decoded;
+              return _RejectingCloud._json(req.body, 200);
+            }
+            if (req.method == 'DELETE') {
+              store.remove(p);
+              return _RejectingCloud._json('null', 200);
+            }
+            final v = store[p];
+            return _RejectingCloud._json(
+                v == null ? 'null' : jsonEncode(v), 200);
+          });
+
+      await http.runWithClient(
+        () => CloudJoin.approveJoinRequest(
+          repo,
+          backendUrl: _url,
+          deviceId: 'DEVICE-VE5WXPUKS3VA',
+          deviceName: 'ااااا',
+          roleCode: 'cashier',
+          workspaceId: _ws,
+        ),
+        strictRtdbClient,
+      );
+
+      expect(authRefreshCalls, 0,
+          reason: 'ممنوع تصفير التوكن أو استدعاء forceRefreshToken عند رفض قواعد evictions/members');
+      final approvedReq =
+          store['/workspaces/$_ws/joinRequests/DEVICE-VE5WXPUKS3VA.json'] as Map?;
+      expect(approvedReq?['status'], 'approved');
+      final rosterEntry =
+          store['/workspaces/$_ws/roster/DEVICE-VE5WXPUKS3VA.json'] as Map?;
+      expect(rosterEntry?['status'], 'active');
+      expect(rosterEntry?['uid'], 'UID-MEMBER-1');
+      expect(rosterEntry?['fingerprint'], 'VE5WXPUKS3VAMHUXYA87HGFL');
+      expect(
+          store.containsKey('/workspaces/$_ws/joinSnapshot.json'), isTrue);
+
+      final fullSnap = await CloudJoin.buildWorkspaceSnapshot(
+        repo,
+        hostDeviceId: 'HOST-1',
+        includeMediaThumbs: true,
+      );
+      expect(hasIllegalRtdbKey(fullSnap), isFalse);
+      final orgSettings = fullSnap['orgSettings'] as Map?;
+      expect(orgSettings?['org_icon_b64'], 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB');
     });
   });
 

@@ -1049,6 +1049,48 @@ class CloudJoin {
     }
   }
 
+  /// يطهّر مفاتيح الـ Map من الأحرف المحظورة في Firebase RTDB (`.` `$` `#` `[` `]` `/`)
+  /// مع الحفاظ على ختم الخادم الذري `{'.sv': 'timestamp'}` كما هو، لمنع رفض HTTP 400
+  /// (`Invalid data; couldn't parse key`).
+  static Object? _sanitizeRtdbValue(Object? value) {
+    if (value is Map) {
+      if (value.length == 1 && value.containsKey('.sv')) {
+        return value;
+      }
+      final out = <String, Object?>{};
+      for (final entry in value.entries) {
+        final rawKey = '${entry.key}';
+        if (rawKey.isEmpty) continue;
+        final safeKey = rawKey == '.sv'
+            ? rawKey
+            : rawKey.replaceAll(RegExp(r'[.$#\[\]/]'), '_');
+        if (safeKey.isEmpty) continue;
+        out[safeKey] = _sanitizeRtdbValue(entry.value);
+      }
+      return out;
+    }
+    if (value is List) {
+      return [for (final item in value) _sanitizeRtdbValue(item)];
+    }
+    return value;
+  }
+
+  /// هل يمثل الرد رفض صلاحية من قواعد RTDB (`Permission denied`) مع وجود توكن صالح،
+  /// وليس انتهاء صلاحية التوكن؟ في هذه الحالة لا نصفّر التوكن الحي في الذاكرة.
+  static bool _shouldRefreshTokenOnReject(int statusCode, String responseBody) {
+    if (statusCode != 401 && statusCode != 403) return false;
+    final lower = responseBody.toLowerCase();
+    final isRuleDenial = statusCode == 403 ||
+        (lower.contains('permission denied') &&
+            !lower.contains('expired') &&
+            !lower.contains('invalid') &&
+            !lower.contains('revoked'));
+    if (isRuleDenial && FirebaseAuthRest.cachedIdToken != null) {
+      return false;
+    }
+    return true;
+  }
+
   static Future<Map<String, dynamic>?> _getJson(
     String url, {
     bool refreshOnReject = true,
@@ -1056,7 +1098,8 @@ class CloudJoin {
     var token = await _ensureToken();
     var uri = _authedUrl(url, token);
     var res = await http.get(uri).timeout(const Duration(seconds: 30));
-    if (refreshOnReject && (res.statusCode == 401 || res.statusCode == 403)) {
+    if (refreshOnReject &&
+        _shouldRefreshTokenOnReject(res.statusCode, res.body)) {
       final fresh = await FirebaseAuthRest.forceRefreshToken();
       if (fresh != null && fresh.isNotEmpty) {
         token = fresh;
@@ -1087,20 +1130,23 @@ class CloudJoin {
     Duration timeout = const Duration(seconds: 60),
     bool refreshOnReject = true,
   }) async {
+    final safeBody = _sanitizeRtdbValue(body) ?? body;
+    final encodedBody = jsonEncode(safeBody);
     var token = await _ensureToken();
     var uri = _authedUrl(url, token);
     var res = await http
         .put(uri,
             headers: {'Content-Type': 'application/json'},
-            body: jsonEncode(body))
+            body: encodedBody)
         .timeout(timeout);
-    if (refreshOnReject && (res.statusCode == 401 || res.statusCode == 403)) {
+    if (refreshOnReject &&
+        _shouldRefreshTokenOnReject(res.statusCode, res.body)) {
       final fresh = await FirebaseAuthRest.forceRefreshToken();
       if (fresh != null && fresh.isNotEmpty) {
         res = await http
             .put(_authedUrl(url, fresh),
                 headers: {'Content-Type': 'application/json'},
-                body: jsonEncode(body))
+                body: encodedBody)
             .timeout(timeout);
       }
     }
@@ -1122,19 +1168,21 @@ class CloudJoin {
   static Future<void> _patchJson(String url, Map<String, dynamic> body,
       {Duration timeout = const Duration(seconds: 20)}) async {
     try {
+      final safeBody = _sanitizeRtdbValue(body) ?? body;
+      final encodedBody = jsonEncode(safeBody);
       var token = await _ensureToken();
       var res = await http
           .patch(_authedUrl(url, token),
               headers: {'Content-Type': 'application/json'},
-              body: jsonEncode(body))
+              body: encodedBody)
           .timeout(timeout);
-      if (res.statusCode == 401 || res.statusCode == 403) {
+      if (_shouldRefreshTokenOnReject(res.statusCode, res.body)) {
         final fresh = await FirebaseAuthRest.forceRefreshToken();
         if (fresh != null && fresh.isNotEmpty) {
           res = await http
               .patch(_authedUrl(url, fresh),
                   headers: {'Content-Type': 'application/json'},
-                  body: jsonEncode(body))
+                  body: encodedBody)
               .timeout(timeout);
         }
       }
@@ -1182,7 +1230,8 @@ class CloudJoin {
       var token = await _ensureToken();
       var uri = _authedUrl(url, token);
       var res = await http.delete(uri).timeout(const Duration(seconds: 20));
-      if (refreshOnReject && (res.statusCode == 401 || res.statusCode == 403)) {
+      if (refreshOnReject &&
+          _shouldRefreshTokenOnReject(res.statusCode, res.body)) {
         final fresh = await FirebaseAuthRest.forceRefreshToken();
         if (fresh != null) {
           await http
@@ -1482,12 +1531,17 @@ class CloudJoin {
     snapshot['workspaceMode'] = 'member';
     snapshot['hostDeviceId'] = hostDevId;
     try {
-      final orgKeys = allowMediaSync
+      // في لقطة الانضمام السريعة (includeMediaThumbs == false) يتزامن الشعار في الخلفية
+      // عبر backfillCloudMediaIfNeeded؛ وعند تضمينه يُحفظ بمفتاح آمن لـ Firebase RTDB
+      // (`org_icon_b64` بدون نقطة `.`) لأن RTDB يرفض المفاتيح المحتوية على `.` بـ HTTP 400.
+      final orgKeys = (allowMediaSync && includeMediaThumbs)
           ? "('businessName','businessNameEn','businessActivity','org.icon.b64','address','phone','whatsapp','managerName','voucherFooter','defaultVoucherNotes')"
           : "('businessName','businessNameEn','businessActivity','address','phone','whatsapp','managerName','voucherFooter','defaultVoucherNotes')";
       final orgRows = await db.query('settings', where: 'key IN $orgKeys');
       snapshot['orgSettings'] = {
-        for (final r in orgRows) '${r['key']}': r['value']
+        for (final r in orgRows)
+          ('${r['key']}' == 'org.icon.b64' ? 'org_icon_b64' : '${r['key']}'):
+              r['value']
       };
     } catch (_) {}
     return snapshot;
@@ -1700,10 +1754,16 @@ class CloudJoin {
     Map<String, Object?>? snapRec = await _getJson('$root/joinSnapshot.json');
     // انتظار ذكي لضمان اكتمال اللقطة الذرية قبل تطبيق أي سطر
     if (snapRec?['data'] is! Map && isApprovedInCloud) {
-      for (var retry = 0; retry < 12; retry++) {
-        await Future<void>.delayed(const Duration(milliseconds: 400));
+      for (var retry = 0; retry < 8; retry++) {
+        await Future<void>.delayed(const Duration(milliseconds: 350));
         snapRec = await _getJson('$root/joinSnapshot.json');
         if (snapRec?['data'] is Map) break;
+      }
+      // تراجع تلقائي سلس إلى snapshot.json إن تأخرت أو حُذفت joinSnapshot.json
+      if (snapRec?['data'] is! Map) {
+        try {
+          snapRec = await _getJson('$root/snapshot.json');
+        } catch (_) {}
       }
     }
     if (snapRec?['data'] is Map) {
@@ -1716,8 +1776,7 @@ class CloudJoin {
             if (e.value is num) '${e.key}': (e.value as num).toInt(),
         };
       }
-    } else if (!isApprovedInCloud &&
-        snapRec != null &&
+    } else if (snapRec != null &&
         (snapRec['accounts'] != null ||
             snapRec['items'] != null ||
             snapRec['transactions'] != null)) {
@@ -3063,6 +3122,22 @@ class CloudJoin {
             }
           } catch (_) {}
         }
+        if (remoteEntry is Map) {
+          // الحفاظ على بصمة وهوية ومعلومات الاعتماد السحابية للعضو حتى لا تمحوها دورة syncRoster التالية
+          for (final k in const [
+            'uid',
+            'status',
+            'revoked',
+            'joined_at_ms',
+            'approved_at_ms',
+            'fingerprint',
+            'hw_fingerprint',
+          ]) {
+            if (map[k] == null && remoteEntry[k] != null) {
+              map[k] = remoteEntry[k];
+            }
+          }
+        }
         if (!canManage && remoteEntry is Map) {
           // الحفاظ الصارم على الدور والصلاحيات والمستخدم المعيّن من قبل المدير في السحابة
           // يمنع نبضات الجهاز العضو الدورية من الكتابة فوق الدور أو الصلاحيات التي عيّنها المدير
@@ -4274,6 +4349,9 @@ class CloudJoin {
     final root = _root(backendUrl, workspaceId);
     final encApproved = Uri.encodeComponent(deviceId);
     final memberUid = '${existingReq?['uid'] ?? ''}'.trim();
+    final memberFp =
+        '${existingReq?['fingerprint'] ?? existingReq?['hw_fingerprint'] ?? ''}'
+            .trim();
     final approvalNowMs = DateTime.now().millisecondsSinceEpoch;
 
     Future<void> writeApprovedSignal() async {
@@ -4299,23 +4377,6 @@ class CloudJoin {
 
     Future<void> uploadJoinSnapshotOnly() async {
       try {
-        // سحب تفاضلي سريع للعمليات الحديثة فقط (إن كان للمدير مؤشر مزامنة سابق > 0)
-        // لضمان احتواء اللقطة على آخر حركات الأعضاء قبل ختم serverWatermarkMs.
-        try {
-          final transport = CloudFirebaseTransport(
-            repo: repo,
-            dbProvider: () => repo.database,
-            backendUrl: backendUrl,
-            workspaceId: targetWsId,
-          );
-          final prevCursor = await transport.getLastSyncedCursor();
-          if (prevCursor > 0) {
-            await transport
-                .pull()
-                .timeout(const Duration(milliseconds: 2500));
-          }
-        } catch (_) {}
-
         // بناء لقطة انضمام سريعة وخفيفة بدون تضمين صور الأصناف (تتزامن لاحقاً عبر العمليات)
         // لتجنب تجاوز مهلة الرفع على شبكات الجوال البطيئة.
         final snap = await buildWorkspaceSnapshot(
@@ -4369,6 +4430,8 @@ class CloudJoin {
           {
             ..._safeDeviceRow(deviceRow),
             if (memberUid.isNotEmpty) 'uid': memberUid,
+            if (memberFp.isNotEmpty) 'fingerprint': memberFp,
+            if (memberFp.isNotEmpty) 'hw_fingerprint': memberFp,
             'status': 'active',
             'revoked': false,
             'joined_at_ms': approvalNowMs,
@@ -4392,28 +4455,28 @@ class CloudJoin {
       }
     }
 
-    Future<void> clearEvictionsStrict() async {
+    Future<void> clearEvictionsBestEffort() async {
       for (final node in const [
         'evictions',
         'revoked_devices',
         'ejected_devices',
       ]) {
         try {
-          await _delete('$root/$node/$encApproved.json');
-        } catch (_) {
-          // محاولة ثانية لتأكيد إزالة شواهد الطرد السابقة قبل اعتماد العضو
-          await _delete('$root/$node/$encApproved.json').catchError((_) {});
-        }
+          await _delete(
+            '$root/$node/$encApproved.json',
+            refreshOnReject: false,
+          );
+        } catch (_) {}
       }
     }
 
     // الترتيب الذري السريع:
-    // 1) رفع اللقطة الخفيفة + تحديث الروستر الإلزامي وحذف شواهد الطرد بالتوازي.
+    // 1) رفع اللقطة الخفيفة + تحديث الروستر الإلزامي بالتوازي دون عاصفة تجديد توكنات.
     // 2) فور اكتمال رفع اللقطة والروستر، نكتب إشارة approved حتى يجد العضو اللقطة جاهزة فوراً.
     await Future.wait<void>([
       uploadJoinSnapshotOnly(),
       writeRosterStrict(),
-      clearEvictionsStrict(),
+      clearEvictionsBestEffort(),
       if (memberUid.isNotEmpty)
         _putJson(
           '$root/members/${Uri.encodeComponent(memberUid)}.json',
@@ -4423,7 +4486,8 @@ class CloudJoin {
             'deviceId': deviceId,
             'joined_at': {'.sv': 'timestamp'},
           },
-          timeout: const Duration(seconds: 20),
+          timeout: const Duration(seconds: 15),
+          refreshOnReject: false,
         ).catchError((_) {}),
     ]);
 
