@@ -236,6 +236,42 @@ class SnapshotApply {
         'activity',
         'sync_queue',
       ];
+      // أرشفة أي عمليات محلية معلقة لم تتزامن قبل مسح طابور المزامنة حتى لا تضيع بصمت
+      try {
+        await SyncQuarantineStore.ensureTable(txn);
+        final pendingOps = await txn.rawQuery('''
+          SELECT o.* FROM operations o
+          INNER JOIN sync_queue q ON q.operation_id = o.id
+        ''');
+        for (final opRow in pendingOps) {
+          final opId = '${opRow['id'] ?? ''}'.trim();
+          if (opId.isEmpty) continue;
+          await txn.insert(
+            SyncQuarantineStore.kTable,
+            {
+              'op_id': 'prejoin:$opId',
+              'workspace_id': '${opRow['workspace_id'] ?? 'default'}',
+              'device_id': '${opRow['device_id'] ?? ourDeviceId}',
+              'entity_type': '${opRow['entity_type'] ?? ''}',
+              'entity_id': '${opRow['entity_id'] ?? ''}',
+              'op_type': '${opRow['op_type'] ?? ''}',
+              'payload': '${opRow['payload'] ?? '{}'}',
+              'op_json': jsonEncode(opRow),
+              'reason': 'pre_join_pending_archived',
+              'missing_parent_table': '',
+              'missing_parent_id': '',
+              'details': 'Archived before applying workspace snapshot ($wsId)',
+              'status': 'archived_pre_join',
+              'attempts': 0,
+              'created_at': '${opRow['timestamp'] ?? nowIso}',
+              'updated_at': nowIso,
+              'resolved_at': nowIso,
+            },
+            conflictAlgorithm: ConflictAlgorithm.replace,
+          );
+        }
+      } catch (_) {}
+
       for (final t in clearTables) {
         await txn.delete(t);
       }
@@ -258,7 +294,10 @@ class SnapshotApply {
       }
       try {
         await SyncQuarantineStore.ensureTable(txn);
-        await txn.delete(SyncQuarantineStore.kTable);
+        await txn.delete(
+          SyncQuarantineStore.kTable,
+          where: "status != 'archived_pre_join'",
+        );
       } catch (e) {
         debugPrint('SnapshotApply clear sync_quarantine warning: $e');
       }

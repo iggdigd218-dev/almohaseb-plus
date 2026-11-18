@@ -98,6 +98,8 @@ class PdfFonts {
   static String sanitize(String text) {
     if (text.isEmpty) return text;
     return text
+        .replaceAll('\u00B7', '-')
+        .replaceAll('\u2022', '-')
         .replaceAll(
           RegExp(r'[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F'
               r'\u061C\u200B-\u200F\u202A-\u202E\u2060-\u206F\uFEFF]'),

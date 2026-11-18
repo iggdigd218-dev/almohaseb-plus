@@ -143,17 +143,26 @@ class _CreateWorkspaceScreenState extends ConsumerState<CreateWorkspaceScreen> {
           ? widget.ownerUid.trim()
           : 'email:${AccountWorkspace.emailToKey(email)}';
 
+      FirebaseAccount? authedAccount;
       if (password.length >= 6 && widget.ownerUid.trim().isEmpty) {
         try {
-          final authAcc = await FirebaseAuthRest.signUpWithEmailPassword(
+          authedAccount = await FirebaseAuthRest.signUpWithEmailPassword(
             email: email,
             password: password,
             displayName: storeName,
           );
-          if (authAcc.uid.trim().isNotEmpty) {
-            effectiveUid = authAcc.uid.trim();
-          }
-        } catch (_) {}
+        } catch (_) {
+          try {
+            authedAccount = await FirebaseAuthRest.signInWithEmailPassword(
+              email: email,
+              password: password,
+            );
+          } catch (_) {}
+        }
+        if (authedAccount != null && authedAccount.uid.trim().isNotEmpty) {
+          effectiveUid = authedAccount.uid.trim();
+          FirebaseAuthRest.primeAccountInMemory(authedAccount);
+        }
       }
 
       if (!widget.isAdditionalWorkspace) {

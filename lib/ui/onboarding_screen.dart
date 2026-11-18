@@ -25,6 +25,7 @@ import '../core/l10n.dart';
 import '../core/security.dart';
 import '../core/sfx.dart';
 import '../core/theme.dart';
+import '../data/google_drive_service.dart';
 import '../data/providers.dart';
 import '../data/repository.dart';
 import '../data/sync/account_workspace.dart';
@@ -607,6 +608,16 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       try {
         CloudControlService.instance.stop();
       } catch (_) {}
+      try {
+        final db = await repo.database;
+        await GoogleAuthService(db).signOut();
+      } catch (_) {}
+      try {
+        await GoogleDriveService.instance.signOut();
+      } catch (_) {}
+      try {
+        await FirebaseAuthRest.clearSession(repo, keepDatabaseOpen: true);
+      } catch (_) {}
       await repo.setSetting('account.type', 'individual');
       await completeOnboarding(
         repo,
@@ -618,12 +629,14 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       await repo.setSetting('account.type', 'individual');
       await repo.setSetting('account.email', '');
       await repo.setSetting('email', '');
+      await repo.setSetting('drive.backup_email', '');
       await repo.setSetting('cloudWorkspaceProvisioned', '0');
       await repo.setSetting('sync.workspaceId', 'default');
       repo.debugSetWorkspaceId('default');
       try {
         final db = await repo.database;
         final now = DateTime.now().toIso8601String();
+        await db.delete('google_auth');
         await db.delete('workspaces', where: "id != 'default'");
         await db.insert(
           'workspaces',
@@ -659,6 +672,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
   Future<void> _resolveWorkspaceOrRedirectToRegister({
     required FirebaseAccount account,
     required bool isLoginFlow,
+    bool redirectToRegisterIfNotFound = false,
   }) async {
     final repo = ref.read(repoProvider);
     FirebaseAuthRest.primeAccountInMemory(account);
@@ -865,8 +879,8 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       return;
     }
 
-    // إذا كان تدفق تسجيل دخول عادي ولم يُعثر على أي منشأة سابقة:
-    if (isLoginFlow) {
+    // إذا كان تدفق تسجيل دخول عادي بالبريد/كلمة المرور ولم يُعثر على أي منشأة سابقة:
+    if (isLoginFlow && !redirectToRegisterIfNotFound) {
       if (!mounted) return;
       setState(() {
         _authError = AppLocalizations.of(context).errAccountOrWorkspaceNotFound;
@@ -876,7 +890,8 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       return;
     }
 
-    // في حال تدفق إنشاء حساب جديد وتأكد عدم وجود منشأة مسجلة (notFound):
+    // في حال تدفق إنشاء حساب جديد أو تسجيل دخول عبر Google وتأكد عدم وجود منشأة مسجلة (notFound):
+    // يتم التوجيه فوراً إلى شاشة إكمال تسجيل بيانات المنشأة مع تعبئة البريد الإلكتروني مسبقاً.
     await FirebaseAuthRest.saveSession(repo, account);
     if (cleanAuthEmail.isNotEmpty) {
       await repo.setSetting('account.email', cleanAuthEmail);
@@ -1192,6 +1207,7 @@ class _OnboardingScreenState extends ConsumerState<OnboardingScreen> {
       await _resolveWorkspaceOrRedirectToRegister(
         account: account,
         isLoginFlow: isLoginFlow,
+        redirectToRegisterIfNotFound: true,
       );
     } catch (e) {
       if (mounted) {

@@ -22,6 +22,7 @@ import '../core/database.dart';
 import '../core/factory_reset.dart';
 import '../core/models.dart';
 import '../core/security.dart';
+import '../data/google_drive_service.dart';
 import '../data/providers.dart';
 import '../data/repository.dart';
 import '../data/sync/account_workspace.dart';
@@ -420,6 +421,9 @@ Future<void> performCompleteSessionPurge(
     await GoogleAuthService(db).signOut();
   } catch (_) {}
   try {
+    await GoogleDriveService.instance.signOut();
+  } catch (_) {}
+  try {
     await GoogleSignIn().signOut();
   } catch (_) {}
   try {
@@ -452,6 +456,7 @@ Future<void> performCompleteSessionPurge(
       'email',
       'user.email',
       'company.email',
+      'drive.backup_email',
       'account.photoPath',
       'account.name',
       'account.uid',
@@ -474,6 +479,9 @@ Future<void> performCompleteSessionPurge(
         );
       } catch (_) {}
     }
+    try {
+      await freshDb.delete('google_auth');
+    } catch (_) {}
     try {
       await freshDb.update(
         'users',

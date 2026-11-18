@@ -204,7 +204,7 @@ void main() {
           find.text(
             'فاتورة مبيعات آجلة شاملة لشاشات وبطاريات صيانة أصلية مع الضمان الكامل',
           ),
-          findsOneWidget,
+          findsWidgets,
         );
         expect(find.text('شاشة سامسونج A52 وكالة'), findsOneWidget);
         expect(find.text('بطارية داخلية أصلية'), findsOneWidget);

@@ -209,6 +209,20 @@ class FirebaseAuthRest {
   /// الهوية المجهولة للجهاز (قبل/بلا ربط حساب Google).
   static String get anonymousUid => _anonUid ?? '';
 
+  /// استرجاع جلسة الحساب النشطة في الذاكرة (قبل تبديل قاعدة البيانات).
+  static FirebaseAccount? get activeAccount {
+    if (!hasAccountSession) return null;
+    final remSec = ((_accountExpiryMs - DateTime.now().millisecondsSinceEpoch) ~/ 1000)
+        .clamp(60, 3600);
+    return FirebaseAccount(
+      uid: _accountUid ?? '',
+      email: '',
+      idToken: _accountIdToken ?? '',
+      refreshToken: _accountRefreshToken ?? '',
+      expiresInSeconds: remSec,
+    );
+  }
+
   /// تفعيل توكن الحساب في الذاكرة فوراً قبل أي استعلام سحابي (لمنع 401 أثناء البحث والاسترداد).
   static void primeAccountInMemory(FirebaseAccount a) {
     if (a.idToken.isNotEmpty) {

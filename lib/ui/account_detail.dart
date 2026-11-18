@@ -823,10 +823,13 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
     required bool stamp,
   }) async {
     final st = await ref.read(repoProvider).settings();
-    final orgName = (st['businessName'] ?? '').trim().isNotEmpty
-        ? st['businessName']!.trim()
-        : 'كشف حساب مالي';
-    final orgPhone = (st['phone'] ?? st['whatsapp'] ?? '').trim();
+    final orgName = PdfFonts.sanitize(
+      (st['businessName'] ?? '').trim().isNotEmpty
+          ? st['businessName']!.trim()
+          : 'كشف حساب مالي',
+    );
+    final orgPhone = PdfFonts.sanitize((st['phone'] ?? st['whatsapp'] ?? '').trim());
+    final orgAddress = PdfFonts.sanitize((st['address'] ?? '').trim());
     final fonts = await PdfFonts.load();
     final regular = fonts.base;
     final bold = fonts.bold;
@@ -835,6 +838,18 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
     final nature = balance > 0
         ? 'عليه (مدين)'
         : (balance < 0 ? 'له (دائن)' : 'متوازن');
+
+    String cleanStatementDescription(Tx t) {
+      final raw = t.description.trim();
+      if (raw.isEmpty) return PdfFonts.sanitize(t.type.label);
+      final cleaned = raw
+          .replaceAll(
+            RegExp(r'\s+رقم\s+#?[A-Za-z0-9._-]+', caseSensitive: false),
+            '',
+          )
+          .trim();
+      return PdfFonts.sanitize(cleaned.isEmpty ? raw : cleaned);
+    }
 
     final doc = pw.Document(theme: fonts.theme);
     doc.addPage(
@@ -846,7 +861,7 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
           margin: const pw.EdgeInsets.all(26),
           buildBackground: stamp
               ? (_) => pw.Watermark.text(
-                    kWatermarkText,
+                    PdfFonts.sanitize(kWatermarkText),
                     style: pw.TextStyle(
                       font: bold,
                       fontSize: 32,
@@ -861,44 +876,110 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
             crossAxisAlignment: pw.CrossAxisAlignment.stretch,
             children: [
               pw.Row(
+                crossAxisAlignment: pw.CrossAxisAlignment.start,
                 mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                 children: [
-                  pw.Column(
-                    crossAxisAlignment: pw.CrossAxisAlignment.start,
-                    children: [
-                      pw.Text(
-                        orgName,
-                        style: pw.TextStyle(font: bold, fontSize: 16),
-                      ),
-                      if (orgPhone.isNotEmpty)
+                  pw.Expanded(
+                    flex: 3,
+                    child: pw.Column(
+                      crossAxisAlignment: pw.CrossAxisAlignment.start,
+                      children: [
                         pw.Text(
-                          'هاتف: $orgPhone',
+                          orgName,
+                          style: pw.TextStyle(font: bold, fontSize: 15),
+                        ),
+                        if (orgPhone.isNotEmpty)
+                          pw.Row(
+                            mainAxisSize: pw.MainAxisSize.min,
+                            children: [
+                              pw.Text(
+                                'هاتف: ',
+                                style: const pw.TextStyle(
+                                  fontSize: 9.5,
+                                  color: PdfColors.grey700,
+                                ),
+                              ),
+                              pw.Directionality(
+                                textDirection: pw.TextDirection.ltr,
+                                child: pw.Text(
+                                  orgPhone,
+                                  style: const pw.TextStyle(
+                                    fontSize: 9.5,
+                                    color: PdfColors.grey700,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                        if (orgAddress.isNotEmpty)
+                          pw.Text(
+                            orgAddress,
+                            style: const pw.TextStyle(
+                              fontSize: 9,
+                              color: PdfColors.grey700,
+                            ),
+                          ),
+                      ],
+                    ),
+                  ),
+                  pw.Expanded(
+                    flex: 4,
+                    child: pw.Column(
+                      crossAxisAlignment: pw.CrossAxisAlignment.center,
+                      children: [
+                        buildThermalArrowLogo(size: 26),
+                        pw.SizedBox(height: 2),
+                        pw.Text(
+                          'المحاسب',
+                          textAlign: pw.TextAlign.center,
+                          style: pw.TextStyle(font: bold, fontSize: 9.5),
+                        ),
+                        pw.Directionality(
+                          textDirection: pw.TextDirection.ltr,
+                          child: pw.Text(
+                            '+967774190040',
+                            textAlign: pw.TextAlign.center,
+                            style: const pw.TextStyle(
+                              fontSize: 7.5,
+                              color: PdfColors.grey800,
+                            ),
+                          ),
+                        ),
+                        pw.Text(
+                          'اليمن/صنعاء',
+                          textAlign: pw.TextAlign.center,
                           style: const pw.TextStyle(
-                            fontSize: 10,
+                            fontSize: 7.5,
                             color: PdfColors.grey700,
                           ),
                         ),
-                    ],
+                      ],
+                    ),
                   ),
-                  pw.Column(
-                    crossAxisAlignment: pw.CrossAxisAlignment.end,
-                    children: [
-                      pw.Text(
-                        'كشف حساب تفصيلي',
-                        style: pw.TextStyle(
-                          font: bold,
-                          fontSize: 14,
-                          color: PdfColors.blue900,
+                  pw.Expanded(
+                    flex: 3,
+                    child: pw.Column(
+                      crossAxisAlignment: pw.CrossAxisAlignment.end,
+                      children: [
+                        pw.Text(
+                          'كشف حساب تفصيلي',
+                          style: pw.TextStyle(
+                            font: bold,
+                            fontSize: 14,
+                            color: PdfColors.blue900,
+                          ),
                         ),
-                      ),
-                      pw.Text(
-                        'تاريخ الإصدار: ${Fmt.dateTime(DateTime.now())}',
-                        style: const pw.TextStyle(
-                          fontSize: 9.5,
-                          color: PdfColors.grey700,
+                        pw.Text(
+                          PdfFonts.sanitize(
+                            'تاريخ الإصدار: ${Fmt.dateTime(DateTime.now())}',
+                          ),
+                          style: const pw.TextStyle(
+                            fontSize: 9,
+                            color: PdfColors.grey700,
+                          ),
                         ),
-                      ),
-                    ],
+                      ],
+                    ),
                   ),
                 ],
               ),
@@ -914,16 +995,20 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
                   mainAxisAlignment: pw.MainAxisAlignment.spaceBetween,
                   children: [
                     pw.Text(
-                      'الحساب: ${account.name} (${account.kind.label})',
+                      PdfFonts.sanitize(
+                        'الحساب: ${account.name} (${account.kind.label})',
+                      ),
                       style: pw.TextStyle(font: bold, fontSize: 11.5),
                     ),
                     if (account.contactNumber.isNotEmpty)
                       pw.Text(
-                        'الهاتف: ${account.contactNumber}',
+                        PdfFonts.sanitize('الهاتف: ${account.contactNumber}'),
                         style: const pw.TextStyle(fontSize: 10.5),
                       ),
                     pw.Text(
-                      'العملة: ${currency.name} (${currency.symbol})',
+                      PdfFonts.sanitize(
+                        'العملة: ${currency.name} (${currency.symbol})',
+                      ),
                       style: pw.TextStyle(font: bold, fontSize: 10.5),
                     ),
                   ],
@@ -1030,7 +1115,7 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
               'الرصيد',
               'له (دائن)',
               'عليه (مدين)',
-              'البيان / التفاصيل',
+              'البيان والتفاصيل',
               'النوع',
               'التاريخ',
             ],
@@ -1059,17 +1144,14 @@ class _AccountDetailScreenState extends ConsumerState<AccountDetailScreen> {
                   final runBal = txRunningBalance[t] ?? 0.0;
                   final runDir =
                       runBal > 0 ? 'عليه' : (runBal < 0 ? 'له' : '0');
-                  final desc = [
-                    if (t.description.trim().isNotEmpty) t.description.trim(),
-                    if (t.reference.trim().isNotEmpty) '#${t.reference.trim()}',
-                  ].join(' · ');
+                  final desc = cleanStatementDescription(t);
                   return [
                     '${Fmt.money(runBal.abs(), currency.decimal)} ($runDir)',
                     creditStr,
                     debitStr,
-                    desc.isEmpty ? t.type.label : desc,
-                    t.type.label,
-                    Fmt.date(t.date),
+                    desc.isEmpty ? PdfFonts.sanitize(t.type.label) : desc,
+                    PdfFonts.sanitize(t.type.label),
+                    PdfFonts.sanitize(Fmt.date(t.date)),
                   ];
                 })(),
             ],
@@ -1598,15 +1680,17 @@ class _TxTile extends ConsumerWidget {
         ? context.tr('عليه')
         : (balIsCredit ? context.tr('له') : '—');
 
-    final rawDesc = tx.description.trim();
+    final rawDesc = tx.description
+        .trim()
+        .replaceAll(
+          RegExp(r'\s+رقم\s+#?[A-Za-z0-9._-]+', caseSensitive: false),
+          '',
+        )
+        .trim();
     final fallbackTitle = isCashSale
         ? context.tr('فاتورة نقدية مدفوعة')
         : context.tr(tx.type.label);
-    final baseDetail = rawDesc.isNotEmpty ? rawDesc : fallbackTitle;
-    final refSuffix = tx.reference.trim().isNotEmpty
-        ? ' (#${tx.reference.trim().replaceFirst(RegExp(r'^#+'), '')})'
-        : '';
-    final detailsText = '$baseDetail$refSuffix';
+    final detailsText = rawDesc.isNotEmpty ? rawDesc : fallbackTitle;
 
     return Tooltip(
       message: context.tr('خيارات العملية'),

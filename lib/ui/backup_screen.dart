@@ -20,7 +20,6 @@ import '../data/sync/catalog_recovery_service.dart';
 import '../data/sync/google_auth_service.dart';
 import '../data/sync/subscription_guard.dart';
 import '../data/sync/sync_engine.dart';
-import 'profile_dialog.dart';
 import 'trial_ui.dart' show ensureFeatureUnlocked;
 import 'widgets.dart';
 
@@ -110,20 +109,25 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
       final isLocalStandalone = wsMode == 'standalone' &&
           (stAll['cloudWorkspaceProvisioned'] ?? '') != '1' &&
           (stAll['account.email'] ?? '').trim().isEmpty;
-      final settingEmail = ((await repo.getSetting('account.email')) ??
-              (await repo.getSetting('email')) ??
-              (await repo.getSetting('drive.backup_email')) ??
-              '')
-          .trim();
-      final db = await repo.database;
-      final authService = GoogleAuthService(db);
-      var dbUser = await authService.currentUserFromDb();
-      // تفعيل signInSilently() تلقائياً عند فتح شاشة النسخ لاستعادة توكنات Google Drive فوراً
-      final silentUser = await authService.signInSilently();
-      dbUser = silentUser ?? dbUser;
+      final settingEmail = isLocalStandalone
+          ? (stAll['drive.backup_email'] ?? '').trim()
+          : ((stAll['account.email']) ??
+                  (stAll['email']) ??
+                  (stAll['drive.backup_email']) ??
+                  '')
+              .trim();
+      String dbEmail = '';
+      if (!isLocalStandalone) {
+        final db = await repo.database;
+        final authService = GoogleAuthService(db);
+        var dbUser = await authService.currentUserFromDb();
+        final silentUser = await authService.signInSilently();
+        dbUser = silentUser ?? dbUser;
+        dbEmail = dbUser?.email.trim() ?? '';
+      }
       final resolvedEmail = [
         settingEmail,
-        dbUser?.email.trim() ?? '',
+        dbEmail,
       ].firstWhere((e) => e.isNotEmpty && e.contains('@'), orElse: () => '');
       if (resolvedEmail.isNotEmpty) {
         accountEmail = resolvedEmail;
@@ -367,22 +371,23 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
     }
   }
 
-  Future<GoogleAccountInfo?> _ensureGoogleAccount() async {
-    var account = _googleAccount ?? await _drive.restoreSession();
+  Future<GoogleAccountInfo?> _ensureGoogleAccount({
+    bool forcePicker = false,
+  }) async {
+    var account =
+        forcePicker ? null : (_googleAccount ?? await _drive.restoreSession());
     if (account == null) {
       try {
-        final repo = ref.read(repoProvider);
-        final db = await repo.database;
-        await GoogleAuthService(db).signInSilently();
-        account = await _drive.restoreSession();
-      } catch (_) {}
-    }
-    if (account == null && (_accountEmail?.trim().isNotEmpty ?? false)) {
-      try {
-        account = await _drive.signIn();
+        account = await _drive.signIn(forceAccountPicker: forcePicker);
       } catch (_) {}
     }
     if (account != null) {
+      try {
+        final repo = ref.read(repoProvider);
+        if (account.email.trim().isNotEmpty) {
+          await repo.setSetting('drive.backup_email', account.email.trim());
+        }
+      } catch (_) {}
       GoogleDriveBackupInfo? backup;
       String? cloudError;
       try {
@@ -393,8 +398,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
       if (mounted) {
         setState(() {
           _googleAccount = account;
-          if ((_accountEmail == null || _accountEmail!.isEmpty) &&
-              account!.email.trim().isNotEmpty) {
+          if (account!.email.trim().isNotEmpty) {
             _accountEmail = account.email.trim();
           }
           _cloudBackup = backup;
@@ -405,6 +409,35 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
     return account;
   }
 
+  /// اختيار أو تبديل حساب Google Drive مباشرة من نافذة النسخ الاحتياطي
+  /// (يعمل في الاستخدام المحلي المستقل والاستخدام السحابي دون التأثير على نوع الحساب المحلي).
+  Future<void> _selectDriveGoogleAccount() async {
+    setState(() => _busy = true);
+    try {
+      final account = await _ensureGoogleAccount(forcePicker: true);
+      if (account == null) {
+        if (mounted) {
+          showSnack(
+            context,
+            'لم يتم اختيار حساب Google للنسخ الاحتياطي',
+            error: true,
+          );
+        }
+        return;
+      }
+      if (mounted) {
+        showSnack(
+          context,
+          'تم ربط حساب Google Drive للنسخ الاحتياطي (${account.email}) ✅',
+        );
+      }
+    } catch (e) {
+      if (mounted) showSnack(context, '$e', error: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   Future<void> _uploadToGoogle() async {
     setState(() => _busy = true);
     try {
@@ -413,7 +446,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
         if (mounted) {
           showSnack(
             context,
-            'سجّل الدخول من «الإعدادات ← حساب المؤسسة (Google)» أولاً',
+            'يرجى اختيار حساب Google للنسخ الاحتياطي أولاً',
             error: true,
           );
         }
@@ -459,7 +492,7 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
       if (mounted) {
         showSnack(
           context,
-          'سجّل الدخول من «الإعدادات ← حساب المؤسسة (Google)» أولاً',
+          'يرجى اختيار حساب Google للنسخ الاحتياطي أولاً',
           error: true,
         );
       }
@@ -483,12 +516,6 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
     } finally {
       if (mounted) setState(() => _busy = false);
     }
-  }
-
-  /// يفتح نافذة الحساب الموحدة (المدخل الوحيد لتسجيل الدخول بـ Google في التطبيق).
-  Future<void> _openAccountSection() async {
-    await showAccountProfileDialog(context, ref);
-    if (mounted) await _loadCloudState();
   }
 
   Future<void> _shareToDriveDirectly() async {
@@ -747,20 +774,18 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
                 else if (_accountEmail == null) ...[
                   const ListTile(
                     contentPadding: EdgeInsets.zero,
-                    leading: Icon(Icons.manage_accounts_outlined),
-                    title: Text('تسجيل الدخول بـ Google من مكانه الموحّد'),
+                    leading: Icon(Icons.add_to_drive_rounded),
+                    title: Text('اختيار حساب Google للنسخ الاحتياطي على Drive'),
                     subtitle: Text(
-                      'مدخل التسجيل بـ Google واحد فقط في التطبيق: '
-                      'الإعدادات ← «حساب المؤسسة (Google)». سجّل الدخول هناك '
-                      'ليُربط حسابك بمساحة عملك، ثم عد لرفع النسخ واستعادتها.',
+                      'اختر حساب Google مباشرة من هنا لحفظ نسخك الاحتياطية واستعادتها من Google Drive (يعمل مع الاستخدام المحلي المستقل والحساب السحابي).',
                     ),
                   ),
                   SizedBox(
                     width: double.infinity,
                     child: FilledButton.icon(
-                      onPressed: _busy ? null : _openAccountSection,
-                      icon: const Icon(Icons.manage_accounts_outlined),
-                      label: const Text('الانتقال إلى قسم الحساب'),
+                      onPressed: _busy ? null : _selectDriveGoogleAccount,
+                      icon: const Icon(Icons.account_circle_outlined),
+                      label: const Text('اختيار حساب Google للنسخ الاحتياطي'),
                     ),
                   ),
                 ] else ...[
@@ -773,10 +798,15 @@ class _BackupScreenState extends ConsumerState<BackupScreen> {
                       ),
                     ),
                     title: const Text(
-                      'حساب المؤسسة',
+                      'حساب Google Drive للنسخ الاحتياطي',
                       style: TextStyle(fontWeight: FontWeight.w700),
                     ),
                     subtitle: Text(_accountEmail!),
+                    trailing: TextButton.icon(
+                      onPressed: _busy ? null : _selectDriveGoogleAccount,
+                      icon: const Icon(Icons.swap_horiz_rounded, size: 18),
+                      label: const Text('تغيير الحساب'),
+                    ),
                   ),
                   ListTile(
                     contentPadding: EdgeInsets.zero,

@@ -264,7 +264,7 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
     });
     try {
       final repo = ref.read(repoProvider);
-      await CloudJoin.purgeAndIsolateJoiningMember(
+      await CloudJoin.prepareJoiningMemberForRequest(
         repo,
         backendUrl: url,
         targetWorkspaceId: ws,
@@ -484,7 +484,14 @@ class _JoinApprovalScreenState extends ConsumerState<JoinApprovalScreen> {
     final container = ProviderScope.containerOf(context, listen: false);
     try {
       final repo = container.read(repoProvider);
-      // 1) حفظ وتثبيت معرّف المساحة وبيانات العضو محلياً في SQLite وSharedPreferences أولاً
+      // 1) بعد تأكيد موافقة المدير: عزل وتطهير البيانات السابقة قبل تطبيق اللقطة المعتمدة
+      await CloudJoin.purgeAndIsolateJoiningMember(
+        repo,
+        backendUrl: _joinUrl,
+        targetWorkspaceId: _joinWs,
+        preserveAnonymousSession: true,
+      );
+      // 2) حفظ وتثبيت معرّف المساحة وبيانات العضو محلياً في SQLite وSharedPreferences
       await CloudJoin.completeApprovedJoin(
         repo,
         backendUrl: _joinUrl,

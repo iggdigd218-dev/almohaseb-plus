@@ -844,7 +844,9 @@ class SubscriptionGuard {
     return subState;
   }
 
-  /// تسجيل طلب تفعيل / ترخيص جديد مع إرفاق كافة بيانات المنشأة والمسؤول.
+  /// تسجيل طلب تفعيل / ترخيص جديد مع إرفاق كافة بيانات المنشأة والمسؤول،
+  /// وضمان وجود عقدتي `subscription.json` و `meta.json` للمنشأة في السحابة
+  /// ليظهر الحساب فوراً في تطبيق الإدارة (`admin_app`).
   static Future<void> registerLicenseRequest(
     Repo repo, {
     required String backendUrl,
@@ -855,23 +857,37 @@ class SubscriptionGuard {
     required String deviceId,
     required String licenseKey,
   }) async {
+    final wsClean = workspaceId.trim();
+    if (wsClean.isEmpty || wsClean == 'default') {
+      return;
+    }
     final devId = deviceId.isNotEmpty ? deviceId : await ensureDeviceId(repo);
     final key = licenseKey.isNotEmpty ? licenseKey : generateLicenseKey(devId);
     final raw = await hardwareFingerprintRaw() ?? 'fallback:$devId';
     final hwFp = fingerprintHash(raw);
+    final st = await repo.settings();
+    final email = (st['account.email'] ?? st['email'] ?? '').trim().toLowerCase();
+    final acctUid = (st['account.uid'] ?? '').trim();
+    final fp = acctUid.isEmpty ? hwFp : fingerprintHash('uid:$acctUid');
     final trialIdx = '${_trialsRoot(backendUrl)}/$hwFp.json';
-    final reqPath = '${_wsRoot(backendUrl, workspaceId)}/license_request.json';
+    final wsRootUrl = _wsRoot(backendUrl, wsClean);
+    final reqPath = '$wsRootUrl/license_request.json';
+    final wsSubPath = '$wsRootUrl/subscription.json';
+    final wsMetaPath = '$wsRootUrl/meta.json';
     final baseClean = backendUrl.replaceAll(RegExp(r'/+$'), '');
     final devKey = devId.replaceAll(RegExp(r'[.#$\[\]/]'), '_');
+    final nowMs = DateTime.now().millisecondsSinceEpoch;
 
-    final data = {
+    final data = <String, Object?>{
       'clientName': clientName,
       'storeName': storeName,
       'phone': phone,
+      if (email.isNotEmpty) 'owner_email': email,
+      if (email.isNotEmpty) 'email': email,
       'deviceId': devId,
       'licenseKey': key,
       'requested_at': {'.sv': 'timestamp'},
-      'workspace_id': workspaceId,
+      'workspace_id': wsClean,
       'client_name': clientName,
       'store_name': storeName,
       'device_id': devId,
@@ -880,6 +896,64 @@ class SubscriptionGuard {
     try {
       await _putJson(reqPath, data);
     } catch (_) {}
+
+    // ضمان وجود وتحديث عقدة اشتراك المنشأة وميتاداتا المساحة ليراها تطبيق الأدمن فوراً
+    try {
+      final existingSub = await _readJson(wsSubPath);
+      if (existingSub == null) {
+        await _putJson(wsSubPath, {
+          'clientName': clientName,
+          'storeName': storeName,
+          'phone': phone,
+          if (email.isNotEmpty) 'owner_email': email,
+          'deviceId': devId,
+          'licenseKey': key,
+          'expiryDate': 0,
+          'status': 'unactivated',
+          'client_name': clientName,
+          'store_name': storeName,
+          'device_id': devId,
+          'license_key': key,
+          'plan_type': 'enterprise',
+          'max_devices': kDefaultEnterpriseSeats,
+          'created_at': nowMs,
+          'expires_at': 0,
+          'is_active': false,
+          'device_fingerprint': fp,
+          'features': PlanFeatures.individualLocked.toMap(),
+        });
+      } else {
+        await _putJson(wsSubPath, {
+          ...existingSub,
+          'clientName': clientName,
+          'storeName': storeName,
+          'phone': phone,
+          if (email.isNotEmpty) 'owner_email': email,
+          'deviceId': devId,
+          'licenseKey': key,
+          'client_name': clientName,
+          'store_name': storeName,
+          'device_id': devId,
+          'license_key': key,
+        });
+      }
+    } catch (_) {}
+
+    try {
+      final existingMeta = await _readJson(wsMetaPath) ?? const <String, dynamic>{};
+      await _putJson(wsMetaPath, {
+        ...existingMeta,
+        'workspace_id': wsClean,
+        'name': storeName,
+        'business_name': storeName,
+        'owner_name': clientName,
+        'phone': phone,
+        if (email.isNotEmpty) 'owner_email': email,
+        if (acctUid.isNotEmpty) 'owner_uid': acctUid,
+        'updated_at': DateTime.now().toIso8601String(),
+      });
+    } catch (_) {}
+
     try {
       final priorTrial = await _readJson(trialIdx) ?? const <String, dynamic>{};
       final priorWs =
@@ -891,8 +965,8 @@ class SubscriptionGuard {
       // تحت مفتاح مستقل `/trials/${hwFp}_$workspaceId` بالإضافة إلى تحديث `device_index`.
       final targetTrialUrl = (priorActive &&
               priorWs.isNotEmpty &&
-              priorWs != workspaceId)
-          ? '${_trialsRoot(backendUrl)}/${Uri.encodeComponent('${hwFp}_$workspaceId')}.json'
+              priorWs != wsClean)
+          ? '${_trialsRoot(backendUrl)}/${Uri.encodeComponent('${hwFp}_$wsClean')}.json'
           : trialIdx;
       final baseMap = (targetTrialUrl == trialIdx)
           ? priorTrial
@@ -902,28 +976,30 @@ class SubscriptionGuard {
         'clientName': clientName,
         'storeName': storeName,
         'phone': phone,
+        if (email.isNotEmpty) 'owner_email': email,
         'deviceId': devId,
         'licenseKey': key,
         'client_name': clientName,
         'store_name': storeName,
         'device_id': devId,
         'license_key': key,
-        'workspace_id': workspaceId,
-        'requested_at': DateTime.now().millisecondsSinceEpoch,
+        'workspace_id': wsClean,
+        'requested_at': nowMs,
       });
     } catch (_) {}
     try {
       await _putJson(
         '$baseClean/workspaces/_registry/device_index/${Uri.encodeComponent(devKey)}.json',
         {
-          'workspace_id': workspaceId,
-          'workspaceId': workspaceId,
+          'workspace_id': wsClean,
+          'workspaceId': wsClean,
           'device_id': devId,
           'license_key': key,
           'store_name': storeName,
           'client_name': clientName,
           'phone': phone,
-          'updated_at': DateTime.now().millisecondsSinceEpoch,
+          if (email.isNotEmpty) 'owner_email': email,
+          'updated_at': nowMs,
         },
       );
     } catch (_) {}

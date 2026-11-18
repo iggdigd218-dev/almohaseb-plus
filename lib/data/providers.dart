@@ -969,10 +969,12 @@ final googleLinkedProvider = FutureProvider<bool>((ref) async {
   ref.watch(refreshProvider);
   try {
     final repo = ref.read(repoProvider);
-    final email = ((await repo.getSetting('account.email')) ??
-            (await repo.getSetting('email')) ??
-            '')
-        .trim();
+    final st = await repo.settings();
+    final email = ((st['account.email']) ?? (st['email']) ?? '').trim();
+    final isLocalIndividual = (st['account.type'] ?? '') == 'individual' &&
+        (st['cloudWorkspaceProvisioned'] ?? '') != '1' &&
+        email.isEmpty;
+    if (isLocalIndividual) return false;
     if (email.isNotEmpty && email.contains('@')) return true;
     final db = await repo.database;
     final r = await db.query('google_auth', where: 'id = 1', limit: 1);
@@ -1003,6 +1005,10 @@ final drawerPhotoProvider = FutureProvider<String?>((ref) async {
     }
     final local = (st['account.photoPath'] ?? '').trim();
     if (local.isNotEmpty) return local;
+    final isLocalIndividual = (st['account.type'] ?? '') == 'individual' &&
+        (st['cloudWorkspaceProvisioned'] ?? '') != '1' &&
+        ((st['account.email'] ?? st['email'] ?? '').trim().isEmpty);
+    if (isLocalIndividual) return null;
     final db = await repo.database;
     final r = await db.query('google_auth', where: 'id = 1', limit: 1);
     if (r.isEmpty) return null;

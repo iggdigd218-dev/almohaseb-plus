@@ -14,10 +14,15 @@ import '../core/platform_info.dart';
 import '../core/sfx.dart';
 import '../core/theme.dart';
 import '../data/providers.dart';
+import '../data/repository.dart';
 import '../data/sync/cloud_control_service.dart';
 import '../data/sync/device_id.dart';
+import '../data/sync/firebase_auth_service.dart';
+import '../data/sync/google_auth_service.dart';
 import '../data/sync/subscription_guard.dart';
+import '../data/sync/workspace_service.dart';
 import '../data/update_service.dart';
+import 'profile_dialog.dart';
 import 'update_section.dart';
 import 'widgets.dart' show showSnack;
 
@@ -933,14 +938,25 @@ class _PurchaseScreenState extends ConsumerState<PurchaseScreen> {
     final devName = ref.read(ownDeviceNameProvider).valueOrNull?.trim() ?? '';
     final st = ref.read(settingsProvider).valueOrNull ?? const {};
 
-    _clientNameCtrl = TextEditingController(
-      text: devName.isNotEmpty
-          ? devName
-          : (user?.name ?? (st['account.name'] ?? '')).trim(),
-    );
-    _storeNameCtrl = TextEditingController(
-      text: (st['businessName'] ?? '').trim(),
-    );
+    final rawClient = (devName.isNotEmpty
+            ? devName
+            : (st['profile.owner_name'] ??
+                st['account.name'] ??
+                user?.name ??
+                ''))
+        .trim();
+    final initialClient = (rawClient == 'المدير' ||
+            rawClient == 'المالك' ||
+            rawClient == 'مدير النظام')
+        ? ''
+        : rawClient;
+
+    final rawStore = (st['businessName'] ?? '').trim();
+    final initialStore =
+        (rawStore == 'متجري' || rawStore == 'منشأتي') ? '' : rawStore;
+
+    _clientNameCtrl = TextEditingController(text: initialClient);
+    _storeNameCtrl = TextEditingController(text: initialStore);
     _phoneCtrl = TextEditingController(
       text: (st['phone'] ?? st['whatsapp'] ?? '').trim(),
     );
@@ -971,6 +987,29 @@ class _PurchaseScreenState extends ConsumerState<PurchaseScreen> {
     }
   }
 
+  Future<String> _resolveRegisteredEmail(Repo repo) async {
+    try {
+      final st = await repo.settings();
+      var em = (st['account.email'] ?? st['email'] ?? '').trim().toLowerCase();
+      if (em.isNotEmpty && em.contains('@')) return em;
+      em = (await FirebaseAuthRest.savedEmail(repo)).trim().toLowerCase();
+      if (em.isNotEmpty && em.contains('@')) {
+        await repo.setSetting('account.email', em);
+        await repo.setSetting('email', em);
+        return em;
+      }
+      final db = await repo.database;
+      final gu = await GoogleAuthService(db).currentUserFromDb();
+      if (gu != null && gu.email.trim().contains('@')) {
+        em = gu.email.trim().toLowerCase();
+        await repo.setSetting('account.email', em);
+        await repo.setSetting('email', em);
+        return em;
+      }
+    } catch (_) {}
+    return '';
+  }
+
   @override
   void dispose() {
     _clientNameCtrl.dispose();
@@ -980,7 +1019,7 @@ class _PurchaseScreenState extends ConsumerState<PurchaseScreen> {
   }
 
   /// إرسال طلب الترخيص: التحقق الصارم من الحقول الإجبارية (الاسم، المنشأة، الهاتف)
-  /// ومنع المتابعة أو إرسال المعرف بدون ملئها، مع إظهار أخطاء واضحة باللون الأحمر.
+  /// واشتراط التسجيل بالبريد الإلكتروني أولاً لضمان وجود مساحة عمل سحابية في تطبيق الإدارة.
   Future<void> _sendActivationRequest() async {
     setState(() => _submitted = true);
     Sfx.click();
@@ -1002,47 +1041,95 @@ class _PurchaseScreenState extends ConsumerState<PurchaseScreen> {
 
     try {
       final repo = ref.read(repoProvider);
-      // حفظ بيانات المشترك محلياً في الإعدادات
-      await repo.setSetting('businessName', storeName);
-      await repo.setSetting('phone', phone);
-      await repo.setSetting('whatsapp', phone);
-      if (clientName.isNotEmpty) {
-        await repo.renameSelfDevice(clientName);
+      final cachedSt = ref.read(settingsProvider).valueOrNull;
+      final cachedWsMode = ref.read(workspaceModeProvider).valueOrNull;
+      final cachedGoogleLinked =
+          ref.read(googleLinkedProvider).valueOrNull ?? false;
+
+      final String wsMode = cachedWsMode ?? await repo.workspaceMode();
+      String email =
+          (cachedSt?['account.email'] ?? cachedSt?['email'] ?? '')
+              .trim()
+              .toLowerCase();
+      if (email.isEmpty && cachedSt == null) {
+        email = await _resolveRegisteredEmail(repo);
       }
-      bump(ref);
+
+      if (wsMode != 'member' &&
+          !cachedGoogleLinked &&
+          (email.isEmpty || !email.contains('@'))) {
+        Sfx.warning();
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'لا يمكن إرسال طلب الاشتراك قبل التسجيل بالبريد الإلكتروني. يرجى إكمال التسجيل بالبريد الإلكتروني أولاً لتظهر منشأتك لدى الإدارة.',
+              ),
+              backgroundColor: Color(0xFFDC2626),
+              duration: Duration(seconds: 5),
+            ),
+          );
+        }
+        return;
+      }
 
       final devId =
           _deviceId.isNotEmpty ? _deviceId : await ensureDeviceId(repo);
       final licenseKey = _licenseKey.isNotEmpty
           ? _licenseKey
           : generateLicenseKey(devId);
-      final raw = await hardwareFingerprintRaw() ?? 'fallback:$devId';
+      final syncOverrideFp = debugHardwareFingerprintOverride?.call();
+      final raw = syncOverrideFp ??
+          (await hardwareFingerprintRaw() ?? 'fallback:$devId');
       final fp = SubscriptionGuard.fingerprintHash(raw);
+      final cachedWs = (cachedSt?['sync.workspaceId'] ?? '').trim();
 
-      // تسجيل الطلب سحابياً إن وُجد اتصال
-      try {
-        final st = await repo.settings();
-        final url = effectiveBackendUrl(st['cloudBackendUrl']);
-        final ws = await SubscriptionGuard.workspaceIdFor(repo);
-        if (url.isNotEmpty && ws.isNotEmpty) {
-          await SubscriptionGuard.registerLicenseRequest(
-            repo,
-            backendUrl: url,
-            workspaceId: ws,
-            clientName: clientName,
-            storeName: storeName,
-            phone: phone,
-            deviceId: devId,
-            licenseKey: licenseKey,
-          );
-        }
-      } catch (_) {}
+      // حفظ البيانات وتسجيل الطلب في الخلفية أو تسلسلياً
+      unawaited(() async {
+        try {
+          await repo.setSetting('businessName', storeName);
+          await repo.setSetting('phone', phone);
+          await repo.setSetting('whatsapp', phone);
+          await repo.setSetting('account.name', clientName);
+          await repo.setSetting('profile.owner_name', clientName);
+          if (clientName.isNotEmpty) {
+            await repo.renameSelfDevice(clientName);
+          }
+          var ws = await SubscriptionGuard.workspaceIdFor(repo);
+          if (ws.isEmpty || ws == 'default') {
+            final db = await repo.database;
+            ws = await ensureWorkspace(db, repo: repo);
+          }
+          if (email.isNotEmpty && ws.isNotEmpty && ws != 'default') {
+            await repo.setSetting('cloudWorkspaceProvisioned', '1');
+            await repo.setSetting('account.type', 'enterprise');
+          }
+          final st = await repo.settings();
+          final url = effectiveBackendUrl(st['cloudBackendUrl']);
+          if (url.isNotEmpty && ws.isNotEmpty && ws != 'default') {
+            await SubscriptionGuard.registerLicenseRequest(
+              repo,
+              backendUrl: url,
+              workspaceId: ws,
+              clientName: clientName,
+              storeName: storeName,
+              phone: phone,
+              deviceId: devId,
+              licenseKey: licenseKey,
+            );
+          }
+        } catch (_) {}
+      }());
 
+      final wsForMsg =
+          (cachedWs.isNotEmpty && cachedWs != 'default') ? cachedWs : 'WS';
       final msg =
           'مرحباً، أود طلب ترخيص وتفعيل اشتراك تطبيق المحاسب:\n'
           '🏢 اسم المنشأة: $storeName\n'
           '👤 اسم العميل / المسؤول: $clientName\n'
+          '${email.isNotEmpty ? '📧 البريد الإلكتروني: $email\n' : ''}'
           '📱 رقم الهاتف: $phone\n'
+          '🆔 معرف المنشأة: $wsForMsg\n'
           '🔑 معرف الجهاز (Device ID): $devId\n'
           '⚡ كود الترخيص: $licenseKey\n'
           'بصمة التفعيل: $fp';
@@ -1063,9 +1150,20 @@ class _PurchaseScreenState extends ConsumerState<PurchaseScreen> {
     Sfx.click();
     try {
       final repo = ref.read(repoProvider);
+      final wsMode = await repo.workspaceMode();
+      final email = await _resolveRegisteredEmail(repo);
+      if (wsMode != 'member' && (email.isEmpty || !email.contains('@'))) {
+        Sfx.warning();
+        if (mounted) {
+          showSnack(
+            context,
+            'يرجى إكمال التسجيل بالبريد الإلكتروني أولاً قبل تفعيل الاشتراك.',
+            error: true,
+          );
+        }
+        return;
+      }
       final st = await repo.settings();
-      // (تفعيل الفردي بنقرة) لا نشترط ضبط المزامنة يدوياً: المستخدم
-      // الفردي يتحقق عبر الرابط الرسمي المضمّن برمجياً مباشرة.
       final url = effectiveBackendUrl(st['cloudBackendUrl']);
       if (url.isEmpty) {
         if (mounted) {
@@ -1075,10 +1173,17 @@ class _PurchaseScreenState extends ConsumerState<PurchaseScreen> {
         }
         return;
       }
-      // (إصلاح 2026-09-23) التحقق يقرأ عقدة المساحة المرتبطة فعلاً لا أول
-      // صف: عضو مجموعة كان يتحقق من اشتراكه الشخصي فيبدو التفعيل كأنه
-      // لم يصل («لم يُرصد تفعيل بعد») والمدير فعّله على مساحة المجموعة.
       final ws = await SubscriptionGuard.workspaceIdFor(repo);
+      if (ws.isEmpty || ws == 'default') {
+        if (mounted) {
+          showSnack(
+            context,
+            'يرجى إكمال التسجيل بالبريد الإلكتروني أولاً لإنشاء مساحة عمل المنشأة.',
+            error: true,
+          );
+        }
+        return;
+      }
       SubscriptionGuard.debugReset(); // تجاوز الكاش — قراءة حقيقية الآن.
       final sub = await SubscriptionGuard.check(repo,
           backendUrl: url, workspaceId: ws, force: true);
@@ -1173,6 +1278,83 @@ class _PurchaseScreenState extends ConsumerState<PurchaseScreen> {
             ),
             const SizedBox(height: 16),
 
+            // تنبيه إلزامية التسجيل بالبريد الإلكتروني قبل طلب الاشتراك
+            Consumer(
+              builder: (ctx, rref, _) {
+                final st =
+                    rref.watch(settingsProvider).valueOrNull ?? const {};
+                final wsMode =
+                    rref.watch(workspaceModeProvider).valueOrNull ??
+                        'standalone';
+                final googleLinked =
+                    rref.watch(googleLinkedProvider).valueOrNull ?? false;
+                final email =
+                    (st['account.email'] ?? st['email'] ?? '').trim();
+                final hasEmail =
+                    wsMode == 'member' || googleLinked || email.contains('@');
+                if (hasEmail) return const SizedBox.shrink();
+                return Container(
+                  margin: const EdgeInsets.only(bottom: 14),
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFFEF2F2),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: const Color(0xFFDC2626).withValues(alpha: .35),
+                      width: 1.2,
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Row(
+                        children: [
+                          Icon(Icons.mark_email_unread_outlined,
+                              color: Color(0xFFDC2626), size: 20),
+                          SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              'يجب التسجيل بالبريد الإلكتروني أولاً قبل طلب الاشتراك',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w800,
+                                color: Color(0xFFDC2626),
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 6),
+                      const Text(
+                        'حسابك يعمل حالياً بالوضع المحلي بدون بريد إلكتروني، لذلك لا توجد له مساحة عمل في نظام التراخيص. يرجى ربط بريدك الإلكتروني أولاً لتظهر منشأتك لدى الإدارة ويتم تفعيل اشتراكك فوراً.',
+                        style: TextStyle(
+                          fontSize: 11.5,
+                          height: 1.5,
+                          color: Color(0xFF7F1D1D),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      FilledButton.icon(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: const Color(0xFFDC2626),
+                          padding: const EdgeInsets.symmetric(vertical: 10),
+                        ),
+                        onPressed: () async {
+                          await showAccountProfileDialog(context, ref);
+                          if (mounted) setState(() {});
+                        },
+                        icon: const Icon(Icons.login_rounded, size: 18),
+                        label: const Text(
+                          'إكمال التسجيل بالبريد الإلكتروني الآن',
+                          style: TextStyle(fontWeight: FontWeight.w800),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+
             // كرت البيانات الإجبارية
             Card(
               elevation: 0,
@@ -1246,8 +1428,14 @@ class _PurchaseScreenState extends ConsumerState<PurchaseScreen> {
                         isDense: true,
                       ),
                       validator: (val) {
-                        if (val == null || val.trim().isEmpty) {
+                        final t = val?.trim() ?? '';
+                        if (t.isEmpty) {
                           return 'يرجى إدخال اسم المنشأة والمستخدم ورقم الهاتف للمتابعة';
+                        }
+                        if (t == 'المدير' ||
+                            t == 'المالك' ||
+                            t == 'مدير النظام') {
+                          return 'يرجى إدخال اسم المسؤول الفعلي بدلاً من ($t)';
                         }
                         return null;
                       },
@@ -1268,8 +1456,12 @@ class _PurchaseScreenState extends ConsumerState<PurchaseScreen> {
                         isDense: true,
                       ),
                       validator: (val) {
-                        if (val == null || val.trim().isEmpty) {
+                        final t = val?.trim() ?? '';
+                        if (t.isEmpty) {
                           return 'يرجى إدخال اسم المنشأة والمستخدم ورقم الهاتف للمتابعة';
+                        }
+                        if (t == 'متجري' || t == 'منشأتي') {
+                          return 'يرجى إدخال الاسم التجاري الفعلي للمنشأة بدلاً من ($t)';
                         }
                         return null;
                       },
@@ -1767,13 +1959,29 @@ Future<void> showVoucherRedeemDialog(BuildContext context) async {
                     try {
                       final container = ProviderScope.containerOf(context);
                       final repo = container.read(repoProvider);
+                      final wsMode = await repo.workspaceMode();
                       final st = await repo.settings();
-                      final backendUrl = effectiveBackendUrl((st['cloudBackendUrl'] ?? '').toString());
+                      final email =
+                          (st['account.email'] ?? st['email'] ?? '').trim();
+                      if (wsMode != 'member' &&
+                          (email.isEmpty || !email.contains('@'))) {
+                        throw StateError(
+                          'يرجى إكمال التسجيل بالبريد الإلكتروني أولاً قبل شحن كود الترخيص.',
+                        );
+                      }
+                      final backendUrl = effectiveBackendUrl(
+                          (st['cloudBackendUrl'] ?? '').toString());
                       if (backendUrl.isEmpty) {
                         throw StateError('يرجى تفعيل المزامنة السحابية أولاً');
                       }
                       final wsId = await SubscriptionGuard.workspaceIdFor(repo);
-                      final voucher = await CloudControlService.instance.redeemVoucherKey(
+                      if (wsId.isEmpty || wsId == 'default') {
+                        throw StateError(
+                          'يرجى إكمال التسجيل بالبريد الإلكتروني أولاً لإنشاء مساحة عمل المنشأة.',
+                        );
+                      }
+                      final voucher =
+                          await CloudControlService.instance.redeemVoucherKey(
                         repo,
                         backendUrl: backendUrl,
                         workspaceId: wsId,

@@ -29,6 +29,7 @@ import 'account_section.dart';
 import 'create_workspace_screen.dart';
 import 'join_approval_flow.dart';
 import 'logout_flow.dart';
+import 'onboarding_screen.dart';
 import 'qr_pair_scanner.dart';
 import 'widgets.dart';
 
@@ -58,7 +59,6 @@ class _ProfileDialogState extends ConsumerState<_ProfileDialog> {
 
   bool _saving = false;
   bool _logoBusy = false;
-  bool _googleBusy = false;
   bool _joinBusy = false;
   bool _showJoinInput = false;
   String _linkedEmail = '';
@@ -109,6 +109,16 @@ class _ProfileDialogState extends ConsumerState<_ProfileDialog> {
   Future<void> _loadGoogleState() async {
     try {
       final repo = ref.read(repoProvider);
+      final st = await repo.settings();
+      final savedAccountEmail =
+          ((st['account.email']) ?? (st['email']) ?? '').trim();
+      final isLocalIndividual = (st['account.type'] ?? '') == 'individual' &&
+          (st['cloudWorkspaceProvisioned'] ?? '') != '1' &&
+          savedAccountEmail.isEmpty;
+      if (isLocalIndividual) {
+        if (mounted) setState(() => _linkedEmail = '');
+        return;
+      }
       final em = await FirebaseAuthRest.savedEmail(repo);
       if (em.isNotEmpty) {
         if (mounted) setState(() => _linkedEmail = em);
@@ -122,6 +132,29 @@ class _ProfileDialogState extends ConsumerState<_ProfileDialog> {
     } catch (_) {}
   }
 
+  void _openMainLoginScreen() {
+    Sfx.click();
+    Navigator.of(context).pop();
+    rootNavigatorKey.currentState?.push(
+      MaterialPageRoute<void>(
+        builder: (_) => const OnboardingScreen(),
+      ),
+    );
+  }
+
+  void _openCreateCloudAccountScreen() {
+    Sfx.click();
+    final typedEmail = _emailCtrl.text.trim().toLowerCase();
+    Navigator.of(context).pop();
+    rootNavigatorKey.currentState?.push(
+      MaterialPageRoute<void>(
+        builder: (_) => CreateWorkspaceScreen(
+          ownerEmail: typedEmail.contains('@') ? typedEmail : '',
+        ),
+      ),
+    );
+  }
+
   @override
   void dispose() {
     _userNameCtrl.dispose();
@@ -132,190 +165,6 @@ class _ProfileDialogState extends ConsumerState<_ProfileDialog> {
     _addressCtrl.dispose();
     _joinPinCtrl.dispose();
     super.dispose();
-  }
-
-  Future<void> _signInWithGoogle() async {
-    if (_googleBusy) return;
-    final repo = ref.read(repoProvider);
-    if (await repo.workspaceMode() == 'member') {
-      if (mounted) {
-        showSnack(
-          context,
-          'هذا الجهاز مرتبط كعضو في منشأة قائمة — لا يُسمح بتسجيل حساب Google أثناء الارتباط.',
-          error: true,
-        );
-      }
-      return;
-    }
-    setState(() => _googleBusy = true);
-    Sfx.click();
-    try {
-      final db = await repo.database;
-      final r = await GoogleAuthService(db).signIn();
-      final gu = r.user;
-      if (gu == null) {
-        Sfx.error();
-        if (mounted) {
-          showSnack(context, r.error ?? 'تعذّر تسجيل الدخول بـ Google',
-              error: true);
-        }
-        return;
-      }
-
-      FirebaseAccount? account;
-      try {
-        account = await FirebaseAuthRest.signInWithGoogleIdToken(
-          gu.idToken ?? '',
-          accessToken: gu.accessToken,
-          email: gu.email,
-          googleId: gu.id,
-          displayName: gu.displayName ?? '',
-        ).timeout(const Duration(seconds: 15), onTimeout: () => null);
-      } catch (_) {
-        account = null;
-      }
-      account ??= FirebaseAccount(
-        uid: gu.id.isNotEmpty
-            ? gu.id
-            : 'email:${AccountWorkspace.emailToKey(gu.email)}',
-        email: gu.email.trim().toLowerCase(),
-        displayName: gu.displayName ?? '',
-      );
-
-      if ((gu.photoUrl ?? '').isNotEmpty) {
-        await repo.setSetting('account.photoPath', gu.photoUrl!);
-      }
-
-      final st = await repo.settings();
-      final url = effectiveBackendUrl(st['cloudBackendUrl']);
-      final outcome = await AccountWorkspace.linkAccountOnly(
-        repo,
-        backendUrl: url,
-        account: account,
-      ).timeout(
-        const Duration(seconds: 35),
-        onTimeout: () => AccountLinkOutcome.migrated,
-      );
-
-      await repo.setSetting(Repo.accountEmailKey, gu.email);
-      await repo.setSetting('email', gu.email);
-      await repo.setSetting('account.type', 'enterprise');
-
-      final activeDb = await repo.database;
-      final activeWsId = await ensureWorkspace(activeDb, repo: repo);
-      await linkWorkspaceToGoogle(
-        activeDb,
-        workspaceId: activeWsId,
-        googleId: gu.id,
-        email: gu.email,
-        name: gu.displayName ?? '',
-      );
-
-      // ضمان ترقية مالك الجهاز فوراً إلى مدير النظام بصلاحيات كاملة
-      final curMode = await repo.workspaceMode();
-      if (curMode != 'member') {
-        await repo.checkAndAutoPromoteManager();
-        await repo.ensureSelfPermissionRow(roleCode: 'admin');
-        unawaited(repo.restoreManagerOwnership());
-      }
-
-      // تحديث حقول النافذة بالبيانات المسترجعة من المساحة السحابية أو تصفيرها للمساحة الجديدة
-      final refreshedSt = await repo.settings();
-      if (outcome == AccountLinkOutcome.isolatedNewWorkspace) {
-        _bizNameCtrl.clear();
-        _bizActivityCtrl.clear();
-        _phoneCtrl.clear();
-        _addressCtrl.clear();
-      } else {
-        if ((refreshedSt['businessName'] ?? '').trim().isNotEmpty) {
-          _bizNameCtrl.text = refreshedSt['businessName']!.trim();
-        }
-        if ((refreshedSt['businessActivity'] ?? '').trim().isNotEmpty) {
-          _bizActivityCtrl.text = refreshedSt['businessActivity']!.trim();
-        }
-        if ((refreshedSt['phone'] ?? refreshedSt['whatsapp'] ?? '')
-            .trim()
-            .isNotEmpty) {
-          _phoneCtrl.text =
-              (refreshedSt['phone'] ?? refreshedSt['whatsapp'] ?? '').trim();
-        }
-        if ((refreshedSt['address'] ?? '').trim().isNotEmpty) {
-          _addressCtrl.text = refreshedSt['address']!.trim();
-        }
-      }
-      final customSavedName = (refreshedSt['profile.owner_name'] ??
-              refreshedSt['account.name'] ??
-              refreshedSt['sync.deviceName'] ??
-              '')
-          .trim();
-      final hasCustomSavedName = customSavedName.isNotEmpty &&
-          isCustomDeviceName(customSavedName);
-      if (hasCustomSavedName && _userNameCtrl.text.trim().isEmpty) {
-        _userNameCtrl.text = customSavedName;
-      } else if (!hasCustomSavedName &&
-          (gu.displayName ?? '').trim().isNotEmpty &&
-          _userNameCtrl.text.trim().isEmpty) {
-        _userNameCtrl.text = gu.displayName!.trim();
-        await repo.renameSelfDevice(gu.displayName!.trim());
-      }
-      _emailCtrl.text = gu.email;
-      if (!mounted) return;
-
-      ref.invalidate(googleLinkedProvider);
-      ref.invalidate(drawerPhotoProvider);
-      ref.invalidate(settingsProvider);
-      ref.invalidate(currentUserProvider);
-      ref.invalidate(deviceRoleProvider);
-      ref.invalidate(effectivePermissionsProvider);
-      ref.invalidate(canManageGroupProvider);
-      ref.invalidate(isOwnerProvider);
-      ref.invalidate(workspaceModeProvider);
-      ref.invalidate(subscriptionProvider);
-      bump(ref);
-
-      setState(() => _linkedEmail = gu.email);
-      Sfx.success();
-
-      switch (outcome) {
-        case AccountLinkOutcome.switched:
-          showSnack(context,
-              '✅ تم استرداد مساحة عملك المرتبطة بحساب Google وتفعيل المزامنة');
-          break;
-        case AccountLinkOutcome.isolatedNewWorkspace:
-          showSnack(context,
-              '✅ تم عزل بيانات المنشأة السابقة — يرجى إكمال بيانات منشأتك الجديدة');
-          final accForSetup = account;
-          Navigator.of(context).pop();
-          rootNavigatorKey.currentState?.pushAndRemoveUntil(
-            MaterialPageRoute(
-              builder: (_) => CreateWorkspaceScreen(
-                ownerEmail: accForSetup.email,
-                ownerUid: accForSetup.uid,
-                ownerDisplayName: accForSetup.displayName,
-              ),
-            ),
-            (route) => false,
-          );
-          return;
-        case AccountLinkOutcome.memberUntouched:
-          showSnack(context, '✅ تم ربط حساب Google مع الحفاظ على عضوية مجموعتك');
-          break;
-        default:
-          showSnack(context,
-              '✅ تم تسجيل الدخول بـ Google وتفعيل المزامنة السحابية والمجموعة');
-          break;
-      }
-
-      unawaited(provisionCloudAfterSignIn(repo, ref, url));
-    } catch (e, st) {
-      debugPrint('Unified Google Sign-In error: $e\n$st');
-      Sfx.error();
-      if (mounted) {
-        showSnack(context, 'تعذّر إتمام تسجيل الدخول: $e', error: true);
-      }
-    } finally {
-      if (mounted) setState(() => _googleBusy = false);
-    }
   }
 
   Future<void> _submitMemberJoin({PairingData? qrData}) async {
@@ -443,7 +292,7 @@ class _ProfileDialogState extends ConsumerState<_ProfileDialog> {
     setState(() => _joinBusy = true);
     Sfx.click();
     try {
-      await CloudJoin.purgeAndIsolateJoiningMember(
+      await CloudJoin.prepareJoiningMemberForRequest(
         repo,
         backendUrl: backendUrl,
         targetWorkspaceId: targetWs,
@@ -592,9 +441,48 @@ class _ProfileDialogState extends ConsumerState<_ProfileDialog> {
         final phoneVal = _phoneCtrl.text.trim();
         final st = await repo.settings();
         final url = effectiveBackendUrl(st['cloudBackendUrl']);
-        // (الملاحظة 3) قفل تعديل البريد الإلكتروني برمجياً من ملف تعريف المنشأة
-        final lockedEmail =
+        var lockedEmail =
             (st['account.email'] ?? st['email'] ?? _linkedEmail).trim();
+        final manualEmail = _emailCtrl.text.trim().toLowerCase();
+        if (lockedEmail.isEmpty && manualEmail.isNotEmpty) {
+          if (!manualEmail.contains('@') || !manualEmail.contains('.')) {
+            if (mounted) {
+              setState(() => _saving = false);
+              showSnack(
+                context,
+                'يرجى إدخال بريد إلكتروني صحيح لاعتماد الحساب',
+                error: true,
+              );
+            }
+            return;
+          }
+          lockedEmail = manualEmail;
+          final manualUid =
+              'email:${AccountWorkspace.emailToKey(lockedEmail)}';
+          await repo.setSetting('account.email', lockedEmail);
+          await repo.setSetting('email', lockedEmail);
+          await repo.setSetting('account.type', 'enterprise');
+          await FirebaseAuthRest.saveSession(
+            repo,
+            FirebaseAccount(
+              uid: manualUid,
+              email: lockedEmail,
+              displayName: _userNameCtrl.text.trim(),
+            ),
+          );
+          try {
+            final db = await repo.database;
+            final wsId = await ensureWorkspace(db, repo: repo);
+            await linkWorkspaceToGoogle(
+              db,
+              workspaceId: wsId,
+              googleId: manualUid,
+              email: lockedEmail,
+              name: _userNameCtrl.text.trim(),
+            );
+          } catch (_) {}
+          if (mounted) setState(() => _linkedEmail = lockedEmail);
+        }
 
         await repo.setSyncedSetting('phone', phoneVal);
         await repo.setSyncedSetting('whatsapp', phoneVal);
@@ -607,6 +495,7 @@ class _ProfileDialogState extends ConsumerState<_ProfileDialog> {
         }
         if (lockedEmail.isNotEmpty) {
           await repo.checkAndAutoPromoteManager();
+          await repo.ensureSelfPermissionRow(roleCode: 'admin');
         }
         if (url.isNotEmpty) {
           final isComplete =
@@ -615,6 +504,16 @@ class _ProfileDialogState extends ConsumerState<_ProfileDialog> {
             await repo.setSetting('cloudWorkspaceProvisioned', '1');
             unawaited(() async {
               try {
+                if (lockedEmail.isNotEmpty) {
+                  final activeWs = await repo.activeWorkspaceId();
+                  await AccountWorkspace.bind(
+                    backendUrl: url,
+                    uid: 'email:${AccountWorkspace.emailToKey(lockedEmail)}',
+                    workspaceId: activeWs,
+                    email: lockedEmail,
+                    phone: phoneVal,
+                  );
+                }
                 await AccountWorkspace.syncWorkspaceMetaToCloud(
                   repo,
                   backendUrl: url,
@@ -624,6 +523,9 @@ class _ProfileDialogState extends ConsumerState<_ProfileDialog> {
             }());
           }
         }
+        ref.invalidate(googleLinkedProvider);
+        ref.invalidate(settingsProvider);
+        ref.invalidate(workspaceModeProvider);
       }
 
       if (!mounted) return;
@@ -751,64 +653,86 @@ class _ProfileDialogState extends ConsumerState<_ProfileDialog> {
                             crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
                               Text(
-                                googleLinked
-                                    ? 'متصل بحساب Google (المزامنة السحابية مفعّلة)'
-                                    : 'تسجيل الدخول بحساب Google',
-                                style: const TextStyle(
-                                  fontWeight: FontWeight.w800,
-                                  fontSize: 13,
+                                  googleLinked
+                                      ? 'متصل بحساب سحابي معتمد (المزامنة السحابية مفعّلة)'
+                                      : 'الاستخدام المحلي المستقل — التحويل لحساب سحابي',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 13,
+                                  ),
                                 ),
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                googleLinked
-                                    ? (_linkedEmail.isNotEmpty
-                                        ? _linkedEmail
-                                        : _emailCtrl.text)
-                                    : 'سجّل الدخول لتفعيل المزامنة السحابية الفورية، إدارة المجموعة، واسترجاع بياناتك بأمان.',
-                                style: TextStyle(
-                                  fontSize: 11.5,
-                                  color: AppColors.text2Of(context),
+                                const SizedBox(height: 2),
+                                Text(
+                                  googleLinked
+                                      ? (_linkedEmail.isNotEmpty
+                                          ? _linkedEmail
+                                          : _emailCtrl.text)
+                                      : 'لا يُستخدم حساب Google داخل الوضع المستقل. للتحويل إلى حساب غير محلي (سحابي)، انتقل إلى صفحة تسجيل الدخول الأساسية أو إنشاء حساب جديد.',
+                                  style: TextStyle(
+                                    fontSize: 11.5,
+                                    color: AppColors.text2Of(context),
+                                  ),
                                 ),
-                              ),
-                            ],
+                              ],
+                            ),
                           ),
+                        ],
+                      ),
+                      if (!googleLinked) ...[
+                        const SizedBox(height: 10),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: FilledButton.icon(
+                                style: FilledButton.styleFrom(
+                                  backgroundColor: const Color(0xFF0284C7),
+                                  foregroundColor: Colors.white,
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 10),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                ),
+                                onPressed: _openMainLoginScreen,
+                                icon: const Icon(Icons.login_rounded, size: 18),
+                                label: const Text(
+                                  'صفحة تسجيل الدخول',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 12.5,
+                                  ),
+                                ),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                style: OutlinedButton.styleFrom(
+                                  padding:
+                                      const EdgeInsets.symmetric(vertical: 10),
+                                  shape: RoundedRectangleBorder(
+                                    borderRadius: BorderRadius.circular(10),
+                                  ),
+                                ),
+                                onPressed: _openCreateCloudAccountScreen,
+                                icon: const Icon(
+                                    Icons.add_business_rounded,
+                                    size: 18),
+                                label: const Text(
+                                  'إنشاء حساب جديد',
+                                  style: TextStyle(
+                                    fontWeight: FontWeight.w800,
+                                    fontSize: 12.5,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ],
-                    ),
-                    if (!googleLinked) ...[
-                      const SizedBox(height: 10),
-                      FilledButton.icon(
-                        style: FilledButton.styleFrom(
-                          backgroundColor: const Color(0xFF0284C7),
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 10),
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(10),
-                          ),
-                        ),
-                        onPressed: _googleBusy ? null : _signInWithGoogle,
-                        icon: _googleBusy
-                            ? const SizedBox(
-                                width: 16,
-                                height: 16,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: Colors.white,
-                                ),
-                              )
-                            : const Icon(Icons.login_rounded, size: 18),
-                        label: Text(
-                          _googleBusy
-                              ? 'جارٍ الاتصال بحساب Google…'
-                              : 'تسجيل الدخول بحساب Google',
-                          style: const TextStyle(fontWeight: FontWeight.w800),
-                        ),
-                      ),
                     ],
-                  ],
+                  ),
                 ),
-              ),
 
               // ══════════ 2) حالة دور الجهاز (المالك/المدير، العضو، أو الانضمام لمجموعة) ══════════
               if ((isOwner || wsMode == 'host') && googleLinked) ...[
@@ -1050,7 +974,7 @@ class _ProfileDialogState extends ConsumerState<_ProfileDialog> {
                 label: 'البريد الإلكتروني',
                 icon: Icons.alternate_email,
                 keyboard: TextInputType.emailAddress,
-                enabled: false,
+                enabled: isOwner && !googleLinked,
               ),
               const SizedBox(height: 10),
               _field(
