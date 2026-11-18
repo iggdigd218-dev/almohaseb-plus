@@ -1,10 +1,10 @@
 {
-  "version": "3.98.61+376",
+  "version": "3.98.62+377",
   "minSupported": "3.13.0",
-  "sha256": "f69305a7e6a3d5fdc85f18409e891a89a159f97ad65738d99070bdb25c41ce7a",
+  "sha256": "441ad482b4cd6c25926eab5d3f3fb523a125ba74b35864e9a153d759504ddb45",
   "sha256Variants": {
-    "arm64": "f69305a7e6a3d5fdc85f18409e891a89a159f97ad65738d99070bdb25c41ce7a",
-    "armv7": "993b3770df98770054e2daae27ec3228ed715b729b7dce6ded67f8e8db009dfe"
+    "arm64": "441ad482b4cd6c25926eab5d3f3fb523a125ba74b35864e9a153d759504ddb45",
+    "armv7": "455d082799d32625d59f9866aeb1ac9f382b178385acc98ebfaf40ed9d34665f"
   },
   "releaseUrl": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/tag/latest",
   "download_url": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/Almohaseb-Plus-arm64.apk",
@@ -17,12 +17,12 @@
     "windows": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/NexoraSetup.exe"
   },
   "downloadsMirror": {
-    "android": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.61-376/Almohaseb-Plus-arm64.apk",
+    "android": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.62-377/Almohaseb-Plus-arm64.apk",
     "androidVariants": {
-      "arm64": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.61-376/Almohaseb-Plus-arm64.apk",
-      "armv7": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.61-376/nexora-armv7.apk"
+      "arm64": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.62-377/Almohaseb-Plus-arm64.apk",
+      "armv7": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.62-377/nexora-armv7.apk"
     },
-    "windows": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.61-376/NexoraSetup.exe"
+    "windows": "https://iggdigd218-dev.github.io/almohaseb-plus/releases/3.98.62-377/NexoraSetup.exe"
   },
   "downloadsFallbackGithub": {
     "android": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/Almohaseb-Plus-arm64.apk",
@@ -32,6 +32,6 @@
     },
     "windows": "https://github.com/iggdigd218-dev/almohaseb-plus/releases/download/latest/NexoraSetup.exe"
   },
-  "publishedAt": "2026-11-18T02:08:07Z",
+  "publishedAt": "2026-11-18T13:55:03Z",
   "notes": "• معالجة جذرية لمنطق الاقتران والانضمام السحابي (Cloud Join): التحقق المسبق من صلاحية رمز الاقتران وحسم مساحة العمل قبل أي مسح محلي أو تصفير للجلسة.\n• دعم إدخال رموز الاقتران بالأرقام العربية/الهندية أو مع المسافات والشرطات (مثل 606 108) وتطبيعها تلقائياً، مع معالجة فروق التوقيت والساعة بين جوال المدير وجهاز الكمبيوتر.\n• الحفاظ على هوية العضو السحابية المعتمدة (auth.uid) أثناء إتمام الربط، وإيقاف ابتلاع أخطاء السحابة والشبكة، وتفعيل فاحص التحديثات التلقائي في شاشة البداية."
 }
