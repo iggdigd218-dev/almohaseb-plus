@@ -760,7 +760,14 @@ class SyncEngine {
         );
         return;
       }
-    } catch (_) {}
+    } catch (e) {
+      SyncDiagnostics.instance.pullFinished(
+        ok: false,
+        error: e,
+        context: '_periodicCloudPull → verifyMemberAccess error',
+      );
+      return;
+    }
 
     _cloudPulling = true;
     try {
@@ -1055,7 +1062,8 @@ class SyncEngine {
     final q = await _ensureQueue();
     await q.retryFailed();
     await processQueue();
-    if (deepReconcile && _cloudTransport != null) {
+    if (deepReconcile && _cloudTransport != null && !_cloudPulling) {
+      _cloudPulling = true;
       SyncDiagnostics.instance.pullStarted();
       try {
         final applied = await _cloudTransport!.pull(
@@ -1079,6 +1087,7 @@ class SyncEngine {
           context: 'forceSyncNow → transport.pull',
         );
       } finally {
+        _cloudPulling = false;
         SyncDiagnostics.instance.pullIdle();
       }
     }

@@ -175,7 +175,7 @@ class GoogleDriveService {
   }
 
   /// يفتح OAuth للمستخدم عند الحاجة، ثم يعيد بيانات الحساب التعريفية فقط.
-  Future<GoogleAccountInfo?> signIn() async {
+  Future<GoogleAccountInfo?> signIn({bool forceAccountPicker = false}) async {
     try {
       final signIn = _signIn;
       if (signIn == null) {
@@ -183,7 +183,14 @@ class GoogleDriveService {
           'تسجيل الدخول إلى Google غير متاح على هذا الجهاز (سطح المكتب). استخدم خيار الرفع عبر تطبيق Drive.',
         );
       }
-      final account = signIn.currentUser ?? await signIn.signIn();
+      if (forceAccountPicker) {
+        try {
+          await signIn.signOut();
+        } catch (_) {}
+      }
+      final account = forceAccountPicker
+          ? await signIn.signIn()
+          : (signIn.currentUser ?? await signIn.signIn());
       return account == null ? null : _toAccountInfo(account);
     } catch (e) {
       final str = e.toString();

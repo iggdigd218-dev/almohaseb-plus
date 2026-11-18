@@ -3455,18 +3455,35 @@ class AccountWorkspace {
     } catch (_) {}
 
     // 3) تثبيت جلسة الحساب والصلاحيات في قاعدة البيانات الجديدة و SharedPreferences
+    final activeAccBeforeSwitch = FirebaseAuthRest.activeAccount;
     await FirebaseAuthRest.resetAnonymousSession(repo);
     await FirebaseAuthRest.ensureScopedAnonymous(repo, newWsId);
     await FirebaseAuthRest.initSilentAuth(repo);
     if (uid.isNotEmpty || email.isNotEmpty) {
-      await FirebaseAuthRest.saveSession(
-        repo,
-        FirebaseAccount(
-          uid: uid.isNotEmpty ? uid : 'email:${emailToKey(email)}',
-          email: email,
-          displayName: displayName,
-        ),
-      );
+      final hasMatchingActiveToken = activeAccBeforeSwitch != null &&
+          activeAccBeforeSwitch.idToken.isNotEmpty &&
+          (activeAccBeforeSwitch.email.trim().toLowerCase() == email ||
+              activeAccBeforeSwitch.uid.trim() == uid ||
+              activeAccBeforeSwitch.email.isEmpty);
+      final sessionAccount = hasMatchingActiveToken
+          ? FirebaseAccount(
+              uid: uid.isNotEmpty ? uid : activeAccBeforeSwitch.uid,
+              email: email.isNotEmpty ? email : activeAccBeforeSwitch.email,
+              displayName: displayName.isNotEmpty
+                  ? displayName
+                  : activeAccBeforeSwitch.displayName,
+              idToken: activeAccBeforeSwitch.idToken,
+              refreshToken: activeAccBeforeSwitch.refreshToken,
+              expiresInSeconds: activeAccBeforeSwitch.expiresInSeconds,
+            )
+          : FirebaseAccount(
+              uid: uid.isNotEmpty ? uid : 'email:${emailToKey(email)}',
+              email: email,
+              displayName: displayName,
+            );
+      FirebaseAuthRest.primeAccountInMemory(sessionAccount);
+      await FirebaseAuthRest.saveSession(repo, sessionAccount);
+      await FirebaseAuthRest.persistActiveSession(repo);
     }
     if (email.isNotEmpty) {
       await repo.setSetting('account.email', email);

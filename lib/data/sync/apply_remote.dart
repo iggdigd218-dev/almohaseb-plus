@@ -2508,421 +2508,432 @@ extension ApplyRemoteOp on Repo {
 
   static Future<int> _healCorruptedItemCatalogImpl(DatabaseExecutor db) async {
     var fixed = 0;
-    try {
-      const explicitSplitToOrig = <int, int>{
-        1881848145177768498: 1881329839308291072,
-        1881848145177768572: 1880690538498209024,
-        1881848145177768575: 1880770260243085824,
-        1881848145177768577: 1880774142496027136,
-        1881848145177768578: 1880941528633812992,
-        1881848145177768579: 1880969333761939968,
-        1881848145177768580: 1881075804436520448,
-        1881848145177768581: 1881076302198693376,
-        1881848145177768582: 1881076376988376576,
-        1881848145177768583: 1881076490790329856,
-        1881848145177768585: 1881076680312053248,
-        1881848145177768589: 1881076913964146176,
-        1881848145177768590: 1881076949177425408,
-        1881848145177768591: 1881077002968325632,
-        1881848145177768594: 1881077375151988224,
-        1881848145177768595: 1881077422732172800,
-        1881848145177768601: 1881077989402566144,
-        1881848145177768602: 1881078029716119040,
-        1881848145177768603: 1881078117965323776,
-        1881848145177768604: 1881078159189040640,
-        1881848145177768605: 1881078209686363648,
-        1881848145177768606: 1881078253941513728,
-        1881848145177768609: 1881078464285859328,
-        1881848145177768611: 1881078591840935424,
-        1881848145177768612: 1881078679795490304,
-        1881848145177768617: 1881079442327752192,
-        1881848145177768619: 1881079591311527424,
-        1881848145177768621: 1880918273696684800,
-        1881848145177768622: 1881278325508392448,
-        1881848145177768623: 1881280727024466688,
-        1881848145177768625: 1881329839308291072,
-        1881848145177768628: 1881479782759624704,
-        1881848145177768630: 1881515210412496384,
-        1881848145177768631: 1881517352477103616,
-        1881848145177768632: 1881515537087960576,
-      };
+    const explicitSplitToOrig = <int, int>{
+      1881848145177768498: 1881329839308291072,
+      1881848145177768572: 1880690538498209024,
+      1881848145177768575: 1880770260243085824,
+      1881848145177768577: 1880774142496027136,
+      1881848145177768578: 1880941528633812992,
+      1881848145177768579: 1880969333761939968,
+      1881848145177768580: 1881075804436520448,
+      1881848145177768581: 1881076302198693376,
+      1881848145177768582: 1881076376988376576,
+      1881848145177768583: 1881076490790329856,
+      1881848145177768585: 1881076680312053248,
+      1881848145177768589: 1881076913964146176,
+      1881848145177768590: 1881076949177425408,
+      1881848145177768591: 1881077002968325632,
+      1881848145177768594: 1881077375151988224,
+      1881848145177768595: 1881077422732172800,
+      1881848145177768601: 1881077989402566144,
+      1881848145177768602: 1881078029716119040,
+      1881848145177768603: 1881078117965323776,
+      1881848145177768604: 1881078159189040640,
+      1881848145177768605: 1881078209686363648,
+      1881848145177768606: 1881078253941513728,
+      1881848145177768609: 1881078464285859328,
+      1881848145177768611: 1881078591840935424,
+      1881848145177768612: 1881078679795490304,
+      1881848145177768617: 1881079442327752192,
+      1881848145177768619: 1881079591311527424,
+      1881848145177768621: 1880918273696684800,
+      1881848145177768622: 1881278325508392448,
+      1881848145177768623: 1881280727024466688,
+      1881848145177768625: 1881329839308291072,
+      1881848145177768628: 1881479782759624704,
+      1881848145177768630: 1881515210412496384,
+      1881848145177768631: 1881517352477103616,
+      1881848145177768632: 1881515537087960576,
+    };
 
-      const historicalOriginalIds = <int>{
-        1881515537087960576,
-        1881515877677719296,
-        1881523606480877056,
-        1881538924963874816,
-        1881471873199400960,
-        1881073883280662016,
-        1880941528633812992,
-      };
+    const historicalOriginalIds = <int>{
+      1881515537087960576,
+      1881515877677719296,
+      1881523606480877056,
+      1881538924963874816,
+      1881471873199400960,
+      1881073883280662016,
+      1880941528633812992,
+    };
 
-      final allItems = await db.query(
-        'items',
-        columns: ['id', 'created_at', 'plu'],
-      );
-      final origByCreatedAt = <String, int>{};
-      final splitIds = <int>{};
-      var hasHistoricalIncidentItems = false;
-      for (final r in allItems) {
-        final id = (r['id'] as num?)?.toInt() ?? 0;
-        if (id <= 0) continue;
-        if (historicalOriginalIds.contains(id)) {
-          hasHistoricalIncidentItems = true;
-        }
-        final createdAt = '${r['created_at'] ?? ''}'.trim();
-        if (isKnownAutoSplitItemId(id)) {
-          splitIds.add(id);
-          hasHistoricalIncidentItems = true;
-        } else if (createdAt.isNotEmpty) {
+    final allItems = await db.query(
+      'items',
+      columns: ['id', 'created_at', 'plu'],
+    );
+    final origByCreatedAt = <String, int>{};
+    final existingOrigIds = <int>{};
+    final splitIds = <int>{};
+    var hasHistoricalIncidentItems = false;
+    for (final r in allItems) {
+      final id = (r['id'] as num?)?.toInt() ?? 0;
+      if (id <= 0) continue;
+      if (historicalOriginalIds.contains(id)) {
+        hasHistoricalIncidentItems = true;
+      }
+      final createdAt = '${r['created_at'] ?? ''}'.trim();
+      if (isKnownAutoSplitItemId(id)) {
+        splitIds.add(id);
+        hasHistoricalIncidentItems = true;
+      } else {
+        existingOrigIds.add(id);
+        if (createdAt.isNotEmpty) {
           origByCreatedAt[createdAt] = id;
         }
       }
+    }
 
-      if (!hasHistoricalIncidentItems && splitIds.isEmpty) {
-        // فحص سريع لأي إعدادات تعارض تشير صراحةً لمعرّفات الحادثة المنقسمة فقط
-        try {
-          final conflictRows = await db.query(
-            'settings',
-            where: "key LIKE 'item_conflict:%' OR key LIKE 'item_id_remap:%'",
-          );
-          for (final cs in conflictRows) {
-            final k = '${cs['key'] ?? ''}';
-            final v = '${cs['value'] ?? ''}'.trim();
-            if (k.startsWith('item_id_remap:')) {
-              final fromId = int.tryParse(k.substring('item_id_remap:'.length)) ?? 0;
-              final toId = int.tryParse(v) ?? 0;
-              if (isKnownAutoSplitItemId(fromId) || isKnownAutoSplitItemId(toId)) {
-                await db.delete('settings', where: 'key = ?', whereArgs: [k]);
-                fixed++;
-              }
-              continue;
-            }
-            final parsed =
-                v.isEmpty ? null : OfflineItemConflict.tryParseJson(v);
-            if (v.isEmpty ||
-                parsed == null ||
-                isKnownAutoSplitItemId(parsed.item1Id) ||
-                isKnownAutoSplitItemId(parsed.item2Id)) {
-              await db.delete('settings', where: 'key = ?', whereArgs: [k]);
-              await db.delete(
-                'notifications',
-                where: "entity_type = 'item_conflict' AND entity_id = ?",
-                whereArgs: [k],
-              );
-              fixed++;
-            }
+    if (!hasHistoricalIncidentItems && splitIds.isEmpty) {
+      final conflictRows = await db.query(
+        'settings',
+        where: "key LIKE 'item_conflict:%' OR key LIKE 'item_id_remap:%'",
+      );
+      for (final cs in conflictRows) {
+        final k = '${cs['key'] ?? ''}';
+        final v = '${cs['value'] ?? ''}'.trim();
+        if (k.startsWith('item_id_remap:')) {
+          final fromId = int.tryParse(k.substring('item_id_remap:'.length)) ?? 0;
+          final toId = int.tryParse(v) ?? 0;
+          if (isKnownAutoSplitItemId(fromId) || isKnownAutoSplitItemId(toId)) {
+            await db.delete('settings', where: 'key = ?', whereArgs: [k]);
+            fixed++;
           }
-        } catch (_) {}
-        return fixed;
-      }
-
-      final splitToOrig = <int, int>{...explicitSplitToOrig};
-      for (final r in allItems) {
-        final id = (r['id'] as num?)?.toInt() ?? 0;
-        if (!splitIds.contains(id) || splitToOrig.containsKey(id)) continue;
-        final createdAt = '${r['created_at'] ?? ''}'.trim();
-        final matchedOrig = origByCreatedAt[createdAt];
-        if (matchedOrig != null && matchedOrig != id) {
-          splitToOrig[id] = matchedOrig;
+          continue;
+        }
+        final parsed =
+            v.isEmpty ? null : OfflineItemConflict.tryParseJson(v);
+        if (v.isEmpty ||
+            parsed == null ||
+            isKnownAutoSplitItemId(parsed.item1Id) ||
+            isKnownAutoSplitItemId(parsed.item2Id)) {
+          await db.delete('settings', where: 'key = ?', whereArgs: [k]);
+          await db.delete(
+            'notifications',
+            where: "entity_type = 'item_conflict' AND entity_id = ?",
+            whereArgs: [k],
+          );
+          fixed++;
         }
       }
+      return fixed;
+    }
 
-      // 1) إعادة ربط حركات المخزون وسطور الفواتير من الأصناف المنقسمة إلى الأصلية
-      for (final entry in splitToOrig.entries) {
-        final splitId = entry.key;
-        final origId = entry.value;
-        fixed += await db.update(
-          'stock_moves',
-          {'item_id': origId},
-          where: 'item_id = ?',
-          whereArgs: [splitId],
-        );
-        fixed += await db.update(
-          'transaction_items',
-          {'item_id': origId},
-          where: 'item_id = ?',
-          whereArgs: [splitId],
-        );
+    final splitToOrig = <int, int>{};
+    for (final entry in explicitSplitToOrig.entries) {
+      if (existingOrigIds.contains(entry.value)) {
+        splitToOrig[entry.key] = entry.value;
       }
+    }
+    for (final r in allItems) {
+      final id = (r['id'] as num?)?.toInt() ?? 0;
+      if (!splitIds.contains(id) || splitToOrig.containsKey(id)) continue;
+      final createdAt = '${r['created_at'] ?? ''}'.trim();
+      final matchedOrig = origByCreatedAt[createdAt];
+      if (matchedOrig != null &&
+          matchedOrig != id &&
+          existingOrigIds.contains(matchedOrig)) {
+        splitToOrig[id] = matchedOrig;
+      }
+    }
 
-      // 2) حذف حركات التسوية الوهمية الناتجة عن الدمج التلقائي السابق
-      final synthMoves = await db.query(
+    // 1) إعادة ربط حركات المخزون وسطور الفواتير من الأصناف المنقسمة إلى الأصلية
+    for (final entry in splitToOrig.entries) {
+      final splitId = entry.key;
+      final origId = entry.value;
+      fixed += await db.update(
         'stock_moves',
-        columns: ['id'],
-        where: "notes LIKE '%تسوية تلقائية لدمج رصيد صنف مكرر%'",
+        {'item_id': origId},
+        where: 'item_id = ?',
+        whereArgs: [splitId],
       );
-      for (final sm in synthMoves) {
-        final smId = sm['id'];
-        if (smId == null) continue;
-        await db.delete('stock_moves', where: 'id = ?', whereArgs: [smId]);
+      fixed += await db.update(
+        'transaction_items',
+        {'item_id': origId},
+        where: 'item_id = ?',
+        whereArgs: [splitId],
+      );
+    }
+
+    // 2) حذف حركات التسوية الوهمية الناتجة عن الدمج التلقائي السابق
+    final synthMoves = await db.query(
+      'stock_moves',
+      columns: ['id'],
+      where: "notes LIKE '%تسوية تلقائية لدمج رصيد صنف مكرر%'",
+    );
+    for (final sm in synthMoves) {
+      final smId = sm['id'];
+      if (smId == null) continue;
+      await db.delete('stock_moves', where: 'id = ?', whereArgs: [smId]);
+      await db.delete(
+        'operations',
+        where: "entity_type = 'stockMove' AND entity_id = ?",
+        whereArgs: ['$smId'],
+      );
+      fixed++;
+    }
+
+    // 3) حذف الأصناف المنقسمة التاريخية من items و operations و sync_queue
+    // فقط بعد اليقين التام من عدم بقاء أي حركات مخزون أو سطور فواتير مرتبطة بها
+    if (splitIds.isNotEmpty) {
+      for (final splitId in splitIds) {
+        final remMoves = Sqflite.firstIntValue(await db.rawQuery(
+              'SELECT COUNT(*) FROM stock_moves WHERE item_id = ?',
+              [splitId],
+            )) ??
+            0;
+        final remTxItems = Sqflite.firstIntValue(await db.rawQuery(
+              'SELECT COUNT(*) FROM transaction_items WHERE item_id = ?',
+              [splitId],
+            )) ??
+            0;
+        if (remMoves > 0 || remTxItems > 0) {
+          // الصنف المنقسم لا يزال مرتبطاً بحركات لم يُعثر لها على صنف أصلي مقابل؛
+          // نمتنع عن حذفه حفاظاً على سلامة الحركات المرجعية.
+          continue;
+        }
+        await db.delete('items', where: 'id = ?', whereArgs: [splitId]);
+        final opRows = await db.query(
+          'operations',
+          columns: ['id'],
+          where: "entity_type = 'item' AND entity_id = ?",
+          whereArgs: ['$splitId'],
+        );
+        for (final opRow in opRows) {
+          final opId = '${opRow['id'] ?? ''}';
+          if (opId.isNotEmpty) {
+            await db.delete(
+              'sync_queue',
+              where: 'operation_id = ?',
+              whereArgs: [opId],
+            );
+          }
+        }
         await db.delete(
           'operations',
-          where: "entity_type = 'stockMove' AND entity_id = ?",
-          whereArgs: ['$smId'],
+          where: "entity_type = 'item' AND entity_id = ?",
+          whereArgs: ['$splitId'],
         );
         fixed++;
       }
+    }
 
-      // 3) حذف كافة الأصناف المنقسمة التاريخية من items و operations و sync_queue
-      if (splitIds.isNotEmpty) {
-        for (final splitId in splitIds) {
-          await db.delete('items', where: 'id = ?', whereArgs: [splitId]);
-          final opRows = await db.query(
-            'operations',
-            columns: ['id'],
-            where: "entity_type = 'item' AND entity_id = ?",
-            whereArgs: ['$splitId'],
-          );
-          for (final opRow in opRows) {
-            final opId = '${opRow['id'] ?? ''}';
-            if (opId.isNotEmpty) {
-              try {
-                await db.delete(
-                  'sync_queue',
-                  where: 'operation_id = ?',
-                  whereArgs: [opId],
-                );
-              } catch (_) {}
-            }
-          }
-          await db.delete(
-            'operations',
-            where: "entity_type = 'item' AND entity_id = ?",
-            whereArgs: ['$splitId'],
-          );
-          fixed++;
-        }
+    // 4) إصلاح لمرة واحدة للأصناف الأصلية المتضررة من التصادم + الأصناف المحذوفة التي أُعيد إحياؤها بالخطأ
+    final healMeta = await db.query(
+      'sync_meta',
+      columns: ['value'],
+      where: "key = 'catalog_split_healed_v2'",
+      limit: 1,
+    );
+    final alreadyHealedV2 =
+        healMeta.isNotEmpty && '${healMeta.first['value']}' == '1';
+
+    if (!alreadyHealedV2) {
+      const nowIso = '2026-11-15T06:09:50.000Z';
+      final repairedOriginals = <int, Map<String, Object?>>{
+        1881515537087960576: {
+          'name': 'بلو اجمل',
+          'sku': '',
+          'plu': 263,
+          'is_deleted': 0,
+          'is_active': 1,
+          'deleted_at': '',
+          'updated_at': nowIso,
+        },
+        1881515877677719296: {
+          'name': 'شاشة LT-m15i',
+          'sku': '',
+          'plu': 336,
+          'is_deleted': 0,
+          'is_active': 1,
+          'deleted_at': '',
+          'updated_at': nowIso,
+        },
+        1881523606480877056: {
+          'name': 'جوال UMIDIG',
+          'sku': '',
+          'plu': 289,
+          'is_deleted': 0,
+          'is_active': 1,
+          'deleted_at': '',
+          'updated_at': nowIso,
+        },
+        1881538924963874816: {
+          'name': 'عطرهلرويس',
+          'sku': '',
+          'plu': 310,
+          'is_deleted': 0,
+          'is_active': 1,
+          'deleted_at': '',
+          'updated_at': nowIso,
+        },
+        1881471873199400960: {
+          'sku': '11087',
+          'is_deleted': 0,
+          'is_active': 1,
+          'deleted_at': '',
+          'updated_at': nowIso,
+        },
+        1881073883280662016: {
+          'sku': '562',
+          'is_deleted': 0,
+          'is_active': 1,
+          'deleted_at': '',
+          'updated_at': nowIso,
+        },
+        1880941528633812992: {
+          'plu': 335,
+          'is_deleted': 0,
+          'is_active': 1,
+          'deleted_at': '',
+          'updated_at': nowIso,
+        },
+      };
+      for (final entry in repairedOriginals.entries) {
+        fixed += await db.update(
+          'items',
+          entry.value,
+          where: 'id = ?',
+          whereArgs: [entry.key],
+        );
       }
 
-      // 4) إصلاح لمرة واحدة للأصناف الأصلية المتضررة من التصادم + الأصناف المحذوفة التي أُعيد إحياؤها بالخطأ
-      var alreadyHealedV2 = false;
-      try {
-        final healMeta = await db.query(
-          'sync_meta',
-          columns: ['value'],
-          where: "key = 'catalog_split_healed_v2'",
-          limit: 1,
+      const resurrectedTrashItemIds = <int>[
+        1880690408348955904,
+        1880690457513538816,
+        1880690490109572352,
+        1880690597967148288,
+        1880690666786239744,
+        1880767116183625984,
+        1880768680810805760,
+        1880770260243085824,
+        1880773166893576704,
+        1880773558571315712,
+        1880773707760611840,
+        1880774331038380544,
+        1881073761371119104,
+        1881077857571397120,
+        1881079920969141760,
+        1881080115649859072,
+        1881080194454539776,
+        1881080368304246272,
+        1881080996039511552,
+        1881081652785729024,
+        1881082044338687488,
+        1881266772963228672,
+        1881334362074799104,
+        1881471719200286720,
+        1881515030582760960,
+        1881656122812913152,
+        1881656340091212288,
+      ];
+      for (final delId in resurrectedTrashItemIds) {
+        fixed += await db.update(
+          'items',
+          {
+            'is_deleted': 1,
+            'is_active': 0,
+            'deleted_at': nowIso,
+            'updated_at': nowIso,
+          },
+          where: 'id = ?',
+          whereArgs: [delId],
         );
-        alreadyHealedV2 =
-            healMeta.isNotEmpty && '${healMeta.first['value']}' == '1';
-      } catch (_) {}
+      }
 
-      if (!alreadyHealedV2) {
-        const nowIso = '2026-11-15T06:09:50.000Z';
-        final repairedOriginals = <int, Map<String, Object?>>{
-          1881515537087960576: {
-            'name': 'بلو اجمل',
-            'sku': '',
-            'plu': 263,
-            'is_deleted': 0,
-            'is_active': 1,
-            'deleted_at': '',
-            'updated_at': nowIso,
-          },
-          1881515877677719296: {
-            'name': 'شاشة LT-m15i',
-            'sku': '',
-            'plu': 336,
-            'is_deleted': 0,
-            'is_active': 1,
-            'deleted_at': '',
-            'updated_at': nowIso,
-          },
-          1881523606480877056: {
-            'name': 'جوال UMIDIG',
-            'sku': '',
-            'plu': 289,
-            'is_deleted': 0,
-            'is_active': 1,
-            'deleted_at': '',
-            'updated_at': nowIso,
-          },
-          1881538924963874816: {
-            'name': 'عطرهلرويس',
-            'sku': '',
-            'plu': 310,
-            'is_deleted': 0,
-            'is_active': 1,
-            'deleted_at': '',
-            'updated_at': nowIso,
-          },
-          1881471873199400960: {
-            'sku': '11087',
-            'is_deleted': 0,
-            'is_active': 1,
-            'deleted_at': '',
-            'updated_at': nowIso,
-          },
-          1881073883280662016: {
-            'sku': '562',
-            'is_deleted': 0,
-            'is_active': 1,
-            'deleted_at': '',
-            'updated_at': nowIso,
-          },
-          1880941528633812992: {
-            'plu': 335,
-            'is_deleted': 0,
-            'is_active': 1,
-            'deleted_at': '',
-            'updated_at': nowIso,
-          },
-        };
-        for (final entry in repairedOriginals.entries) {
-          fixed += await db.update(
-            'items',
-            entry.value,
-            where: 'id = ?',
-            whereArgs: [entry.key],
-          );
-        }
-
-        const resurrectedTrashItemIds = <int>[
-          1880690408348955904,
-          1880690457513538816,
-          1880690490109572352,
-          1880690597967148288,
-          1880690666786239744,
-          1880767116183625984,
-          1880768680810805760,
-          1880770260243085824,
-          1880773166893576704,
-          1880773558571315712,
-          1880773707760611840,
-          1880774331038380544,
-          1881073761371119104,
-          1881077857571397120,
-          1881079920969141760,
-          1881080115649859072,
-          1881080194454539776,
-          1881080368304246272,
-          1881080996039511552,
-          1881081652785729024,
-          1881082044338687488,
-          1881266772963228672,
-          1881334362074799104,
-          1881471719200286720,
-          1881515030582760960,
-          1881656122812913152,
-          1881656340091212288,
-        ];
-        for (final delId in resurrectedTrashItemIds) {
-          fixed += await db.update(
-            'items',
-            {
-              'is_deleted': 1,
-              'is_active': 0,
-              'deleted_at': nowIso,
-              'updated_at': nowIso,
-            },
-            where: 'id = ?',
-            whereArgs: [delId],
-          );
-        }
-
-        try {
+      await db.delete(
+        'settings',
+        where: "key LIKE 'item_conflict:%' OR key LIKE 'item_id_remap:%'",
+      );
+      await db.delete(
+        'notifications',
+        where: "entity_type = 'item_conflict'",
+      );
+      final conflictOpRows = await db.query(
+        'operations',
+        columns: ['id'],
+        where:
+            "entity_type = 'setting' AND (entity_id LIKE 'item_conflict:%' OR entity_id LIKE 'item_id_remap:%')",
+      );
+      for (final r in conflictOpRows) {
+        final opId = '${r['id'] ?? ''}';
+        if (opId.isNotEmpty) {
           await db.delete(
-            'settings',
-            where: "key LIKE 'item_conflict:%' OR key LIKE 'item_id_remap:%'",
+            'sync_queue',
+            where: 'operation_id = ?',
+            whereArgs: [opId],
           );
+        }
+      }
+      await db.delete(
+        'operations',
+        where:
+            "entity_type = 'setting' AND (entity_id LIKE 'item_conflict:%' OR entity_id LIKE 'item_id_remap:%')",
+      );
+      await db.insert(
+        'sync_meta',
+        {'key': 'catalog_split_healed_v2', 'value': '1'},
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    } else {
+      final conflictSettings = await db.query(
+        'settings',
+        where: "key LIKE 'item_conflict:%' OR key LIKE 'item_id_remap:%'",
+      );
+      for (final cs in conflictSettings) {
+        final k = '${cs['key'] ?? ''}';
+        final v = '${cs['value'] ?? ''}'.trim();
+        if (k.startsWith('item_id_remap:')) {
+          final fromId = int.tryParse(k.substring('item_id_remap:'.length)) ?? 0;
+          final toId = int.tryParse(v) ?? 0;
+          if (isKnownAutoSplitItemId(fromId) || isKnownAutoSplitItemId(toId)) {
+            await db.delete('settings', where: 'key = ?', whereArgs: [k]);
+          }
+          continue;
+        }
+        if (v.isEmpty) {
+          await db.delete('settings', where: 'key = ?', whereArgs: [k]);
+          continue;
+        }
+        final parsed = OfflineItemConflict.tryParseJson(v);
+        if (parsed == null ||
+            isKnownAutoSplitItemId(parsed.item1Id) ||
+            isKnownAutoSplitItemId(parsed.item2Id)) {
+          await db.delete('settings', where: 'key = ?', whereArgs: [k]);
           await db.delete(
             'notifications',
-            where: "entity_type = 'item_conflict'",
+            where: "entity_type = 'item_conflict' AND entity_id = ?",
+            whereArgs: [k],
           );
-          final conflictOpRows = await db.query(
-            'operations',
-            columns: ['id'],
-            where:
-                "entity_type = 'setting' AND (entity_id LIKE 'item_conflict:%' OR entity_id LIKE 'item_id_remap:%')",
-          );
-          for (final r in conflictOpRows) {
-            final opId = '${r['id'] ?? ''}';
-            if (opId.isNotEmpty) {
-              await db.delete(
-                'sync_queue',
-                where: 'operation_id = ?',
-                whereArgs: [opId],
-              );
-            }
-          }
-          await db.delete(
-            'operations',
-            where:
-                "entity_type = 'setting' AND (entity_id LIKE 'item_conflict:%' OR entity_id LIKE 'item_id_remap:%')",
-          );
-          await db.insert(
-            'sync_meta',
-            {'key': 'catalog_split_healed_v2', 'value': '1'},
-            conflictAlgorithm: ConflictAlgorithm.replace,
-          );
-        } catch (_) {}
-      } else {
-        try {
-          final conflictSettings = await db.query(
-            'settings',
-            where: "key LIKE 'item_conflict:%' OR key LIKE 'item_id_remap:%'",
-          );
-          for (final cs in conflictSettings) {
-            final k = '${cs['key'] ?? ''}';
-            final v = '${cs['value'] ?? ''}'.trim();
-            if (k.startsWith('item_id_remap:')) {
-              final fromId = int.tryParse(k.substring('item_id_remap:'.length)) ?? 0;
-              final toId = int.tryParse(v) ?? 0;
-              if (isKnownAutoSplitItemId(fromId) || isKnownAutoSplitItemId(toId)) {
-                await db.delete('settings', where: 'key = ?', whereArgs: [k]);
-              }
-              continue;
-            }
-            if (v.isEmpty) {
-              await db.delete('settings', where: 'key = ?', whereArgs: [k]);
-              continue;
-            }
-            final parsed = OfflineItemConflict.tryParseJson(v);
-            if (parsed == null ||
-                isKnownAutoSplitItemId(parsed.item1Id) ||
-                isKnownAutoSplitItemId(parsed.item2Id)) {
-              await db.delete('settings', where: 'key = ?', whereArgs: [k]);
-              await db.delete(
-                'notifications',
-                where: "entity_type = 'item_conflict' AND entity_id = ?",
-                whereArgs: [k],
-              );
-            }
-          }
-        } catch (_) {}
-      }
-
-      // 5) إصلاح أي قيم PLU تالفة (معرّفات Snowflake ضخمة وُضعت في عمود plu بالخطأ)
-      final badPluRows = await db.query(
-        'items',
-        columns: ['id'],
-        where: 'plu IS NOT NULL AND plu > 1000000000',
-      );
-      if (badPluRows.isNotEmpty) {
-        final maxValidRows = await db.rawQuery(
-          'SELECT COALESCE(MAX(plu), 0) AS mx FROM items WHERE plu IS NOT NULL AND plu <= 1000000000',
-        );
-        var nextPluVal =
-            ((maxValidRows.firstOrNull?['mx'] as num?)?.toInt() ?? 0) + 1;
-        for (final r in badPluRows) {
-          await db.update(
-            'items',
-            {'plu': nextPluVal},
-            where: 'id = ?',
-            whereArgs: [r['id']],
-          );
-          nextPluVal++;
-          fixed++;
         }
       }
+    }
 
-      // 6) إعادة مصالحة كميات المخزون بعد استرداد الحركات للأصناف الأصلية
-      if (fixed > 0 || !alreadyHealedV2) {
-        await reconcileInventoryQuantities(db);
+    // 5) إصلاح أي قيم PLU تالفة (معرّفات Snowflake ضخمة وُضعت في عمود plu بالخطأ)
+    final badPluRows = await db.query(
+      'items',
+      columns: ['id'],
+      where: 'plu IS NOT NULL AND plu > 1000000000',
+    );
+    if (badPluRows.isNotEmpty) {
+      final maxValidRows = await db.rawQuery(
+        'SELECT COALESCE(MAX(plu), 0) AS mx FROM items WHERE plu IS NOT NULL AND plu <= 1000000000',
+      );
+      var nextPluVal =
+          ((maxValidRows.firstOrNull?['mx'] as num?)?.toInt() ?? 0) + 1;
+      for (final r in badPluRows) {
+        await db.update(
+          'items',
+          {'plu': nextPluVal},
+          where: 'id = ?',
+          whereArgs: [r['id']],
+        );
+        nextPluVal++;
+        fixed++;
       }
-    } catch (e) {
-      debugPrint('healCorruptedItemCatalog error: $e');
+    }
+
+    // 6) إعادة مصالحة كميات المخزون بعد استرداد الحركات للأصناف الأصلية
+    if (fixed > 0 || !alreadyHealedV2) {
+      await reconcileInventoryQuantities(db);
     }
     return fixed;
   }

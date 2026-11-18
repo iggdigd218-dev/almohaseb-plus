@@ -237,7 +237,7 @@ Future<ThermalInvoiceDoc> buildThermalInvoiceDocument({
                     ),
                   ),
                   pw.SizedBox(width: 4),
-                  // الوسط تماماً: أيقونة السهم الأسود + المحاسب - Al-Mohaseb + هاتف: +967774190040
+                  // الوسط تماماً: أيقونة السهم الأسود + المحاسب + الرقم بخط أصغر + اليمن/صنعاء
                   pw.Expanded(
                     flex: 4,
                     child: pw.Column(
@@ -246,7 +246,7 @@ Future<ThermalInvoiceDoc> buildThermalInvoiceDocument({
                         buildThermalArrowLogo(size: 28),
                         pw.SizedBox(height: 2),
                         pw.Text(
-                          'المحاسب - Al-Mohaseb',
+                          'المحاسب',
                           textAlign: pw.TextAlign.center,
                           style: pw.TextStyle(
                             fontSize: 8.5,
@@ -254,22 +254,18 @@ Future<ThermalInvoiceDoc> buildThermalInvoiceDocument({
                             fontWeight: pw.FontWeight.bold,
                           ),
                         ),
-                        pw.Row(
-                          mainAxisAlignment: pw.MainAxisAlignment.center,
-                          mainAxisSize: pw.MainAxisSize.min,
-                          children: [
-                            pw.Text(
-                              'هاتف: ',
-                              style: const pw.TextStyle(fontSize: 7.5),
-                            ),
-                            pw.Directionality(
-                              textDirection: pw.TextDirection.ltr,
-                              child: pw.Text(
-                                '+967774190040',
-                                style: const pw.TextStyle(fontSize: 7.5),
-                              ),
-                            ),
-                          ],
+                        pw.Directionality(
+                          textDirection: pw.TextDirection.ltr,
+                          child: pw.Text(
+                            '+967774190040',
+                            textAlign: pw.TextAlign.center,
+                            style: const pw.TextStyle(fontSize: 7.0),
+                          ),
+                        ),
+                        pw.Text(
+                          'اليمن/صنعاء',
+                          textAlign: pw.TextAlign.center,
+                          style: const pw.TextStyle(fontSize: 7.0),
                         ),
                       ],
                     ),

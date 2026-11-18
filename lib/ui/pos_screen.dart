@@ -3945,7 +3945,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
           currency: cur.code,
           type: OpType.debit,
           date: now,
-          description: 'فاتورة مبيعات آجلة رقم #$refNum',
+          description: 'فاتورة مبيعات آجلة',
           reference: refNum,
           notes:
               'طريقة الدفع: آجل (على الحساب)\nالمبلغ المدفوع: 0.00 ${cur.symbol}\nالمبلغ المتبقي: ${Fmt.money(_netTotal)} ${cur.symbol}$discountNote$supNote',
@@ -3969,7 +3969,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
           type: OpType.debit,
           date: now,
           description:
-              'فاتورة مبيعات جزئية رقم #$refNum (إجمالي ${Fmt.money(_netTotal)} ${cur.symbol} — مدفوع ${Fmt.money(paid)} ${cur.symbol} — متبقي ${Fmt.money(remainder)} ${cur.symbol})',
+              'فاتورة مبيعات جزئية (إجمالي ${Fmt.money(_netTotal)} ${cur.symbol} — مدفوع ${Fmt.money(paid)} ${cur.symbol} — متبقي ${Fmt.money(remainder)} ${cur.symbol})',
           reference: refNum,
           notes:
               'طريقة الدفع: جزئي (مقدم + آجل)\nالمبلغ المدفوع: ${Fmt.money(paid)} ${cur.symbol}\nالمبلغ المتبقي: ${Fmt.money(remainder)} ${cur.symbol}$discountNote$supNote',
@@ -3987,7 +3987,7 @@ class _PosScreenState extends ConsumerState<PosScreen>
           type: OpType.inflow,
           date: now,
           description:
-              'دفعة مقدمة من فاتورة #$refNum (المتبقي: ${Fmt.money(remainder)} ${cur.symbol})',
+              'دفعة مقدمة من فاتورة مبيعات (المتبقي: ${Fmt.money(remainder)} ${cur.symbol})',
           reference: '',
           createdByUserId: creatorId,
           cashierName: cashierName,

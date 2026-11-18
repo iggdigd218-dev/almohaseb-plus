@@ -37,7 +37,6 @@ import 'apply_remote.dart';
 import 'firebase_auth_service.dart';
 import 'snapshot_apply.dart';
 import 'subscription_guard.dart';
-import 'cloud_firebase_transport.dart';
 import '../../core/cloud_config.dart';
 import '../../core/rbac.dart';
 
@@ -758,33 +757,28 @@ class CloudJoin {
     return parsed;
   }
 
-  /// يتحقق مما إذا كانت الدعوة لا تزال سارية المفعول، مع تسامح ذكي لفروق
-  /// ضبط الساعة أو المنطقة الزمنية بين هاتف المدير وجهاز الكمبيوتر/الهاتف المنضم.
+  /// يتحقق مما إذا كانت الدعوة لا تزال سارية المفعول، مع تسامح دقيقتين فقط لفروق
+  /// ضبط الساعة بعد معالجة فارق التوقيت في `_parseInviteExpiry`.
   static bool _isInviteLive(Map<String, dynamic> rec) {
     final exp = _parseInviteExpiry(rec);
     if (exp == null) return false;
     final now = DateTime.now();
     if (now.isBefore(exp)) return true;
     final rawCreated = '${rec['createdAt'] ?? ''}'.trim();
-    if (rawCreated.isNotEmpty) {
+    if (rawCreated.isNotEmpty && rec['tzOffsetMin'] == null) {
       final created = DateTime.tryParse(rawCreated);
       if (created != null &&
           exp.difference(created) >= const Duration(minutes: 10)) {
-        DateTime adjustedExp = exp;
-        final tzMin = rec['tzOffsetMin'];
-        if (tzMin == null) {
-          final createdDiffMin = now.difference(created).inMinutes;
-          if (createdDiffMin.abs() >= 45 && createdDiffMin.abs() <= 720) {
-            final roundedHours = (createdDiffMin / 60).round();
-            final shiftedCreated =
-                created.add(Duration(hours: roundedHours));
-            if (now.difference(shiftedCreated).inMinutes.abs() <= 20) {
-              adjustedExp = exp.add(Duration(hours: roundedHours));
+        final createdDiffMin = now.difference(created).inMinutes;
+        if (createdDiffMin.abs() >= 45 && createdDiffMin.abs() <= 720) {
+          final roundedHours = (createdDiffMin / 60).round();
+          final shiftedCreated = created.add(Duration(hours: roundedHours));
+          if (now.difference(shiftedCreated).inMinutes.abs() <= 20) {
+            final adjustedExp = exp.add(Duration(hours: roundedHours));
+            if (now.isBefore(adjustedExp)) {
+              return true;
             }
           }
-        }
-        if (now.isBefore(adjustedExp.add(const Duration(minutes: 15)))) {
-          return true;
         }
       }
     }
@@ -1663,7 +1657,7 @@ class CloudJoin {
       'tzOffsetMin': tzOffsetMin,
     };
 
-    // كتابة عقدة الدعوة ومفتاحي الفهرس (PIN + توكن) بالتوازي في خطوة واحدة سريعة
+    // كتابة عقدة الدعوة ومفتاحي الفهرس (PIN + توكن) بالتوازي مع التحقق من عدم تصادم حجز PIN متزامن
     await Future.wait<void>([
       _putJson('$root/invites/$token.json', invitePayload,
           timeout: const Duration(seconds: 15)),
@@ -1672,6 +1666,25 @@ class CloudJoin {
       _writeInviteIndex(url, _inviteTokenKey(token), indexPayload,
           timeout: const Duration(seconds: 15)),
     ]);
+
+    try {
+      final verifyPinRec = await _readInviteIndex(url, _invitePinKey(pin));
+      if (verifyPinRec != null &&
+          normalizeInviteCode('${verifyPinRec['token'] ?? ''}') !=
+              normalizeInviteCode(token)) {
+        pin = newPairPin();
+        final updatedInvitePayload = {...invitePayload, 'pin': pin};
+        final updatedIndexPayload = {...indexPayload, 'pin': pin};
+        await Future.wait<void>([
+          _putJson('$root/invites/$token.json', updatedInvitePayload,
+              timeout: const Duration(seconds: 15)),
+          _writeInviteIndex(url, _invitePinKey(pin), updatedIndexPayload,
+              timeout: const Duration(seconds: 15)),
+          _writeInviteIndex(url, _inviteTokenKey(token), updatedIndexPayload,
+              timeout: const Duration(seconds: 15)),
+        ]);
+      }
+    } catch (_) {}
 
     return CloudInviteInfo(
       backendUrl: url,
@@ -3414,9 +3427,15 @@ class CloudJoin {
           if (inv != null) {
             matchedToken = tok;
             invite = inv;
-          } else if (_isInviteLive(rec)) {
-            matchedToken = tok;
-            invite = Map<String, dynamic>.from(rec);
+          } else {
+            // الدعوة الأصلية محذوفة أو ملغاة وبقي الفهرس يتيماً — نحذفه ولا نقبله.
+            unawaited(
+              _purgeInviteIndex(
+                url,
+                pin: isPin ? input : '${rec['pin'] ?? ''}',
+                token: tok,
+              ).catchError((_) {}),
+            );
           }
         }
       }
@@ -3820,12 +3839,44 @@ class CloudJoin {
     }
   }
 
-  /// تطهير شامل للبيانات المحلية والسحابية السابقة للعضو وعزله عن أي مؤسسة سابقة
-  /// لحظة موافقته على تحذير تقديم طلب الانضمام إلى منشأة قائمة.
+  /// تجهيز آمن للعضو قبل إرسال طلب الانضمام (بدون مسح الجداول المحاسبية المحلية قبل موافقة المدير):
+  /// 1) حفظ نسخة احتياطية صامتة للبيانات والعمليات المعلقة (`kBackupBeforeJoining`).
+  /// 2) تهيئة جلسة مصادقة مجهولة معزولة للمنشأة المستهدفة ليُقبل كتابة `/joinRequests`.
+  static Future<void> prepareJoiningMemberForRequest(
+    Repo repo, {
+    required String backendUrl,
+    required String targetWorkspaceId,
+  }) async {
+    try {
+      final data = await repo.exportAll(withImages: false, localOnly: true);
+      await FactoryReset.silentBackup(
+        data,
+        fileName: FactoryReset.kBackupBeforeJoining,
+      );
+    } catch (_) {}
+    try {
+      final db = await repo.database;
+      await GoogleAuthService(db).signOut(keepDatabaseOpen: true);
+    } catch (_) {}
+    try {
+      await FirebaseAuthRest.clearSession(repo, keepDatabaseOpen: true);
+      if (targetWorkspaceId.trim().isNotEmpty) {
+        await FirebaseAuthRest.ensureScopedAnonymous(
+          repo,
+          targetWorkspaceId.trim(),
+        );
+      }
+      await FirebaseAuthRest.initSilentAuth(repo, forceReload: true);
+      await FirebaseAuthRest.cloudIdToken();
+    } catch (_) {}
+  }
+
+  /// تطهير شامل للبيانات المحلية والسحابية السابقة للعضو وعزله عن أي مؤسسة سابقة.
   static Future<void> purgeAndIsolateJoiningMember(
     Repo repo, {
     required String backendUrl,
     required String targetWorkspaceId,
+    bool preserveAnonymousSession = false,
   }) async {
     final url = backendUrl.trim();
     try {
@@ -3839,7 +3890,7 @@ class CloudJoin {
       while (root.endsWith('/')) {
         root = root.substring(0, root.length - 1);
       }
-      if (root.isNotEmpty && oldUid.isNotEmpty) {
+      if (root.isNotEmpty && oldUid.isNotEmpty && !preserveAnonymousSession) {
         try {
           await _delete(
               '$root/workspaces/_registry/accounts_index/${Uri.encodeComponent(oldUid)}.json');
@@ -3853,14 +3904,21 @@ class CloudJoin {
           await _delete('$root/workspaces/_registry/emails_index/$emailKey.json');
         } catch (_) {}
       }
-      await FirebaseAuthRest.clearSession(repo, keepDatabaseOpen: true);
-      if (targetWorkspaceId.trim().isNotEmpty) {
+      await FirebaseAuthRest.clearSession(
+        repo,
+        keepDatabaseOpen: true,
+        preserveAnonymous: preserveAnonymousSession,
+      );
+      if (!preserveAnonymousSession && targetWorkspaceId.trim().isNotEmpty) {
         await FirebaseAuthRest.ensureScopedAnonymous(
           repo,
           targetWorkspaceId.trim(),
         );
       }
-      await FirebaseAuthRest.initSilentAuth(repo, forceReload: true);
+      await FirebaseAuthRest.initSilentAuth(
+        repo,
+        forceReload: !preserveAnonymousSession,
+      );
       try {
         await FirebaseAuthRest.cloudIdToken();
       } catch (_) {}
@@ -3907,9 +3965,9 @@ class CloudJoin {
         }
       }
 
-      // 3) تفريغ جميع الجداول المحاسبية المحلية فوراً قبل إرسال الطلب
+      // 3) تفريغ جميع الجداول المحاسبية المحلية مع حفظ العمليات في الأرشيف
       db = await repo.database;
-      await FactoryReset.wipeAccountingTables(db);
+      await FactoryReset.wipeAccountingTables(db, preserveOperations: true);
     } catch (_) {}
   }
 
@@ -4470,13 +4528,14 @@ class CloudJoin {
       }
     }
 
-    // الترتيب الذري السريع:
-    // 1) رفع اللقطة الخفيفة + تحديث الروستر الإلزامي بالتوازي دون عاصفة تجديد توكنات.
-    // 2) فور اكتمال رفع اللقطة والروستر، نكتب إشارة approved حتى يجد العضو اللقطة جاهزة فوراً.
+    // الترتيب المترابط الموثوق:
+    // 1) إزالة أي شواهد طرد سابقة للجهاز المستهدف أولاً.
+    // 2) تسجيل العضو في roster و members ورفع اللقطة المحدثة.
+    // 3) بعد اكتمال الخطوات أعلاه بنجاح، نكتب إشارة approved حتى يجد العضو صلاحياته ولقطته جاهزة فوراً.
+    await clearEvictionsBestEffort();
     await Future.wait<void>([
       uploadJoinSnapshotOnly(),
       writeRosterStrict(),
-      clearEvictionsBestEffort(),
       if (memberUid.isNotEmpty)
         _putJson(
           '$root/members/${Uri.encodeComponent(memberUid)}.json',

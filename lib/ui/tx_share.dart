@@ -164,9 +164,41 @@ class TxShare {
             ? 'سند آلي لا يحتاج إلى ختم أو توقيع'
             : footer;
 
+    final extraNotes = <String>[];
+    for (final line in tx.notes.split('\n')) {
+      final t = line.trim();
+      if (t.isEmpty || t.startsWith('[ORIG_TX:')) continue;
+      if (t.startsWith('المبلغ المدفوع') ||
+          t.startsWith('المبلغ المتبقي') ||
+          t.startsWith('المتبقي') ||
+          t.startsWith('الخصم') ||
+          t.startsWith('قيمة الخصم') ||
+          t.startsWith('طريقة الدفع')) {
+        continue;
+      }
+      extraNotes.add(t);
+    }
+    var statementText = desc;
+    if (isPosInvoice &&
+        RegExp(r'^فاتورة\s+(?:نقدية|مبيعات|مبيع)').hasMatch(statementText)) {
+      statementText = '';
+    }
+    if (extraNotes.isNotEmpty) {
+      final notesJoined = extraNotes.join(' — ');
+      if (statementText.isEmpty) {
+        statementText = notesJoined;
+      } else if (statementText != notesJoined) {
+        statementText = '$statementText — $notesJoined';
+      }
+    }
+    if (statementText.isEmpty && items.isNotEmpty) {
+      statementText = items.map((it) => it.name.trim()).where((s) => s.isNotEmpty).join('، ');
+    }
+
     final lines = <String>[
       if (org.isNotEmpty) '🏪 *$org*',
       title,
+      if (statementText.isNotEmpty) '📝 مقابل: $statementText',
       '👨‍💼 الموظف: $sellerOrDevice',
       '📅 التاريخ: $dateStr',
       cleanFooter,
