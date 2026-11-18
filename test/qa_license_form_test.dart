@@ -172,7 +172,7 @@ void main() {
       await repo.setSetting('cloudBackendUrl', backendUrl);
 
       final devId = await ensureDeviceId(repo);
-      final wsId = repo.requireWorkspaceId;
+      final wsId = await ensureWorkspace(repo);
 
       await http.runWithClient(
         () => SubscriptionGuard.registerLicenseRequest(
